@@ -1,0 +1,3012 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Ship Public API",
+    "version": "1.0.0",
+    "description": "The public, versioned Ship API (PLUGFORGE.MD §2.1/§2.4) — distinct from the\ninternal `/api/*` surface documented at `/api/openapi.json`. Every\nresource here is a typed view over the unified `documents` table.\n\n## Authentication\n\nEvery endpoint except `GET /health` and `GET /openapi.json` requires a\nbearer token: an OAuth access token or a scoped personal access token. See\n`bearerAuth` below.\n\n## Errors\n\nEvery failure response uses one shape (PLUGFORGE.MD §2.5):\n\n```\n{ code, message, details?, request_id }\n```\n\n## Pagination\n\nList endpoints return `{ data, next_cursor }`. `next_cursor` is an opaque,\nkeyset-based cursor — pass it back verbatim as `?cursor=` for the next page;\n`null` means there is no next page."
+  },
+  "servers": [
+    {
+      "url": "/api/v1",
+      "description": "Public API base path"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "A public API bearer token: either an OAuth access token (PF-104, PLUGFORGE.MD §2.2 oauth_tokens) or a scoped personal access token (api_tokens.scopes, PF-107). GET /api/v1/me introspects the authenticated principal (PF-201)."
+      }
+    },
+    "schemas": {
+      "ApiError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "enum": [
+              "unauthorized",
+              "forbidden",
+              "not_found",
+              "validation_failed",
+              "rate_limited",
+              "server_error"
+            ],
+            "description": "Machine-readable error code (PLUGFORGE.MD §2.5)."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable error message."
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": {},
+            "description": "Additional error context. Shape varies by code — e.g. validation_failed carries fieldErrors, forbidden carries missing_scope."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "Correlates this response with the server-side log line for the same request."
+          }
+        },
+        "required": [
+          "code",
+          "message",
+          "request_id"
+        ]
+      },
+      "HealthStatus": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "OpenApiDocument": {
+        "type": "object",
+        "additionalProperties": {}
+      },
+      "Document": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Document id."
+          },
+          "title": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "wiki",
+              "issue",
+              "program",
+              "project",
+              "sprint",
+              "person",
+              "weekly_plan",
+              "weekly_retro",
+              "standup",
+              "weekly_review"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 creation timestamp."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 last-updated timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "document_type",
+          "properties",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "DocumentList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Document"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "AssociationEdge": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The document_associations row id."
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "related_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "relationship_type": {
+            "type": "string",
+            "description": "e.g. 'parent', 'project', 'sprint', 'program', 'blocks'."
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "related_id",
+          "relationship_type",
+          "metadata",
+          "created_at"
+        ]
+      },
+      "AssociationEdgeList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssociationEdge"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "BacklinkEntry": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The id of the document that links to this one."
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "display_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "e.g. '#42' for an issue; null for other document types."
+          }
+        },
+        "required": [
+          "id",
+          "document_type",
+          "title",
+          "display_id"
+        ]
+      },
+      "BacklinkList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BacklinkEntry"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "Comment": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "comment_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Thread identifier (matches the TipTap comment mark)."
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "author": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "name": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "email": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              }
+            },
+            "required": [
+              "id",
+              "name",
+              "email"
+            ],
+            "description": "null if the author's user row no longer exists."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "document_id",
+          "comment_id",
+          "parent_id",
+          "content",
+          "resolved_at",
+          "author",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "CommentList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Comment"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "Issue": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Document id."
+          },
+          "title": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "issue"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "triage",
+              "backlog",
+              "todo",
+              "in_progress",
+              "in_review",
+              "done",
+              "cancelled"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "medium",
+              "high",
+              "urgent"
+            ]
+          },
+          "assignee_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 creation timestamp."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 last-updated timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "document_type",
+          "state",
+          "priority",
+          "assignee_id",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "IssueList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Issue"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "Sprint": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Document id."
+          },
+          "title": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "sprint"
+            ]
+          },
+          "properties": {
+            "type": "object",
+            "additionalProperties": {}
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 creation timestamp."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 last-updated timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "document_type",
+          "properties",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "SprintList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Sprint"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "SprintDetail": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/Sprint"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "sprint_number": {
+                "type": "integer"
+              },
+              "owner_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "status": {
+                "type": [
+                  "string",
+                  "null"
+                ]
+              },
+              "workspace_sprint_start_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD — the workspace's sprint-cadence anchor date."
+              },
+              "start_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD — this sprint's own computed calendar start date."
+              },
+              "end_date": {
+                "type": "string",
+                "description": "YYYY-MM-DD — this sprint's own computed calendar end date (inclusive)."
+              }
+            },
+            "required": [
+              "sprint_number",
+              "owner_id",
+              "status",
+              "workspace_sprint_start_date",
+              "start_date",
+              "end_date"
+            ]
+          }
+        ]
+      },
+      "Me": {
+        "type": "object",
+        "properties": {
+          "user": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "email": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "id",
+              "email",
+              "name"
+            ]
+          },
+          "app": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "client_id": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "is_first_party": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "id",
+              "client_id",
+              "name",
+              "is_first_party"
+            ]
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "user",
+          "app",
+          "scopes"
+        ]
+      },
+      "WebhookSubscription": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Webhook subscription id."
+          },
+          "app_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The oauth_apps id this subscription belongs to."
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "document.created",
+              "document.updated",
+              "document.deleted",
+              "issue.created",
+              "issue.assigned",
+              "issue.status_changed",
+              "sprint.started",
+              "sprint.completed"
+            ]
+          },
+          "target_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "active": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 creation timestamp."
+          }
+        },
+        "required": [
+          "id",
+          "app_id",
+          "event_type",
+          "target_url",
+          "active",
+          "created_at"
+        ]
+      },
+      "WebhookSubscriptionCreated": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/WebhookSubscription"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "secret": {
+                "type": "string",
+                "description": "The plaintext whsec_... signing secret. Returned exactly once — this response is the only place it ever appears; it is encrypted at rest (AES-256-GCM) and cannot be recovered via any subsequent API call."
+              },
+              "warning": {
+                "type": "string",
+                "description": "Human-readable reminder to save the secret now."
+              }
+            },
+            "required": [
+              "secret",
+              "warning"
+            ]
+          }
+        ]
+      },
+      "WebhookSubscriptionList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookSubscription"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "WebhookDelivery": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Delivery attempt id."
+          },
+          "subscription_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The webhook_subscriptions id this attempt belongs to."
+          },
+          "event_id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "The event this attempt delivers. Shared across every attempt (same attempt_number series) of the same logical delivery."
+          },
+          "event_type": {
+            "type": "string",
+            "enum": [
+              "document.created",
+              "document.updated",
+              "document.deleted",
+              "issue.created",
+              "issue.assigned",
+              "issue.status_changed",
+              "sprint.started",
+              "sprint.completed"
+            ]
+          },
+          "idempotency_key": {
+            "type": "string",
+            "description": "Stable across every attempt of the same logical delivery — the value sent in the Idempotency-Key header."
+          },
+          "attempt_number": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-indexed attempt number for this logical delivery. A retried delivery has multiple rows sharing event_id, one per attempt_number."
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "success",
+              "failed",
+              "dead"
+            ],
+            "description": "This attempt's own state: pending (scheduled, not yet executed), success (2xx), failed (5xx/timeout, a retry was scheduled), or dead (permanent failure — 4xx, or the 6th failed attempt)."
+          },
+          "response_status": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "The subscriber's HTTP response status, or null if this attempt never got a response (still pending, or a network/timeout failure)."
+          },
+          "response_excerpt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Up to 2000 characters of the subscriber's response body, or null if there was none."
+          },
+          "latency_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "description": "Round-trip latency for this attempt in milliseconds, or null if it never completed."
+          },
+          "next_attempt_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the next retry is due (only meaningful on a failed row with a pending sibling), or null if this attempt is terminal (success/dead) or itself still pending execution."
+          },
+          "replayed_from_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The id of the delivery row this attempt replayed, if it was created by POST /deliveries/{id}/replay (PF-306). Null for every row created by the normal delivery pipeline (a fresh delivery or one of its own automatic retries)."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp this attempt row was created (its own enqueue time)."
+          }
+        },
+        "required": [
+          "id",
+          "subscription_id",
+          "event_id",
+          "event_type",
+          "idempotency_key",
+          "attempt_number",
+          "status",
+          "response_status",
+          "response_excerpt",
+          "latency_ms",
+          "next_attempt_at",
+          "replayed_from_id",
+          "created_at"
+        ]
+      },
+      "WebhookDeliveryList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WebhookDelivery"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "PublicApiAuditRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Audit row id."
+          },
+          "request_id": {
+            "type": "string",
+            "description": "The request_id assigned to the audited call (X-Request-Id)."
+          },
+          "app_client_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The calling oauth_apps.client_id, or null for a personal-token call or an unauthenticated request."
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The calling user id, or null for a Client Credentials call or an unauthenticated request."
+          },
+          "method": {
+            "type": "string",
+            "description": "HTTP method of the audited call."
+          },
+          "route": {
+            "type": "string",
+            "description": "The literal request path (no query string) of the audited call."
+          },
+          "scope_used": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The scope requireScope(...) checked for this route, or null for a route with no scope requirement."
+          },
+          "status": {
+            "type": "integer",
+            "description": "HTTP response status of the audited call."
+          },
+          "latency_ms": {
+            "type": "integer",
+            "description": "Server-side latency of the audited call, in milliseconds."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp the audit row was written."
+          }
+        },
+        "required": [
+          "id",
+          "request_id",
+          "app_client_id",
+          "user_id",
+          "method",
+          "route",
+          "scope_used",
+          "status",
+          "latency_ms",
+          "created_at"
+        ]
+      },
+      "PublicApiAuditList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PublicApiAuditRow"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "Person": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Person document id."
+          },
+          "name": {
+            "type": "string"
+          },
+          "document_type": {
+            "type": "string",
+            "enum": [
+              "person"
+            ]
+          },
+          "user_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Linked users.id, or null for a pending/unlinked person."
+          },
+          "email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "is_archived": {
+            "type": "boolean"
+          },
+          "is_pending": {
+            "type": "boolean"
+          },
+          "reports_to": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The manager's USER id, or null if none is recorded."
+          },
+          "role": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "document_type",
+          "user_id",
+          "email",
+          "is_archived",
+          "is_pending",
+          "reports_to",
+          "role",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "PersonList": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Person"
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor"
+        ]
+      },
+      "ChangedDocumentEntry": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "document"
+            ]
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_type": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "required": [
+          "resource",
+          "dedupe_key",
+          "id",
+          "document_type",
+          "title",
+          "updated_at",
+          "created_by"
+        ]
+      },
+      "ChangedHistoryEntry": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "document_history"
+            ]
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "number",
+            "description": "document_history.id (a SERIAL, not a UUID)."
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "field": {
+            "type": "string"
+          },
+          "old_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "new_value": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "changed_by": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "automated_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "resource",
+          "dedupe_key",
+          "id",
+          "document_id",
+          "field",
+          "old_value",
+          "new_value",
+          "changed_by",
+          "automated_by",
+          "created_at"
+        ]
+      },
+      "ChangedCommentEntry": {
+        "type": "object",
+        "properties": {
+          "resource": {
+            "type": "string",
+            "enum": [
+              "comment"
+            ]
+          },
+          "dedupe_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "comment_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "parent_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "author_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "content": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "resource",
+          "dedupe_key",
+          "id",
+          "document_id",
+          "comment_id",
+          "parent_id",
+          "author_id",
+          "content",
+          "resolved_at",
+          "created_at",
+          "updated_at"
+        ]
+      },
+      "ChangeEntry": {
+        "anyOf": [
+          {
+            "$ref": "#/components/schemas/ChangedDocumentEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ChangedHistoryEntry"
+          },
+          {
+            "$ref": "#/components/schemas/ChangedCommentEntry"
+          }
+        ]
+      },
+      "ChangesPage": {
+        "type": "object",
+        "properties": {
+          "data": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChangeEntry"
+            }
+          },
+          "next_cursor": {
+            "type": "string",
+            "format": "date-time",
+            "description": "ISO 8601 timestamp — pass back as ?since= on the next poll. Cursor-lagged: never advanced past (now - 5s), so a slower in-flight transaction cannot be permanently missed. See resources/changes.ts for the full mechanism."
+          },
+          "truncated": {
+            "type": "object",
+            "properties": {
+              "documents": {
+                "type": "boolean"
+              },
+              "document_history": {
+                "type": "boolean"
+              },
+              "comments": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "documents",
+              "document_history",
+              "comments"
+            ],
+            "description": "True per category if that category hit the limit and rows remain for a later poll."
+          }
+        },
+        "required": [
+          "data",
+          "next_cursor",
+          "truncated"
+        ]
+      }
+    },
+    "parameters": {}
+  },
+  "paths": {
+    "/health": {
+      "get": {
+        "tags": [
+          "Platform"
+        ],
+        "summary": "Health check",
+        "description": "Public, unauthenticated liveness check for the /api/v1 surface (PF-001).",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The API is up.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/openapi.json": {
+      "get": {
+        "tags": [
+          "Platform"
+        ],
+        "summary": "Get the /api/v1 OpenAPI 3.1 document",
+        "description": "The generated OpenAPI 3.1 document describing every route on /api/v1 (PF-202). Public, no auth.",
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI 3.1 document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenApiDocument"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List documents",
+        "description": "Cursor-paginated list of documents in the caller's workspace (PF-200), optionally filtered by document_type. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wiki",
+                "issue",
+                "program",
+                "project",
+                "sprint",
+                "person",
+                "weekly_plan",
+                "weekly_retro",
+                "standup",
+                "weekly_review"
+              ]
+            },
+            "required": false,
+            "name": "type",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of documents.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "Create a document",
+        "description": "Creates a document in the caller's workspace. title is required at this public surface — unlike the internal API, which defaults it to \"Untitled\" (PF-200 AC-4). Requires the documents:write scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "document_type": {
+                    "type": "string",
+                    "enum": [
+                      "wiki",
+                      "issue",
+                      "program",
+                      "project",
+                      "sprint",
+                      "person",
+                      "weekly_plan",
+                      "weekly_retro",
+                      "standup",
+                      "weekly_review"
+                    ],
+                    "default": "wiki"
+                  },
+                  "properties": {
+                    "type": "object",
+                    "additionalProperties": {}
+                  }
+                },
+                "required": [
+                  "title"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body (e.g. missing title).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "Get a document by id",
+        "description": "Fetch a single document by id within the caller's workspace. A malformed or non-existent id both produce a not_found error (PF-200 test design AC-4). Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The document.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Document"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/associations": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List a document's forward associations",
+        "description": "Cursor-paginated associations FROM this document (document_id = {id}). Deliberately excludes the joined related document's title/type — re-fetch each related_id via GET /documents/{id} to check access before trusting it. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of association edges.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssociationEdgeList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/reverse-associations": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List a document's reverse associations",
+        "description": "Cursor-paginated associations pointing AT this document (related_id = {id}) — e.g. every issue in a sprint. Same title/type-leak avoidance as /associations. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of association edges.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssociationEdgeList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/backlinks": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List documents that link to this document",
+        "description": "Cursor-paginated documents whose content links to this one (document_links, scoped to the caller's workspace). Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of backlinks.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BacklinkList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/documents/{id}/comments": {
+      "get": {
+        "tags": [
+          "Documents"
+        ],
+        "summary": "List comments on a document",
+        "description": "Cursor-paginated comments on this document, oldest-page-first by created_at descending (same keyset order as every other v1 list). Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of comments.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommentList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No document with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/issues": {
+      "get": {
+        "tags": [
+          "Issues"
+        ],
+        "summary": "List issues",
+        "description": "Cursor-paginated list of issue-typed documents in the caller's workspace (PF-201), with state/priority/assignee_id lifted to top-level typed fields. Optionally filtered by ?assignee_id= (PF-205, TRO-414). Requires the issues:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "assignee_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of issues.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/IssueList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sprints": {
+      "get": {
+        "tags": [
+          "Sprints"
+        ],
+        "summary": "List sprints",
+        "description": "Cursor-paginated list of sprint-typed documents in the caller's workspace (PF-201). Requires the sprints:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of sprints.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/sprints/{id}": {
+      "get": {
+        "tags": [
+          "Sprints"
+        ],
+        "summary": "Get a sprint by id, with cadence/week-dates",
+        "description": "Fetch a single sprint-typed document by id, extended with sprint_number/owner_id/status and the computed start_date/end_date calendar window (from the workspace's sprint_start_date anchor). A malformed or non-existent id both produce a not_found error, matching resources/documents.ts's GET /:id convention. Requires the sprints:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Sprint document id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The sprint, with cadence/week-dates.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprintDetail"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No sprint with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/me": {
+      "get": {
+        "tags": [
+          "Platform"
+        ],
+        "summary": "Get the calling principal",
+        "description": "Identity introspection for the calling bearer token (PF-201): { user, app, scopes }. Requires a valid bearer token but, deliberately, no specific scope — see resources/me.ts for the rationale.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The calling principal.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Me"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Create a webhook subscription",
+        "description": "Creates a subscription for app_id to event_type deliveries at target_url, generates a whsec_... signing secret, and returns it in plaintext exactly once. The secret is encrypted at rest (AES-256-GCM) and cannot be retrieved again — save it now. app_id must belong to the caller's own workspace. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "app_id": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "event_type": {
+                    "type": "string",
+                    "enum": [
+                      "document.created",
+                      "document.updated",
+                      "document.deleted",
+                      "issue.created",
+                      "issue.assigned",
+                      "issue.status_changed",
+                      "sprint.started",
+                      "sprint.completed"
+                    ]
+                  },
+                  "target_url": {
+                    "type": "string",
+                    "format": "uri"
+                  }
+                },
+                "required": [
+                  "app_id",
+                  "event_type",
+                  "target_url"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The created subscription, including the plaintext secret (shown exactly once).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body, or app_id does not reference an app in the caller's workspace.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "List webhook subscriptions",
+        "description": "Cursor-paginated list of webhook subscriptions belonging to apps in the caller's workspace. Never includes the signing secret (plaintext or ciphertext). Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of webhook subscriptions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/deliveries": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "List webhook delivery attempts",
+        "description": "Cursor-paginated delivery log: one row per delivery ATTEMPT (a retried delivery leaves multiple rows, one per attempt_number, sharing event_id), scoped to subscriptions belonging to apps in the caller's workspace. Filterable by subscription_id and status. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "required": false,
+            "name": "subscription_id",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "enum": [
+                "pending",
+                "success",
+                "failed",
+                "dead"
+              ]
+            },
+            "required": false,
+            "name": "status",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of delivery attempts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDeliveryList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters (a malformed, non-UUID subscription_id, or a status value outside pending/success/failed/dead) or an invalid cursor. A well-formed but unrecognized or cross-workspace subscription_id is NOT an error — it matches nothing and returns 200 with an empty data page (same fail-closed convention as the rest of this resource).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/deliveries/{id}/replay": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Replay a logged delivery",
+        "description": "Re-runs a logged delivery through the deliverer, carrying the ORIGINAL Idempotency-Key — never a freshly generated one, so a correctly-implemented subscriber recognizes it as the same logical delivery. Works regardless of the original delivery's status, including dead (DLQ) rows. Creates a NEW delivery row (never mutates the original), linked back to it via replayed_from_id. A 201 response means the row was created, not that the subscriber accepted it — see the response schema's own status field. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Delivery attempt id (a row from GET /webhooks/deliveries). A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "The new delivery row created by this replay. A 201 means the row was created and an attempt ran to completion (or was durably recorded as still pending, if the attempt itself failed to execute) — it does NOT mean the subscriber accepted the delivery. Read the row's own status field (success, failed, dead, or pending) for the actual outcome.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookDelivery"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No delivery with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/{id}": {
+      "get": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Get a webhook subscription by id",
+        "description": "Fetch a single webhook subscription by id, scoped to the caller's workspace. Never includes the signing secret. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Webhook subscription id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No subscription with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Deactivate a webhook subscription",
+        "description": "Deactivates the subscription (active = false) rather than deleting the row, so a future delivery log can still reference it. Idempotent: deactivating an already-inactive subscription still returns 204. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Webhook subscription id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The subscription was deactivated (or was already inactive)."
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No subscription with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/webhooks/{id}/rotate": {
+      "post": {
+        "tags": [
+          "Webhooks"
+        ],
+        "summary": "Rotate a webhook subscription's signing secret",
+        "description": "Generates a new whsec_... signing secret, returns it in plaintext exactly once, and overwrites the stored ciphertext in place — no grace period (same precedent as PF-102's OAuth app-secret rotation): the old secret stops validating new HMAC signatures immediately. Requires the webhooks:manage scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "description": "Webhook subscription id. A non-UUID value 404s rather than validation-failing."
+            },
+            "required": true,
+            "name": "id",
+            "in": "path"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The subscription, including the new plaintext secret (shown exactly once).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WebhookSubscriptionCreated"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the webhooks:manage scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No subscription with this id exists in the caller's workspace, or the id is malformed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/audit": {
+      "get": {
+        "tags": [
+          "Audit"
+        ],
+        "summary": "List the public API audit trail",
+        "description": "Cursor-paginated log of every /api/v1 call (PLUGFORGE.MD §2.7): request_id, app client_id, user_id, method, route, scope checked, status, and latency. Admin/owner-scoped: requires the audit:read scope AND the caller to be a workspace admin, a platform super-admin (\"owner\"), or a first-party app credential. A workspace admin sees only their own workspace's rows; a super-admin sees every workspace. Optional ?app_client_id= filters to one app.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "app_client_id",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of public API audit rows.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PublicApiAuditList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the audit:read scope, OR it holds the scope but the caller is neither a workspace admin, a platform super-admin, nor a first-party app credential (resources/audit.ts's \"admin/owner-scoped\" design).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/people": {
+      "get": {
+        "tags": [
+          "People"
+        ],
+        "summary": "List people",
+        "description": "Cursor-paginated list of person-typed documents (the team directory) in the caller's workspace. Requires the documents:read scope — people are documents in Ship's unified document model (PLUGFORGE.MD §4 PF-205).",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "string",
+              "minLength": 1
+            },
+            "required": false,
+            "name": "cursor",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of people.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PersonList"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid query parameters or cursor.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/changes": {
+      "get": {
+        "tags": [
+          "Changes"
+        ],
+        "summary": "Poll the public change feed",
+        "description": "A pull-based, cursor-lagged change feed over documents/document_history/comments in the caller's workspace — distinct from webhooks (which push deliveries). since is required; pass the previous response's next_cursor as the next since. Requires the documents:read scope.",
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "schema": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "required": true,
+            "name": "since",
+            "in": "query"
+          },
+          {
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500
+            },
+            "required": false,
+            "name": "limit",
+            "in": "query"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of change events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or missing since, or since is in the future.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid bearer token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The bearer token lacks the required scope.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiError"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "webhooks": {}
+}

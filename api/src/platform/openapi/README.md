@@ -43,12 +43,17 @@ while the internal one stays 3.0.
   `route-fitness.test.ts` (`platform/api/v1/__tests__/`) is the drift gate
   that exists specifically so this class of gap fails CI going forward,
   instead of silently persisting the way this one did.
+- `schemas/webhooks.ts` — registers PF-302's (Linear TRO-431) five
+  `/webhooks` routes: `POST /webhooks`, `GET /webhooks`, `GET
+  /webhooks/{id}`, `DELETE /webhooks/{id}`, `POST /webhooks/{id}/rotate`.
+  Same pattern as `schemas/documents.ts`.
 
-## Scope note (PF-202/PF-203, as shipped)
+## Scope note (PF-202/PF-203/PF-302, as shipped)
 
 Registers every route that exists on `/api/v1`: `GET /health`, `GET
-/openapi.json`, PF-200's three `/documents` routes, and PF-201's `/issues`,
-`/sprints`, `/me` (the last three added by PF-203 — see above).
+/openapi.json`, PF-200's three `/documents` routes, PF-201's `/issues`,
+`/sprints`, `/me` (added by PF-203 — see above), and PF-302's five
+`/webhooks` routes (see `schemas/webhooks.ts` above).
 
 ## Verifying it
 
@@ -64,3 +69,26 @@ that test file's header comment for why a hand-rolled `ajv` + the raw
 `spec.openapis.org` schema hit a documented `$dynamicRef` /
 `unevaluatedProperties` interaction bug in `ajv` 8.x, and why this dependency
 was chosen instead of wiring `ajv` directly).
+
+## Static spec + CI parity (PF-204, Linear TRO-409)
+
+This registry's output is also committed as `docs/openapi.json` — the spec of
+record for anything outside the running process (SDK generation, external
+tooling, a reviewer reading the API without booting the server). CI
+regenerates it in-process on every push/PR and diffs against the committed
+copy; any difference (a new/changed/removed `/api/v1` route whose schema file
+wasn't updated, or a stray hand-edit of `docs/openapi.json` itself) fails the
+build — see `.gitlab-ci.yml` and `.github/workflows/ci.yml`'s `OpenAPI v1
+spec drift check` / `pnpm openapi:check` step.
+
+**Refresh procedure (one command):**
+
+```bash
+pnpm generate:openapi
+```
+
+Run this and commit the result whenever a `/api/v1` route or its schema
+changes. `api/src/scripts/generate-v1-openapi.ts` is the script — see its
+header comment for how the refresh (default) and `--check` (CI drift check)
+modes work, and `api/src/scripts/generate-v1-openapi.test.ts` for the
+regression tests proving the check can actually fail.

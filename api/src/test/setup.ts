@@ -90,11 +90,19 @@ beforeAll(async () => {
   // Clean up test data from previous runs to prevent duplicate key errors
   // Use TRUNCATE CASCADE which is faster and bypasses row-level triggers
   // (audit_logs has AU-9 compliance triggers preventing DELETE)
+  // public_api_audit (migration 049, PF-501/TRO-432) is listed explicitly,
+  // not left to CASCADE: it deliberately carries no foreign keys at all
+  // (see that migration's header — an audit trail must outlive the
+  // app/user it describes), so TRUNCATE ... CASCADE on workspaces/users
+  // never reaches it the way it reaches oauth_apps/api_tokens/
+  // webhook_subscriptions/etc. Without this it would accumulate rows
+  // across every file in a single `pnpm test` run instead of resetting
+  // per-file like everything else this hook clears.
   await pool.query(`TRUNCATE TABLE
     workspace_invites, sessions, files, document_links, document_history,
     comments, document_associations, document_snapshots, sprint_iterations,
     issue_iterations, documents, audit_logs, workspace_memberships,
-    users, workspaces
+    public_api_audit, users, workspaces
     CASCADE`)
   // vitest's default hook timeout is 10s, which is shorter than the longest file
   // in this suite can hold the lock (~15s). Without this the waiting process

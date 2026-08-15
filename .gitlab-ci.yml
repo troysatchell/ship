@@ -67,6 +67,13 @@ verify:
         sleep 2
       done
     - pnpm build:shared
+    # PF-204 (TRO-409): docs/openapi.json is the committed, public /api/v1
+    # OpenAPI 3.1 spec (PF-202's generateV1OpenAPIDocument()). Regenerates it
+    # in-process to a temp file and diffs against the committed copy — any
+    # drift fails the build. No DATABASE_URL/app boot needed — see
+    # api/src/scripts/generate-v1-openapi.ts's header. Refresh procedure:
+    # `pnpm generate:openapi`. Mirrors ci.yml's equivalent step.
+    - pnpm openapi:check
     - pnpm type-check
     - pnpm lint
     # TRO-399 (PF-003): `pnpm lint` above already enforces the ESLint half of

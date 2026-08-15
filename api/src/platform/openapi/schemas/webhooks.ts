@@ -2,9 +2,10 @@
  * `/api/v1/webhooks` OpenAPI registration — PF-302 (Linear TRO-431).
  *
  * Wires `resources/webhooks.ts`'s existing request Zod schemas into
- * `v1Registry.registerPath` calls, for all five routes: `POST /webhooks`,
- * `GET /webhooks`, `GET /webhooks/{id}`, `DELETE /webhooks/{id}`,
- * `POST /webhooks/{id}/rotate`. Same pattern as
+ * `v1Registry.registerPath` calls, for every route: `POST /webhooks`,
+ * `GET /webhooks`, `GET /webhooks/deliveries`, `GET /webhooks/{id}`,
+ * `DELETE /webhooks/{id}`, `POST /webhooks/{id}/rotate`, and (PF-306,
+ * TRO-446) `POST /webhooks/deliveries/{id}/replay`. Same pattern as
  * `platform/openapi/schemas/documents.ts` (PF-202) — deliberately does not
  * modify `resources/webhooks.ts`'s route-handling logic.
  *
@@ -22,6 +23,7 @@
 import {
   CreateWebhookSubscriptionRequestSchema,
   ListWebhookSubscriptionsQuerySchema,
+  ListWebhookDeliveriesQuerySchema,
   WebhookEventTypeSchema,
 } from '../../api/v1/resources/webhooks.js';
 import { v1Registry, z } from '../registry.js';
@@ -63,6 +65,39 @@ const WebhookSubscriptionListResponseSchema = z.object({
 }).openapi('WebhookSubscriptionList');
 
 v1Registry.register('WebhookSubscriptionList', WebhookSubscriptionListResponseSchema);
+
+/** Matches `serializeDelivery()`'s return shape exactly
+ * (`platform/api/v1/resources/webhooks.ts`) — PF-305 (Linear TRO-442). One
+ * row per delivery ATTEMPT (migration 048's row-per-attempt design), never
+ * the raw event payload. */
+const WebhookDeliveryResponseSchema = z.object({
+  id: z.string().uuid().openapi({ description: 'Delivery attempt id.' }),
+  subscription_id: z.string().uuid().openapi({ description: 'The webhook_subscriptions id this attempt belongs to.' }),
+  event_id: z.string().uuid().openapi({ description: 'The event this attempt delivers. Shared across every attempt (same attempt_number series) of the same logical delivery.' }),
+  event_type: WebhookEventTypeSchema,
+  idempotency_key: z.string().openapi({ description: 'Stable across every attempt of the same logical delivery — the value sent in the Idempotency-Key header.' }),
+  attempt_number: z.number().int().min(1).openapi({ description: '1-indexed attempt number for this logical delivery. A retried delivery has multiple rows sharing event_id, one per attempt_number.' }),
+  status: z.enum(['pending', 'success', 'failed', 'dead']).openapi({ description: "This attempt's own state: pending (scheduled, not yet executed), success (2xx), failed (5xx/timeout, a retry was scheduled), or dead (permanent failure — 4xx, or the 6th failed attempt)." }),
+  response_status: z.number().int().nullable().openapi({ description: "The subscriber's HTTP response status, or null if this attempt never got a response (still pending, or a network/timeout failure)." }),
+  response_excerpt: z.string().nullable().openapi({ description: "Up to 2000 characters of the subscriber's response body, or null if there was none." }),
+  latency_ms: z.number().int().nullable().openapi({ description: 'Round-trip latency for this attempt in milliseconds, or null if it never completed.' }),
+  next_attempt_at: z.string().datetime().nullable().openapi({ description: 'When the next retry is due (only meaningful on a failed row with a pending sibling), or null if this attempt is terminal (success/dead) or itself still pending execution.' }),
+  replayed_from_id: z.string().uuid().nullable().openapi({ description: 'The id of the delivery row this attempt replayed, if it was created by POST /deliveries/{id}/replay (PF-306). Null for every row created by the normal delivery pipeline (a fresh delivery or one of its own automatic retries).' }),
+  created_at: z.string().datetime().openapi({ description: 'ISO 8601 timestamp this attempt row was created (its own enqueue time).' }),
+}).openapi('WebhookDelivery');
+
+v1Registry.register('WebhookDelivery', WebhookDeliveryResponseSchema);
+
+/** Matches the delivery-log route's `res.status(200).json({ data, next_cursor })`
+ * body exactly. */
+const WebhookDeliveryListResponseSchema = z.object({
+  data: z.array(WebhookDeliveryResponseSchema),
+  next_cursor: z.string().nullable().openapi({
+    description: 'Opaque keyset cursor for the next page (pass back as ?cursor=), or null when this is the last page.',
+  }),
+}).openapi('WebhookDeliveryList');
+
+v1Registry.register('WebhookDeliveryList', WebhookDeliveryListResponseSchema);
 
 const UNAUTHORIZED_RESPONSE = {
   description: 'Missing or invalid bearer token.',
@@ -138,6 +173,75 @@ v1Registry.registerPath({
     },
     401: UNAUTHORIZED_RESPONSE,
     403: FORBIDDEN_RESPONSE,
+  },
+});
+
+// ─── GET /webhooks/deliveries ─────────────────────────────────────────────
+//
+// PF-305 (Linear TRO-442). Registered here as a distinct OpenAPI path from
+// `/webhooks/{id}` — the two never collide at this layer (OpenAPI paths are
+// keyed by their literal string, unlike Express's ordered route matching,
+// where `resources/webhooks.ts` registers this route BEFORE `GET /:id` for
+// exactly that reason — see that file's own header).
+
+v1Registry.registerPath({
+  method: 'get',
+  path: '/webhooks/deliveries',
+  tags: ['Webhooks'],
+  summary: 'List webhook delivery attempts',
+  description:
+    'Cursor-paginated delivery log: one row per delivery ATTEMPT (a retried delivery leaves multiple rows, one per attempt_number, sharing event_id), scoped to subscriptions belonging to apps in the caller\'s workspace. Filterable by subscription_id and status. Requires the webhooks:manage scope.',
+  security: BEARER_SECURITY,
+  request: {
+    query: ListWebhookDeliveriesQuerySchema,
+  },
+  responses: {
+    200: {
+      description: 'A page of delivery attempts.',
+      content: { 'application/json': { schema: WebhookDeliveryListResponseSchema } },
+    },
+    400: {
+      description: 'Invalid query parameters (a malformed, non-UUID subscription_id, or a status value outside pending/success/failed/dead) or an invalid cursor. A well-formed but unrecognized or cross-workspace subscription_id is NOT an error — it matches nothing and returns 200 with an empty data page (same fail-closed convention as the rest of this resource).',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+  },
+});
+
+// ─── POST /webhooks/deliveries/{id}/replay ───────────────────────────────
+//
+// PF-306 (Linear TRO-446). Registered here, alongside GET /webhooks/deliveries
+// — same "distinct literal OpenAPI path, no collision with /webhooks/{id}"
+// reasoning as that route's own comment above.
+
+const DeliveryIdParam = {
+  params: z.object({
+    id: z.string().openapi({ description: 'Delivery attempt id (a row from GET /webhooks/deliveries). A non-UUID value 404s rather than validation-failing.' }),
+  }),
+};
+
+v1Registry.registerPath({
+  method: 'post',
+  path: '/webhooks/deliveries/{id}/replay',
+  tags: ['Webhooks'],
+  summary: 'Replay a logged delivery',
+  description:
+    'Re-runs a logged delivery through the deliverer, carrying the ORIGINAL Idempotency-Key — never a freshly generated one, so a correctly-implemented subscriber recognizes it as the same logical delivery. Works regardless of the original delivery\'s status, including dead (DLQ) rows. Creates a NEW delivery row (never mutates the original), linked back to it via replayed_from_id. A 201 response means the row was created, not that the subscriber accepted it — see the response schema\'s own status field. Requires the webhooks:manage scope.',
+  security: BEARER_SECURITY,
+  request: DeliveryIdParam,
+  responses: {
+    201: {
+      description:
+        "The new delivery row created by this replay. A 201 means the row was created and an attempt ran to completion (or was durably recorded as still pending, if the attempt itself failed to execute) — it does NOT mean the subscriber accepted the delivery. Read the row's own status field (success, failed, dead, or pending) for the actual outcome.",
+      content: { 'application/json': { schema: WebhookDeliveryResponseSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    404: {
+      description: 'No delivery with this id exists in the caller\'s workspace, or the id is malformed.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
   },
 });
 
