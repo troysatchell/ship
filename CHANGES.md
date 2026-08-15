@@ -73,22 +73,31 @@ buried in a JSON blob.
 OpenAPI registration: `api/src/platform/openapi/schemas/audit.ts`, wired into `schemas/index.ts` —
 PF-203's route-fitness test walks the live router and fails on any unregistered route.
 
-**A real, pre-existing bug found while writing this ticket's own tests — not fixed here, reported
-as a follow-up.** `platform/api/v1/pagination.ts`'s `encodeCursor` serializes a cursor via
-`row.created_at.toISOString()`, which is **millisecond** precision. Postgres's own `timestamptz`
-column retains **microsecond** precision. Two rows landing in the same millisecond — reliably
-reproducible against this ticket's local Docker Postgres with ordinary sequential awaited inserts,
-not a rare race — can put a not-yet-fetched row on the wrong side of a millisecond-truncated cursor
-boundary and drop it from pagination **silently and permanently**. Confirmed directly: a temp-table
-repro showed a row's own real timestamp (`...532037`) failing its own truncated-to-`...532000`
-cursor comparison. This is shared infrastructure used by every `/api/v1` list route — documents,
-issues, sprints, webhooks, and now audit — so it is out of scope to fix inside PF-501 (needs its own
-regression tests across every consuming resource); this ticket's own pagination test seeds rows with
-explicit, second-spaced `created_at` values instead of relying on natural insert timing, specifically
-so it proves `audit.ts`'s own WHERE/ORDER BY/cursor wiring without tripping over this separate bug.
-Worth a ticket: widen `pagination.ts`'s cursor to carry microsecond precision (e.g. a raw epoch-
-microseconds integer rather than an ISO string), or read the column back as text instead of a parsed
-`Date`.
+**A real, pre-existing bug found while writing this ticket's own tests — fixed LOCALLY for this
+route, filed as a follow-up for the rest.** `platform/api/v1/pagination.ts`'s `encodeCursor`
+serializes a cursor via `row.created_at.toISOString()`, which is **millisecond** precision.
+Postgres's own `timestamptz` column retains **microsecond** precision. Two rows landing in the same
+millisecond — reliably reproducible against this ticket's local Docker Postgres with ordinary
+sequential awaited inserts, not a rare race — can put a not-yet-fetched row on the wrong side of a
+millisecond-truncated cursor boundary and drop it from pagination **silently and permanently**.
+Confirmed directly: a temp-table repro showed a row's own real timestamp (`...532037`) failing its
+own truncated-to-`...532000` cursor comparison. This is shared infrastructure used by every
+`/api/v1` list route — documents, issues, sprints, webhooks, webhooks/deliveries, and audit.
+
+CodeRabbit's review independently found the same defect (major severity) and pointed at a fix
+scoped to this route alone, without touching the shared `pagination.ts` module: `resources/audit.ts`
+now selects `created_at::text AS created_at_precise` alongside the ordinary `created_at` column.
+`::text` casts server-side, before the value ever reaches `pg`'s lossy `timestamptz`-to-`Date`
+parser, so the wire type becomes plain `text` and `pg` returns it verbatim — Postgres's own
+canonical output format, which Postgres parses back losslessly when bound as the cursor's `WHERE
+(created_at, id) < ($1, $2)` parameter. The public response shape is unchanged (`created_at` in the
+JSON body is still the ordinary millisecond ISO string); only the internal cursor uses the precise
+value. `documents`/`issues`/`sprints`/`webhooks`/`webhooks/deliveries` still carry the shared bug —
+filed as **TRO-602** (linked from this ticket), since fixing those needs its own regression tests
+per consuming resource, out of scope for PF-501 itself. This ticket's own pagination test also
+still seeds rows with explicit, second-spaced `created_at` values (belt-and-braces, not load-bearing
+now that the precision fix is in) so it proves `audit.ts`'s WHERE/ORDER BY/cursor wiring
+deterministically either way.
 
 **Proof (AC, verbatim: "rows carry request_id/app/user/route/scope/status/latency; queryable per
 app").**
@@ -129,6 +138,55 @@ merging PF-205 (Linear TRO-414, landed on `main` mid-PR): the committed `docs/op
 snapshot predates this ticket's `/audit` route, so the in-process registry and the committed file
 disagreed. Regenerated via `pnpm generate:openapi`; `pnpm --filter @ship/api openapi:check:v1`
 confirms no drift.
+
+**CodeRabbit triage (10 findings, all real reviewer output once the sprint's capacity limit
+cleared — not self-review; earlier `gate.sh` runs this same session hit `rc=1`/rate-limited,
+recorded in `audit/factory/scorecard.jsonl`).** Fixed (6):
+1. **[major]** Cursor precision loss (`resources/audit.ts`) — the same defect this entry's
+   pagination paragraph above already discloses; CodeRabbit found it independently and the fix
+   above is exactly its suggestion. Filed **TRO-602** for the four other routes.
+2. **[minor]** `routeOf()` (`platform/audit/middleware.ts`) had no length bound on an
+   attacker-reachable, unauthenticated value (`req.originalUrl`, read before `bearerAuth` can
+   reject anything) written into an unbounded `TEXT` column. No "established maximum route
+   length" constant actually existed elsewhere in this codebase (checked, none found — the
+   finding's own phrasing assumed one); added `MAX_ROUTE_LENGTH = 2048` as a new, documented
+   constant and truncate to it.
+3. **[minor]** Aborted requests (client disconnects before the server finishes) never fired
+   `res.on('finish')` and were silently absent from the audit trail — a real gap against "records
+   EVERY v1 call." Added a `res.on('close', ...)` handler sharing the same write path, guarded by
+   a `written` flag so a normal completion (which fires both `finish` and `close`) is never
+   recorded twice. Documented that `status` for an aborted request reflects the server's last
+   intended status, not proof of delivery.
+4. **[minor]** `sdk/resources/audit.ts`'s doc comment claimed a 403 throws `ShipSdkError` with
+   `kind: 'auth'` — wrong; the server's `forbidden` `ApiErrorCode` maps to `kind: 'forbidden'`
+   (`errors.ts#CODE_TO_KIND`), which is what this PR's own tests already asserted correctly. Fixed
+   the comment to match the code and tests, and to state the actual 401-vs-403 split.
+5. **[major]** `sdk/src/__tests__/audit.liveServer.test.ts`'s setup assigned `app.listen(0)`
+   directly to the outer, nullable `server` variable before use. Changed to the same
+   "local `const liveServer` first, assign to `server` for teardown after" shape the file's own
+   `afterAll` already uses.
+6. **[trivial]** `resources/__tests__/audit.test.ts` had no test proving the `?app_client_id=`
+   filter can't be used to escape workspace scoping (i.e., an admin passing another workspace's
+   `app_client_id` gets an empty page, not a leak) — the implementation was already correct, only
+   the proof was missing. Added.
+
+Also applied without a numbered finding: `platform/audit/__tests__/middleware.test.ts`'s raw
+`pool.query('SELECT * ...')` rows were an implicit `any` (this project's largest recurring
+type-safety class per `lessons.md`) — added an `AuditDbRow` interface and `pool.query<AuditDbRow>`,
+plus a `requireRow()` throw-on-missing helper for the `noUncheckedIndexedAccess` errors that typing
+correctly surfaced.
+
+Dismissed (2), both trivial, both premature optimization with no evidence of a real problem yet:
+1. Merge `resolveAuditAccess`'s two sequential queries (`users.is_super_admin`, then
+   `workspace_memberships.role`) into one `LEFT JOIN`. The current shape is a deliberate fast-path:
+   the common super-admin case returns after ONE indexed lookup; a join would run both lookups
+   unconditionally on every request, including that fast path. Two cheap indexed reads over one
+   unconditional join is not a shown regression to fix.
+2. Add a composite `(app_client_id, created_at DESC, id DESC)` index. The migration already has
+   the two indexes this route's queries actually use (`idx_public_api_audit_app_client_id`,
+   `idx_public_api_audit_created_at_id`); the suggestion's own text asks for `EXPLAIN ANALYZE`
+   validation "against a realistic dataset" before committing to it, which this ticket has none of
+   yet — premature indexing on an empty table is YAGNI, not correctness.
 
 **Not verified.** Production-scale row volume/retention — this ticket writes and reads correctness,
 not the storage-growth question PF-905 (AI cost analysis, retention windows) is scoped to answer.
