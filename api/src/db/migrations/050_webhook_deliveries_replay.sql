@@ -1,4 +1,4 @@
--- Migration 049: webhook_deliveries.replayed_from_id (PF-306 / TRO-446)
+-- Migration 050: webhook_deliveries.replayed_from_id (PF-306 / TRO-446)
 --
 -- `POST /api/v1/webhooks/deliveries/:id/replay` creates a NEW delivery row
 -- rather than mutating the original (this ticket's own AC — the delivery log
@@ -29,7 +29,7 @@
 -- added via the inline shorthand takes a SHARE ROW EXCLUSIVE lock and scans
 -- the existing table to check every row, blocking writes for the scan's
 -- duration. NOT VALID skips that scan (fast, brief lock) and defers
--- verification to migration 050's VALIDATE CONSTRAINT, which only needs
+-- verification to migration 051's VALIDATE CONSTRAINT, which only needs
 -- SHARE UPDATE EXCLUSIVE — compatible with concurrent writes.
 -- `webhook_deliveries` has zero rows in every real environment right now (048
 -- only just created it, nothing has written to it yet), so the scan this

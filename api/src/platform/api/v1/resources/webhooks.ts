@@ -82,7 +82,7 @@
  * test verifies. Works regardless of the original row's status, `dead`
  * (DLQ) included — this route never branches on it. Creates a NEW
  * `webhook_deliveries` row (never mutates the original), linked back via
- * `replayed_from_id` (migration 049) and sharing the original's `event_id`,
+ * `replayed_from_id` (migration 050) and sharing the original's `event_id`,
  * with `attempt_number` continuing that event's existing attempt series
  * (migration 048's unique index is keyed on `(subscription_id, event_id,
  * attempt_number)`).
@@ -208,7 +208,7 @@ export const ListWebhookDeliveriesQuerySchema = z.object({
   status: z.enum(['pending', 'success', 'failed', 'dead']).optional(),
 });
 
-/** Row shape for `webhook_deliveries` (migration 048, plus migration 049's
+/** Row shape for `webhook_deliveries` (migration 048, plus migration 050's
  * `replayed_from_id`) as read by the delivery-log route — deliberately never
  * selects `payload`, see file header. `replayed_from_id` is non-NULL only for
  * a row created by `POST /deliveries/:id/replay` (PF-306, TRO-446); NULL for
@@ -549,7 +549,7 @@ webhooksRouter.get(
 // own status; that is the entire point of a DLQ-replay endpoint.
 //
 // Records a NEW delivery row rather than mutating the original (this
-// ticket's own AC) — linked back via `replayed_from_id` (migration 049).
+// ticket's own AC) — linked back via `replayed_from_id` (migration 050).
 // Continues the SAME (subscription_id, event_id) attempt_number series
 // rather than restarting at 1: migration 048's own unique index is keyed on
 // (subscription_id, event_id, attempt_number), and idx_webhook_deliveries_

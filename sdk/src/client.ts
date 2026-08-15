@@ -22,6 +22,7 @@ import { DocumentsClient } from './resources/documents.js';
 import { IssuesClient } from './resources/issues.js';
 import { SprintsClient } from './resources/sprints.js';
 import { WebhooksClient } from './resources/webhooks.js';
+import { AuditClient } from './resources/audit.js';
 import { PeopleClient } from './resources/people.js';
 import { ChangesClient } from './resources/changes.js';
 import type { ITokenStore } from './tokenStore.js';
@@ -126,6 +127,10 @@ export class ShipClient {
    *  `sdk/src/__tests__/parity.test.ts` (PF-405) for how those two are
    *  carried as documented exemptions rather than silently untested. */
   readonly webhooks: WebhooksClient;
+  /** `audit.list` — real, merged PF-501 route (`/api/v1/audit`). Requires
+   *  `audit:read` plus an admin/owner/first-party caller — see
+   *  `resources/audit.ts`'s header. */
+  readonly audit: AuditClient;
   /** `people.list/iterate` — `/api/v1/people` (PF-205, Linear TRO-414). */
   readonly people: PeopleClient;
   /** `changes.list` — `/api/v1/changes` (PF-205). No `iterate()` — see
@@ -155,6 +160,7 @@ export class ShipClient {
     this.issues = new IssuesClient(this.request);
     this.sprints = new SprintsClient(this.request);
     this.webhooks = new WebhooksClient(this.request);
+    this.audit = new AuditClient(this.request);
     this.people = new PeopleClient(this.request);
     this.changes = new ChangesClient(this.request);
   }

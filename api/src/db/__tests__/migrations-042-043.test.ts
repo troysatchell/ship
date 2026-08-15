@@ -70,14 +70,19 @@ const OAUTH_VERSIONS = ['042_oauth_apps', '043_oauth_tokens_and_codes'];
 // 047's table, which depends on 042's), but the same transitive-dependency
 // reasoning applies: excluding 047 without also excluding 048 leaves 048's
 // own FK target missing, so it must be excluded here too. Extended again by
-// PF-306/TRO-446 (`049_webhook_deliveries_replay`, which ADD CONSTRAINTs
+// PF-306/TRO-446 (`050_webhook_deliveries_replay`, which ADD CONSTRAINTs
 // `webhook_deliveries.replayed_from_id REFERENCES webhook_deliveries(id)` —
 // self-referential, but the TABLE itself is still 048's, three steps removed
 // from 042/043 now) and its own immediate follow-up
-// `050_webhook_deliveries_replay_validate_fk` (VALIDATEs that same
-// constraint — cannot run at all if 049 wasn't applied first, so it must be
-// excluded whenever 049 is, same as every other migration in this list that
-// depends on one already here). CI's `test:coverage` job caught this one
+// `051_webhook_deliveries_replay_validate_fk` (VALIDATEs that same
+// constraint — cannot run at all if 050 wasn't applied first, so it must be
+// excluded whenever 050 is, same as every other migration in this list that
+// depends on one already here). Numbered 050/051, not 049: PF-501/TRO-432
+// independently claimed `049_public_api_audit` first (a genuine, real
+// migration-number collision between two parallel factory lanes, same class
+// as TRO-421/TRO-425's own 045-vs-046 collision — that migration doesn't
+// depend on any 042/043 table, so it needs no entry here). CI's
+// `test:coverage` job caught the original 049-numbered version of this gap
 // (found by running its exact command locally, `pnpm --filter @ship/api
 // test:coverage`, not just trusting local `gate.sh` — same class of gap
 // TRO-421/425/438 each hit independently, all documented in this project's
@@ -92,8 +97,8 @@ const LATER_OAUTH_TOKENS_DEPENDENT_VERSIONS = [
   '046_oauth_device_codes_polling',
   '047_webhook_subscriptions',
   '048_webhook_deliveries',
-  '049_webhook_deliveries_replay',
-  '050_webhook_deliveries_replay_validate_fk',
+  '050_webhook_deliveries_replay',
+  '051_webhook_deliveries_replay_validate_fk',
 ];
 
 /** Same helper shape as migrationRunner.test.ts — see that file for the full rationale. */

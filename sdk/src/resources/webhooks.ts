@@ -88,7 +88,7 @@
  * `id` and returned a `WebhookDelivery`), so `parity.test.ts` moved it from
  * `SDK_EXEMPTIONS` to a real `SDK_TO_OPERATION` entry, per that table's own
  * "delete this line" instruction. `replayed_from_id` (non-null on a replay
- * row, pointing at the delivery it replayed — migration 049) IS now declared
+ * row, pointing at the delivery it replayed — migration 050) IS now declared
  * on `WebhookDelivery` (CodeRabbit, PR #229's review, fixed) — the REST of
  * PF-305's own NOT-FIXED note immediately above (`'dead_letter'` vs `'dead'`,
  * missing `event_id`/`idempotency_key`/`response_excerpt`/`next_attempt_at`)
