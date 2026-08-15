@@ -21,6 +21,74 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-451 (PF-803) — Slack integration: verified Ship webhooks → channel posts, the 5th and last committed reference integration
+
+**What was added.** `integrations/slack/` — an Express receiver verifying every delivery with
+`verifyWebhook` (from `@ship/sdk/node`, PF-802's Node-only subpath) before acting on it, posting
+`document.created`/`issue.assigned` events to a Slack channel via `@slack/web-api`. Matches
+`scripts/check-integration-deps.mjs`'s enforced boundary (`integrations/*` packages may declare
+only `@ship/sdk` as a runtime dependency): `express`/`@slack/web-api`/`zod` are devDependencies,
+bundled into one self-contained `dist/server.js` by `pnpm build` (esbuild, `platform: 'node'`) —
+`node dist/server.js` needs nothing installed at deploy time, same pattern PF-802's Vite bundle
+uses for the browser. Verified: `node scripts/check-integration-deps.mjs` reports both
+`integrations/*` packages (`browser-demo`, `slack`) compliant.
+
+**Wire contract verified against the real source, not PLUGFORGE.MD's prose.** The event envelope
+and the two payload schemas (`document.created`'s `{id, document_type, title, created_by}`,
+`issue.assigned`'s `{id, assignee_id, previous_assignee_id}` — no issue title in the payload,
+confirmed) are read directly from `api/src/platform/webhooks/events.ts`'s real Zod registry, then
+re-declared locally rather than imported (an `integrations/*` package cannot depend on `api/src`
+at all, even at the type level — this is the public wire contract any third-party subscriber is
+documented to rely on, not a private implementation detail this package happens to share a
+monorepo with).
+
+**Why `express.raw()`, not `express.json()`:** `verifyWebhook`'s HMAC is computed over the exact
+bytes Ship signed; `express.json()` would parse (and potentially re-serialize non-byte-identically)
+the body before the route ever saw the raw bytes to verify against — the same class of bug
+PF-403's own history already fixed once server-side (a lossy UTF-8 decode before hashing).
+
+**A real bug found writing the test, not just exercising it:** `@slack/web-api`'s `WebClient`
+retries transient (5xx) failures internally by default — the first version of the Slack-failure
+test silently passed with a 200 instead of the expected 502, because the SDK's own retry silently
+succeeded on the second attempt against the mock server before this receiver's error path ever
+ran. Fixed by disabling the SDK's retry in the test client (`retryConfig: { retries: 0 }`) — a
+real behavior worth knowing, not a bug in the receiver itself; a real Slack outage would still
+eventually surface as a 502 to Ship's own deliverer once the SDK's few retries are exhausted, just
+not deterministically on the very first attempt.
+
+**Proof.** `src/server.test.ts` (`pnpm --filter @ship/slack-integration test`, PF-803's own AC —
+"e2e with a mocked Slack API"): a real Express server stands in for `https://slack.com/api`, and
+the real `@slack/web-api` `WebClient` (pointed at it via its documented `slackApiUrl` option,
+verified against the installed package's own type declarations) drives the real receiver through
+`supertest`. 5/5 tests green: verified `document.created` posts correctly; verified
+`issue.assigned` posts correctly; invalid signature → 401, Slack never called; a verified delivery
+of an event type this receiver doesn't act on → 200 ignored, Slack never called; a Slack API
+failure → 502 (Ship's own deliverer retry schedule is the intended recovery path, not a
+receiver-invented retry).
+
+**Honest gap, disclosed rather than faked.** PF-803's AC also asks for "screenshot evidence for
+the demo" — that requires a real Slack workspace and a real live Ship deployment, neither of which
+exists in this sandbox. The setup doc (`integrations/slack/README.md`) is complete and accurate
+(Slack app creation, bot token + scope, channel invite, `POST /api/v1/webhooks` subscription
+registration, env vars); the actual screenshot is a step for whoever runs the live demo, same
+class of gap as TRO-503's `terraform plan` (this environment has no way to produce it, so it isn't
+claimed to exist).
+
+**How to verify.**
+
+```bash
+pnpm build:sdk
+pnpm --filter @ship/slack-integration type-check
+pnpm --filter @ship/slack-integration test
+pnpm --filter @ship/slack-integration build   # confirms the esbuild bundle actually runs
+node scripts/check-integration-deps.mjs
+```
+
+**Rollback.** Delete `integrations/slack/`. Nothing outside this package changes — no shared
+files touched.
+
+---
+
 ## TRO-449 (PF-802) — Browser SDK demo (PKCE SPA), and a real @ship/sdk packaging defect it uncovered
 
 **What was added.** `integrations/browser-demo/` — a Vite vanilla-TypeScript SPA, `@ship/sdk` its
