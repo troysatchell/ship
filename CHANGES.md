@@ -73,6 +73,135 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-450 — PF-601: `ship docs ls | get <id> | create --title` via SDK only
+
+**What changed.** Three new subcommands added to `integrations/cli` (`@ship/cli`), nested under a
+`docs` group (`ship docs <leaf>`, commander's built-in nested-subcommand support — `bin.ts`'s own
+`program.command('docs')` then `docsCommand.command('ls'|'get'|'create')`), built entirely on top
+of `@ship/sdk`'s already-merged `DocumentsClient` (PF-401):
+
+- `ship docs ls` — lists every document in the caller's workspace via `client.documents.iterate()`,
+  the SDK's own async-iterator pagination (PF-402) — cursors never surface to this command or its
+  caller, matching PF-601's own AC ("cursors stay internal"). Prints one tab-separated
+  `id\tdocument_type\ttitle` line per document, or `No documents found.` for an empty workspace
+  (not silence — the empty case is handled explicitly, not just "the loop ran zero times").
+- `ship docs get <id>` — `client.documents.get(id)`; a malformed or nonexistent id both surface as
+  the server's `not_found` `ShipSdkError`, same as the SDK's own documented behavior. Prints a
+  multi-line detail view (id/title/document_type/created_at/updated_at/properties-as-JSON).
+- `ship docs create --title <title>` — `client.documents.create({ title })`. `--title` is **not**
+  a commander `.requiredOption()`: a missing or empty value is checked in `runDocsCreate` itself and
+  rendered as `Error: --title is required.`, failing before any network call — the same "fail fast on
+  a local precondition" shape `login.ts` already establishes for a missing OAuth client id (and
+  `login.test.ts`'s own "before ever calling fetch" case). This keeps the check testable through the
+  function directly and keeps `bin.ts` exactly as thin as `login`/`whoami`'s own entries.
+- `src/commands/docs.ts`'s own `loadClient()` — one shared, same-file helper for "resolve config
+  (wrapped in try/catch from the start — see below), read the stored token, distinguish never-logged-in
+  from a corrupt credentials file, resolve `clientId` best-effort for refresh-on-401, construct
+  `ShipClient`" — used by all three subcommands. Not a new module and not a change to `login.ts`/
+  `whoami.ts`: those two files export nothing reusable and get no drive-by edits per this ticket's
+  own scope rule; sharing the sequence once across the three NEW functions in this one new file avoids
+  tripling ~25 lines of near-identical logic three times within the same file.
+- **The lesson this ticket's own brief pointed at, applied from the start**: `whoami.ts` originally
+  shipped with its config resolution NOT wrapped in try/catch like `login.ts`'s was (a CodeRabbit
+  finding, fixed on TRO-448 in a follow-up commit). `docs.ts`'s `loadClient()` wraps its own config
+  resolution in try/catch from the first commit, not as a follow-up fix.
+
+**Scope kept to the AC, deliberately.** No `--type`/`--limit`/`--properties` flags on any of the
+three subcommands — PF-601's own AC names exactly `ls`, `get <id>`, `create --title <title>`, and
+adding a `--type <type>` filter would have required either a type-assertion cast from a raw CLI
+string to the SDK's `DocumentType` union (this repo's own banned pattern, lessons.md rule 16) or
+non-trivial runtime validation duplicate of the server's own — neither justified by anything in the
+AC or architect notes. `document_type` is simply omitted from `create`'s request body, so the server
+applies its own default (`'wiki'`, `CreateDocumentRequestSchema`'s own default).
+
+**`DocumentsClient`'s types checked against the real server response, not trusted blindly (per this
+ticket's own instruction, following TRO-599's two prior drift instances on `webhooks.ts`).** Read
+`api/src/platform/api/v1/resources/documents.ts`'s `DocumentRow`/`serializeDocument()` and
+`CreateDocumentRequestSchema` side by side with `sdk/src/types.ts`'s `Document`/`CreateDocumentBody`
+before writing any command code. **No drift found**: `serializeDocument()` returns exactly
+`{ id, title, document_type, properties, created_at, updated_at }`, field-for-field identical to the
+SDK's `Document` interface (`properties` always an object server-side, matching the SDK's
+non-nullable typing); `CreateDocumentRequestSchema`'s `title` (required, `min(1)`), `document_type`
+(optional, defaults `'wiki'`), and `properties` (optional record) match `CreateDocumentBody` exactly.
+Both SDK files' own header comments already state they were built by reading the server file
+directly (not from PLUGFORGE.MD's prose alone) — confirmed true here, not just asserted.
+
+**Tests.** Two tiers, matching `login`/`whoami`'s own mocked/live-server split:
+
+- `src/commands/docs.test.ts` — `fetch` fully mocked, no real network. 16 cases across all three
+  subcommands, each picked as the specific regression it catches (rejects a version of `runDocsLs`
+  that only prints when `count > 0`; a version that calls `list()` once instead of `iterate()`,
+  which would silently drop every page after the first; a version of `runDocsCreate` that lets a
+  falsy title reach the network instead of failing fast; a version of `loadClient` that builds a
+  `ShipClient` with `token: undefined` instead of stopping first). Confirmed each of three
+  representative mutations (dropping the empty-list message, reverting `iterate()` to `list()`,
+  removing the missing-title fast-fail check) turns the corresponding test red for the stated reason,
+  then restored the fix and confirmed green again — not assumed from writing the assertions.
+- `src/__tests__/docs.liveServer.test.ts` — a **new file**, not an addition to
+  `login.liveServer.test.ts` (that file's own `describe` scope is `login`/`whoami` specifically, and
+  bolting an unrelated third proof onto an already wall-clock-heavy device-flow test would widen its
+  responsibility past one ticket). Spawns the real `api/` package as a separate OS process (same
+  approach as `login.liveServer.test.ts`, never importing `api/src`), mints a personal access token
+  directly via `pg` fixture rows (not a full device-flow login — this ticket doesn't need to
+  re-prove PF-600's flow), and proves `ship docs create` → `ship docs get <id>` round-trip against
+  the SAME real document, plus `ship docs ls` finding it in a real listing, plus a real 404
+  `not_found` rendering for a nonexistent id.
+- **A real fixture bug found and fixed while writing the live-server test, not shipped**: the first
+  run of `ship docs create` against the real server returned `Error [not_found]: No workspace is
+  associated with this credential.` — traced to `resources/workspaceContext.ts`'s
+  `resolvePrincipalWorkspaceId()`, whose own header explains a personal-token principal resolves its
+  workspace from `users.last_workspace_id`, NOT from `api_tokens.workspace_id` (that column isn't
+  visible from `Principal` at all today — a documented gap in that file, not a bug in this ticket's
+  code). The fixture's `users` insert set no `last_workspace_id`. Fixed with one `UPDATE users SET
+  last_workspace_id = $1 WHERE id = $2` after the workspace-membership insert; confirmed the fixture
+  fix, not application code, by reading `workspaceContext.ts` before changing anything.
+
+**How to run it.**
+
+```bash
+source .factory-env                                                     # DATABASE_URL for the live-server fixture
+pnpm --filter @ship/sdk build                                           # @ship/sdk/dist is gitignored — build first
+pnpm --filter @ship/cli test                                            # full suite: 46/46, 8 files
+pnpm --filter @ship/cli exec vitest run src/commands/docs.test.ts       # mocked ls/get/create paths
+pnpm --filter @ship/cli exec vitest run src/__tests__/docs.liveServer.test.ts  # real server e2e
+pnpm --filter @ship/cli type-check && pnpm --filter @ship/cli lint && pnpm --filter @ship/cli build
+node scripts/check-integration-deps.mjs                                 # @ship/sdk-only boundary rule
+# from integrations/cli, after build:
+node dist/bin.js docs create                # "Error: --title is required." exit 1, no network call
+node dist/bin.js docs get <id>               # "Not logged in. Run `ship login` first ..." exit 1
+```
+
+**Evidence.**
+
+| Check | Result | Ran under |
+|---|---|---|
+| `ship docs create` → `ship docs get` round trip + `ship docs ls` finds it, real spawned `api/` process | pass (2/2) | `src/__tests__/docs.liveServer.test.ts` |
+| `ship docs ls/get/create` mocked paths (success, empty list, 2-page pagination, not-logged-in, network error, server error, 404, missing/empty title, validation_failed) | pass (16/16) | `src/commands/docs.test.ts` |
+| Full `@ship/cli` suite (all six command/pure-logic files + both live-server files) | pass, 46/46, 8 files | `pnpm --filter @ship/cli test` |
+| `pnpm --filter @ship/cli type-check` / `lint` / `build` | pass, zero errors; `dist/bin.js` runs `docs create`/`docs get` for real | — |
+| `node scripts/check-integration-deps.mjs` | pass, `@ship/sdk`-only unchanged (no new runtime dependency added) | — |
+| Red-before-green: 3 representative mutations (empty-list message removed, `iterate()`→`list()`, missing-title check removed) each turned exactly one test red for the stated reason | confirmed directly, then reverted | manual, this session |
+
+**Observed:** all of the above, run directly in this worktree against `ship_wt_tro_450` (port 5433).
+
+**Derived:** the tab-separated `ls` line format and the multi-line `get`/`create` detail format are
+this ticket's own presentation choice — PF-601's AC specifies behavior (list/get/create, error
+rendering), not an output format, and no existing CLI list/detail output in this repo to match.
+
+**Not verified:** against a DEPLOYED (non-local) Ship instance — this ticket's evidence is a locally
+spawned real `api/` process plus the same mocked-fetch unit coverage `login`/`whoami` rely on for
+their own "works against local + deployed" claim; neither this ticket nor TRO-448 stands up a
+deployed instance to test against directly. `ship docs ls` against a workspace large enough to
+require a genuine third page (only a 2-page case is exercised). Concurrent `ship docs create`
+invocations racing the same workspace (not part of this ticket's AC).
+
+**Rollback.** Revert this ticket's commits. Removes `src/commands/docs.ts`,
+`src/commands/docs.test.ts`, and `src/__tests__/docs.liveServer.test.ts`; reverts `bin.ts`'s `docs`
+subcommand-group wiring. No schema or migration changes, no changes to `login.ts`/`whoami.ts`/
+`config.ts`/`errors.ts`/`identity.ts`/`io.ts`, no new runtime dependency.
+
+---
+
 ## TRO-435 (PF-703) — Gated writes via SDK: per-call `ShipClient` with the acting human's token
 
 **What was added.** `agent/src/shipClient.ts`'s `GateShipClient` gains an optional
