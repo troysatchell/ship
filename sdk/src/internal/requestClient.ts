@@ -95,6 +95,17 @@ export class RequestClient {
   // safe under concurrent first calls too.
   private hydratePromise: Promise<void> | undefined;
   private refreshPromise: Promise<void> | undefined;
+  // PF-702 (TRO-428) — same single-flight shape as refreshPromise, for a
+  // caller that has no refresh token to rotate (Client Credentials: PF-404
+  // never built this — see clientCredentials.ts's own header). Kept
+  // separate from refreshPromise/refreshOnce rather than folded in: the two
+  // are different grants (`refresh_token` vs `client_credentials`) with
+  // different request bodies, and `isRefreshable()` already gates on
+  // `refreshToken !== undefined` — a Client Credentials caller never has
+  // one, so the two paths are mutually exclusive by construction, not by a
+  // shared flag that could drift.
+  private reauthenticator: (() => Promise<{ accessToken: string; expiresIn: number }>) | undefined;
+  private reauthPromise: Promise<void> | undefined;
 
   constructor(opts: RequestClientOptions) {
     this.baseUrl = opts.baseUrl;
@@ -114,6 +125,17 @@ export class RequestClient {
    *  completed OAuth flow produces. */
   setRefreshToken(refreshToken: string | undefined): void {
     this.refreshToken = refreshToken;
+  }
+
+  /** Internal-only: PF-702's `ShipClient.clientCredentials()` calls this
+   *  right after construction, mirroring `setRefreshToken` above exactly
+   *  (same "not part of `RequestClientOptions`" reasoning — a reauthenticate
+   *  callback is something a completed flow wires in, never something a
+   *  caller hand-constructs a client with). `fn` re-runs the ORIGINAL
+   *  client_credentials request (same stored client_id/client_secret/scope)
+   *  — there is no token to rotate, only a fresh one to mint. */
+  setReauthenticator(fn: (() => Promise<{ accessToken: string; expiresIn: number }>) | undefined): void {
+    this.reauthenticator = fn;
   }
 
   private authHeaders(): Record<string, string> {
@@ -237,6 +259,26 @@ export class RequestClient {
     return this.refreshPromise;
   }
 
+  /** Single-flight re-authentication via `this.reauthenticator` (PF-702) —
+   *  same memoization shape as `refreshOnce` above, for the Client
+   *  Credentials case where there is no refresh token to rotate. */
+  private reauthOnce(): Promise<void> {
+    if (!this.reauthPromise) {
+      const reauthenticator = this.reauthenticator;
+      if (!reauthenticator) {
+        return Promise.reject(new ShipSdkError('auth', 'No reauthenticator configured.'));
+      }
+      this.reauthPromise = reauthenticator()
+        .then((tokens) => {
+          this.accessToken = tokens.accessToken;
+        })
+        .finally(() => {
+          this.reauthPromise = undefined;
+        });
+    }
+    return this.reauthPromise;
+  }
+
   private async rawFetch(url: string, init: RequestInit): Promise<Response> {
     try {
       return await fetch(url, init);
@@ -265,6 +307,14 @@ export class RequestClient {
 
     if (res.status === 401 && this.isRefreshable()) {
       await this.refreshOnce();
+      res = await attempt();
+    } else if (res.status === 401 && this.reauthenticator) {
+      // PF-702: no refresh token exists (Client Credentials never issues
+      // one — isRefreshable() is false by construction for this caller), so
+      // re-authenticate from scratch with the stored client_id/secret
+      // instead. A failure here (e.g. the secret was rotated/revoked)
+      // propagates as-is rather than falling through to attempt() again.
+      await this.reauthOnce();
       res = await attempt();
     }
 
