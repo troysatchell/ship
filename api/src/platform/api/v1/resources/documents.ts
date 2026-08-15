@@ -214,13 +214,35 @@ interface DocumentRow {
 // reading `documentService.ts` directly) and already declares
 // `content`/`visibility`/`created_by`/`completed_at`, so it satisfies this
 // widened `Omit<...>` structurally with no change to that file.
-function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>) {
+//
+// `viewerUserId` (CodeRabbit finding on this ticket, TRO-605) — masks
+// `content` to `null` for a `visibility: 'private'` document the caller did
+// not create. This route has NEVER enforced visibility-based access control
+// (confirmed by reading the handlers directly; `resources/people.ts`'s own
+// header documents this as a pre-existing, disclosed gap) — title/
+// properties/visibility/created_by/timestamps were already fully readable
+// for a private document belonging to another workspace member before this
+// ticket, and retrofitting full access control onto every field is a
+// materially bigger change than "widen the response shape" (it would need
+// to reconcile with every sub-resource route in this file too, and is
+// exactly the kind of auth-semantics change this factory's own contract
+// says to escalate rather than decide unilaterally). What IS squarely this
+// ticket's own responsibility: `content` is a NEW field this ticket adds,
+// and unlike title/properties it can carry a private document's actual
+// body text — shipping it unmasked would take an existing, disclosed
+// metadata leak and turn it into a content leak, a real escalation in harm
+// this ticket alone introduces. So only the newly-added `content` field is
+// masked here; every other field's pre-existing (unfixed, disclosed)
+// behavior is left exactly as it was. See CHANGES.md's TRO-605 entry for
+// the full writeup, including what remains unfixed and why.
+function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>, viewerUserId: string | null) {
+  const contentVisibleToViewer = row.visibility !== 'private' || row.created_by === viewerUserId;
   return {
     id: row.id,
     title: row.title,
     document_type: row.document_type,
     properties: row.properties ?? {},
-    content: row.content,
+    content: contentVisibleToViewer ? row.content : null,
     visibility: row.visibility,
     created_by: row.created_by,
     completed_at: row.completed_at ? row.completed_at.toISOString() : null,
@@ -312,8 +334,9 @@ documentsRouter.get(
         ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
+    const viewerUserId = principal.user?.id ?? null;
     res.status(200).json({
-      data: page.map(serializeDocument),
+      data: page.map((row) => serializeDocument(row, viewerUserId)),
       next_cursor: nextCursor,
     });
   })
@@ -370,7 +393,7 @@ documentsRouter.get(
       throw notFoundError(requestId);
     }
 
-    res.status(200).json(serializeDocument(row));
+    res.status(200).json(serializeDocument(row, principal.user?.id ?? null));
   })
 );
 
@@ -412,7 +435,7 @@ documentsRouter.post(
       createdByUserId: principal.user?.id ?? null,
     });
 
-    res.status(201).json(serializeDocument(created));
+    res.status(201).json(serializeDocument(created, principal.user?.id ?? null));
   })
 );
 
@@ -437,6 +460,11 @@ documentsRouter.patch(
       });
     }
 
+    const principal = req.principal;
+    if (!principal) {
+      throw serverError(requestId);
+    }
+
     const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
     // 404s on a malformed/nonexistent id or wrong workspace before the
     // UPDATE runs — matches every other :id route in this file's "malformed
@@ -455,7 +483,7 @@ documentsRouter.patch(
       // dispatchOrQueue, unconditional on document_type).
     });
 
-    res.status(200).json(serializeDocument(updated));
+    res.status(200).json(serializeDocument(updated, principal.user?.id ?? null));
   })
 );
 

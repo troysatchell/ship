@@ -100,7 +100,10 @@ export interface Document {
   readonly document_type: DocumentType;
   readonly properties: Record<string, unknown>;
   /** TipTap JSON document content — an arbitrary JSON value, not the Yjs
-   *  binary collaboration state. */
+   *  binary collaboration state. `null` when `visibility` is `'private'`
+   *  and the caller is not the document's creator (server-side masking,
+   *  TRO-605 CodeRabbit finding — this route has no other visibility
+   *  enforcement, but `content` can carry real private body text). */
   readonly content: unknown;
   /** `'private'` (creator only) or `'workspace'` (all workspace members). */
   readonly visibility: 'private' | 'workspace';

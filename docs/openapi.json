@@ -104,7 +104,7 @@
             "additionalProperties": {}
           },
           "content": {
-            "description": "TipTap JSON document content (not the Yjs binary collaboration state, which stays internal-only)."
+            "description": "TipTap JSON document content (not the Yjs binary collaboration state, which stays internal-only). Null when visibility is 'private' and the caller is not the document's creator."
           },
           "visibility": {
             "type": "string",

@@ -74,23 +74,49 @@ as before." Read `resources/documents.ts` and `resources/people.ts`'s own header
 writing that test: **this route has never applied any visibility-based filtering** — `GET /` and
 `GET /:id` both scope only by `workspace_id` (+ `deleted_at IS NULL`), full stop. `people.ts`'s header
 already discloses this explicitly as "a pre-existing gap inherited from the pattern, not something
-new introduced here." So "unchanged visibility behavior" here means literally unchanged — a private
-document belonging to another workspace member was already fully readable (title/properties/etc.)
-through this endpoint before this ticket, and still is; this ticket only adds `content`/`visibility`
-itself to what was already returned. The regression test proves the new fields round-trip correctly
-for a private document, and does not assert a 403/404 that the code has never produced.
+new introduced here." So the ticket's premise was wrong (see CLAUDE.md's own claim-provenance
+discipline this project enforces) — there was no existing gating to leave unchanged. Left as originally
+found for title/properties/visibility/created_by/timestamps (still out of scope — see the CodeRabbit
+triage below for why retrofitting a full fix there is a bigger, auth-semantics change this ticket does
+not take on). One field is the exception: see below.
 
-**Regression test — red before green, confirmed by temporary revert (not memory).**
-`api/src/platform/api/v1/resources/__tests__/documents.test.ts`'s new `describe('TRO-605: ...')` block
-(5 cases: full round-trip on `GET /:id`, `completed_at: null` for an uncompleted doc, `GET /` list
-carries the same fields, `yjs_state` still never leaks, and the private-visibility case above).
-Verified red for the right reason: `git checkout HEAD -- api/src/platform/api/v1/resources/
-documents.ts` (reverting only the route file, pre-fix) then `cd api && npx vitest run
-src/platform/api/v1/resources/__tests__/documents.test.ts -t TRO-605` — 4 of 5 failed with
-`AssertionError: expected undefined to deeply equal {...}` / `expected {...} to have property
-'completed_at'` (the 5th, "never exposes yjs_state", correctly passed both before and after — it was
-never broken, since `yjs_state` was excluded before this ticket too and still is). Restored the fix,
-re-ran the full file: 21/21 pass.
+**CodeRabbit triage — 1 finding, fixed.** Self-review found `troysatchell/Ship` is not connected to a
+CodeRabbit org, so this ran on the free CLI allowance; 1 finding, **critical**, on
+`documents.ts:223-225` (masked file/line numbers as of the flagged commit — see `.factory/
+coderabbit.json`): *"Enforce private-document authorization before serializeDocument() in both the
+list and single-document query paths: allow creators to access private documents, but filter or reject
+them for other workspace users before content is serialized."* **Fixed, narrowly** — not by
+retrofitting full access control (that would be the bigger, out-of-scope change discussed above), but
+by masking only the field this ticket itself adds that can carry real harm: `serializeDocument()` now
+takes a `viewerUserId` and returns `content: null` whenever `visibility === 'private'` and
+`created_by !== viewerUserId`. Reasoning: this route already leaked title/properties/visibility/
+created_by for a private document before this ticket (a pre-existing, disclosed, NOT-this-ticket's-
+problem gap) — but `content` is NEW, and unlike a title, it can carry a private document's actual body
+text. Shipping it unmasked would have taken an existing metadata leak and turned it into a content
+leak, a real escalation in harm this ticket alone would introduce, so it's fixed even though the
+adjacent metadata leak is not. All four call sites (`GET /`, `GET /:id`, `POST /`, `PATCH /:id`)
+updated to pass `principal.user?.id ?? null` through.
+**Not fixed, disclosed as a new problem for a future ticket**: while implementing this, found that
+`PATCH /api/v1/documents/:id` (PF-703/TRO-435, merged to `main` ahead of this branch) does not check
+visibility either — any workspace member with a `documents:write`-scoped token can already overwrite
+another user's *private* document's content today, a write-path issue more severe than this ticket's
+read-path finding and on code this ticket did not author. Flagged for a follow-up ticket rather than
+fixed here (a write-path auth change on a route from a different, already-merged ticket is squarely the
+kind of change this factory's own contract says to escalate, not decide unilaterally, mid-ticket).
+
+**Regression test — red before green, confirmed by temporary revert (not memory), twice: once for the
+widening, once for the CodeRabbit fix.** `api/src/platform/api/v1/resources/__tests__/documents.test.ts`'s
+`describe('TRO-605: ...')` block (7 cases: full round-trip on `GET /:id`, `completed_at: null` for an
+uncompleted doc, `GET /` list carries the same fields, `yjs_state` still never leaks, content masked
+for a different user's private doc (`GET /:id` and `GET /` both), and the creator still sees their own
+private content in full). First revert (the widening itself): `git checkout HEAD --
+api/src/platform/api/v1/resources/documents.ts` then `-t TRO-605` — 4 of 5 then-existing cases failed
+with `AssertionError: expected undefined to deeply equal {...}` / `expected {...} to have property
+'completed_at'`. Second revert (the masking fix, added after CodeRabbit's finding): reverted only the
+`content: contentVisibleToViewer ? row.content : null` line back to unconditional `content: row.content`
+— the 2 masking-specific cases failed with `expected {...} to be null` (real private body text
+returned instead of `null`); the "creator sees own content" case correctly still passed (unmasked
+either way). Restored the fix both times; full file: 30/30 pass.
 
 **Other verification run.** `pnpm type-check` (all 8 workspace packages, after `pnpm --filter
 @ship/sdk build` — a fresh worktree has no `sdk/dist` yet, which `integrations/browser-demo` resolves

@@ -637,30 +637,44 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
       expect(res.body).not.toHaveProperty('yjs_state');
     });
 
-    // Claim-provenance note (CLAUDE.md): this route has never applied any
-    // visibility-based access filtering — GET / and GET /:id both scope
-    // ONLY by workspace_id (+ deleted_at IS NULL), confirmed by reading the
-    // handler directly; `resources/people.ts`'s own header documents this as
-    // "a pre-existing gap inherited from the pattern, not something new
-    // introduced here". Widening the response to include `content`/
-    // `visibility` does not change that — a private document belonging to
-    // another user was already fully readable (title/properties/etc.)
-    // through this endpoint before this ticket, and still is. This test
-    // proves the new fields round-trip correctly for a private document; it
-    // deliberately does NOT assert a 403/404, because that behavior does not
-    // exist on this route today and asserting it would be testing a
-    // hypothesis, not the code.
-    describe("visibility: 'private' — new fields round-trip correctly; this ticket does not change (and this test does not assert) any access-filtering behavior, because none exists on this route", () => {
-      it("a private document created by a DIFFERENT user in the same workspace still round-trips content/visibility/created_by (unchanged pre-existing behavior + the new fields)", async () => {
+    // Claim-provenance note (CLAUDE.md), UPDATED after a CodeRabbit finding
+    // on this ticket's own PR: GET / and GET /:id scope ONLY by workspace_id
+    // (+ deleted_at IS NULL) — this route has never enforced visibility-based
+    // access control for title/properties/visibility/created_by/timestamps,
+    // confirmed by reading the handler directly (`resources/people.ts`'s own
+    // header documents the same pre-existing, disclosed gap). That part is
+    // UNCHANGED by this ticket and NOT fixed here — retrofitting full access
+    // control onto every field is a materially bigger, auth-semantics change
+    // this ticket does not take on (see `serializeDocument()`'s own doc
+    // comment for the full reasoning).
+    //
+    // What IS fixed, in response to that CodeRabbit finding: `content` is a
+    // NEW field this ticket adds, and unlike title/properties it can carry a
+    // private document's actual body text — shipping it unmasked would turn
+    // an existing metadata leak into a content leak, a real escalation in
+    // harm this ticket alone would introduce. So `content` (and ONLY
+    // `content`) is masked to `null` for a private document the caller did
+    // not create; every other field's pre-existing behavior is unchanged.
+    describe("visibility: 'private' — content is masked for a non-creator, every other field's pre-existing (unfixed, disclosed) behavior is unchanged", () => {
+      let otherUserId: string;
+      const content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'private body' }] }] };
+
+      beforeAll(async () => {
         const otherUserResult = await pool.query<{ id: string }>(
           `INSERT INTO users (email, password_hash, name, last_workspace_id)
            VALUES ($1, 'test-hash', 'TRO-605 Other User', $2) RETURNING id`,
           [`tro605-other-${testRunId}@ship.local`, workspaceId]
         );
-        const otherUserId = otherUserResult.rows[0]?.id;
-        if (!otherUserId) throw new Error('seed other-user insert produced no row');
+        const id = otherUserResult.rows[0]?.id;
+        if (!id) throw new Error('seed other-user insert produced no row');
+        otherUserId = id;
+      });
 
-        const content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'private body' }] }] };
+      afterAll(async () => {
+        await pool.query('DELETE FROM users WHERE id = $1', [otherUserId]);
+      });
+
+      it("GET /:id masks content to null for a DIFFERENT user's private document, but still returns visibility/created_by (the pre-existing, unfixed, disclosed metadata leak)", async () => {
         const docId = await insertFullyPopulatedDocument({
           title: 'TRO-605 private doc',
           createdAt: new Date(BASE_MS + 64_000),
@@ -678,15 +692,60 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
 
         expect(
           res.status,
-          'this route has never filtered by visibility (documented pre-existing gap) — a private ' +
-            'document from another user in the same workspace was, and still is, returned as 200'
+          'this route has never filtered by visibility for non-content fields (documented pre-existing ' +
+            'gap) — a private document from another user in the same workspace was, and still is, ' +
+            'returned as 200'
         ).toBe(200);
         const body = res.body as DocumentBody;
         expect(body.visibility).toBe('private');
         expect(body.created_by).toBe(otherUserId);
-        expect(body.content).toEqual(content);
+        expect(body.title).toBe('TRO-605 private doc');
+        // The fix: content itself is masked, unlike every other field above.
+        expect(body.content, 'content must be masked for a private document the caller did not create').toBeNull();
+      });
 
-        await pool.query('DELETE FROM users WHERE id = $1', [otherUserId]);
+      it('GET /:id returns the REAL content for a private document the caller DID create (creator is never masked from their own content)', async () => {
+        const docId = await insertFullyPopulatedDocument({
+          title: 'TRO-605 own private doc',
+          createdAt: new Date(BASE_MS + 65_000),
+          content,
+          visibility: 'private',
+          createdBy: userId, // readOnlyToken's own principal
+          completedAt: new Date(BASE_MS + 65_500),
+        });
+
+        const res = await request(app)
+          .get(`/api/v1/documents/${docId}`)
+          .set('Authorization', `Bearer ${readOnlyToken}`);
+
+        expect(res.status).toBe(200);
+        const body = res.body as DocumentBody;
+        expect(body.visibility).toBe('private');
+        expect(body.created_by).toBe(userId);
+        expect(body.content).toEqual(content);
+      });
+
+      it('GET / (list) also masks content for a DIFFERENT user\'s private document row', async () => {
+        const docId = await insertFullyPopulatedDocument({
+          title: 'TRO-605 private list row',
+          createdAt: new Date(BASE_MS + 66_000),
+          content,
+          visibility: 'private',
+          createdBy: otherUserId,
+          completedAt: new Date(BASE_MS + 66_500),
+        });
+
+        const res = await request(app)
+          .get('/api/v1/documents?type=issue')
+          .set('Authorization', `Bearer ${readOnlyToken}`);
+
+        expect(res.status).toBe(200);
+        const body = res.body as ListResponseBody;
+        const row = body.data.find((d) => d.id === docId);
+        expect(row, 'seeded private row not found on the list response').toBeDefined();
+        expect(row?.visibility).toBe('private');
+        expect(row?.created_by).toBe(otherUserId);
+        expect(row?.content).toBeNull();
       });
     });
   });
