@@ -42,15 +42,41 @@
 export type PreciseTimestamp = string & { readonly __brand: 'PreciseTimestamp' };
 
 /**
- * Brands a `created_at::text`-selected column value as a `PreciseTimestamp`.
- * Deliberately the ONLY function in this module that produces one — never
- * call this on `Date#toISOString()` or any other Date-derived string; there
- * is nothing this function can check at runtime that distinguishes a
- * precise value from a lossy one (both are plain strings by the time they
- * reach here), so the guarantee is enforced entirely by convention at this
- * one call site plus the type system everywhere downstream of it.
+ * Shape of Postgres's own `timestamptz::text` cast — `YYYY-MM-DD
+ * HH:MI:SS[.f{1,6}]+TZ[:TZ]` — verified directly against this DB (not
+ * assumed): the fractional part is trimmed of trailing zeros and OMITTED
+ * entirely when it's exactly zero (`05:33:23+00`, not `05:33:23.000000+00`),
+ * so a fixed-six-digit requirement would reject a large fraction of
+ * genuinely precise real timestamps. This regex exists only to catch gross
+ * shape mismatches (starting with: anything from `Date#toISOString()`,
+ * which uses a `T` separator, a `Z` suffix, and fixed 3-digit
+ * milliseconds — structurally disjoint from Postgres's own text format) —
+ * it cannot and does not attempt to verify that a given value's precision
+ * was never truncated upstream, since a truly precise value with
+ * zero microseconds is byte-identical to one that was truncated to zero.
+ */
+const POSTGRES_TIMESTAMPTZ_TEXT_RE =
+  /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}(\.\d{1,6})?[+-]\d{2}(:\d{2})?$/;
+
+/**
+ * Brands a `created_at::text`-selected column value as a `PreciseTimestamp`,
+ * asserting it is at least shaped like Postgres's own `timestamptz::text`
+ * output (see `POSTGRES_TIMESTAMPTZ_TEXT_RE`'s comment for exactly what
+ * that does and does not guarantee). Deliberately the ONLY function in this
+ * module that produces one — never call this on `Date#toISOString()` or
+ * any other Date-derived string. Throws rather than degrading, because
+ * every call site passes a value this module's own SQL selected — a
+ * mismatch here means a call site changed what it selects, not bad client
+ * input; `decodeCursor` below validates the client-supplied case separately
+ * and degrades to `null` instead of throwing.
  */
 export function preciseTimestamp(raw: string): PreciseTimestamp {
+  if (!POSTGRES_TIMESTAMPTZ_TEXT_RE.test(raw)) {
+    throw new Error(
+      `preciseTimestamp: "${raw}" is not shaped like a Postgres timestamptz::text cast — ` +
+        `did a call site pass a Date#toISOString() value instead of a created_at::text column?`
+    );
+  }
   return raw as PreciseTimestamp;
 }
 
@@ -72,12 +98,12 @@ export function encodeCursor(cursor: KeysetCursor): string {
  * Decodes a cursor produced by `encodeCursor`. Returns `null` for anything
  * that isn't a validly-shaped cursor — a garbled, truncated, or
  * hand-crafted `?cursor=` value — so the caller can turn that into a
- * `validation_failed` `ApiError` rather than a raw parse exception reaching
- * the client as a 500. The decoded `created_at` is re-branded via
- * `preciseTimestamp()` without a fresh precision check — safe because it
- * can only ever have been produced by this module's own `encodeCursor`
- * (which itself only ever accepted a `PreciseTimestamp`), not supplied
- * directly by a caller.
+ * `validation_failed` `ApiError` rather than a raw parse exception (or
+ * `preciseTimestamp`'s throw) reaching the client as a 500. `created_at` is
+ * checked against `POSTGRES_TIMESTAMPTZ_TEXT_RE` here, before
+ * `preciseTimestamp`, specifically so a hand-crafted `?cursor=` with a
+ * garbled `created_at` degrades to `null` like every other malformed-cursor
+ * case instead of throwing.
  */
 export function decodeCursor(raw: string): KeysetCursor | null {
   let parsed: unknown;
@@ -90,7 +116,11 @@ export function decodeCursor(raw: string): KeysetCursor | null {
     return null;
   }
   const candidate = parsed as Record<string, unknown>;
-  if (typeof candidate.id !== 'string' || typeof candidate.created_at !== 'string') {
+  if (
+    typeof candidate.id !== 'string' ||
+    typeof candidate.created_at !== 'string' ||
+    !POSTGRES_TIMESTAMPTZ_TEXT_RE.test(candidate.created_at)
+  ) {
     return null;
   }
   return { id: candidate.id, created_at: preciseTimestamp(candidate.created_at) };

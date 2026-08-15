@@ -80,6 +80,39 @@ dropped across the millisecond-collision page boundary"), then the fix was resto
 run went green. Full `api` suite: **122/122 files, 1372/1372 tests green** — nothing else broke
 across the 10 touched call sites.
 
+**CodeRabbit triage (local CLI, completed review, 1 Major finding).** `preciseTimestamp()`
+performed zero runtime validation, so it would silently brand any string — including exactly the
+`Date#toISOString()` value TRO-602 exists to keep out — as precise, relying entirely on the type
+system plus call-site discipline. Finding accepted, but its literal suggested fix ("require a fixed
+six-digit fraction") was itself wrong: verified directly against this repo's Postgres container that
+`timestamptz::text` trims trailing zero digits and **omits the fraction entirely** when it's exactly
+zero (`2026-08-15 05:33:23+00`, not `...23.000000+00`) — a fixed-six-digit check would have rejected
+a large fraction of genuinely precise real timestamps. Implemented the corrected version instead:
+`POSTGRES_TIMESTAMPTZ_TEXT_RE` (`pagination.ts`) accepts Postgres's actual variable-length-fraction
+shape and rejects `Date#toISOString()`'s structurally disjoint `T...Z` shape. `preciseTimestamp()`
+now throws on a shape mismatch (every call site passes a DB-selected value, so a mismatch there is a
+call-site bug, not client input); `decodeCursor()` checks the same regex on the client-supplied
+`?cursor=` value **before** calling `preciseTimestamp()`, preserving its existing contract that a
+garbled cursor degrades to `null` → `validation_failed`, never a thrown 500. New test file
+`api/v1/__tests__/pagination.test.ts` (8 cases) covers: accepting Postgres's zero-fraction and
+trimmed-fraction real output, rejecting a `Date#toISOString()` value and garbage, and
+`decodeCursor` returning `null` (not throwing) for both a Date-shaped and a garbage hand-crafted
+cursor. Red-before-green verified directly: reverted `preciseTimestamp` to its pre-fix no-op body,
+confirmed the two validation tests failed with the predicted "expected function to throw" message,
+restored, confirmed all 8 green. Full `api/v1` suite re-run after the change: 12 files, 244 tests
+green — every resource's live pagination integration test still passes against real
+`created_at::text` output, confirming the regex doesn't false-reject real data.
+
+**How to run it.**
+```bash
+pnpm --filter api exec vitest run src/platform/api/v1/__tests__/pagination.test.ts
+pnpm --filter api exec vitest run src/platform/api/v1/
+```
+
+**Roll back.** Revert `pagination.ts`'s `preciseTimestamp`/`decodeCursor` changes in this commit and
+delete `api/v1/__tests__/pagination.test.ts`; the original TRO-602 fix (branded type, no runtime
+validation) is unaffected and stays correct on its own.
+
 **How to verify.**
 
 ```bash
