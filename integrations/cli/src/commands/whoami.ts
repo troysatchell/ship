@@ -11,7 +11,8 @@
  * behavioral difference a user should see, not just an implementation
  * detail.
  */
-import { FileTokenStore, ShipClient } from '@ship/sdk';
+import { ShipClient } from '@ship/sdk';
+import { FileTokenStore } from '@ship/sdk/node';
 import { resolveBaseUrl, resolveClientId, resolveCredentialsPath } from '../config.js';
 import { formatError } from '../errors.js';
 import { formatIdentity } from '../identity.js';

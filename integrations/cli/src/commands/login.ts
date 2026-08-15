@@ -10,7 +10,8 @@
  * would be a real regression, not a convenience — this ticket's brief says
  * so explicitly.
  */
-import { FileTokenStore, ShipClient, type DeviceLoginFlowOptions } from '@ship/sdk';
+import { ShipClient, type DeviceLoginFlowOptions } from '@ship/sdk';
+import { FileTokenStore } from '@ship/sdk/node';
 import { resolveBaseUrl, resolveClientId, resolveCredentialsPath } from '../config.js';
 import { formatError } from '../errors.js';
 import { formatIdentity } from '../identity.js';

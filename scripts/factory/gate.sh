@@ -128,6 +128,14 @@ run_tests() { # run_tests <pkg>
   local pkg="$1"
   local json="$OUT_DIR/${pkg}-tests.json"
   local log="$OUT_DIR/${pkg}-tests.log"
+  # TRO-448: resolve the real package directory via pnpm rather than assuming
+  # ${WT_ROOT}/${pkg} — true for top-level packages (api/web/agent/sdk) but
+  # false for nested integrations/* packages (cli lives at integrations/cli),
+  # which broke the standalone-rerun cd below with "No such file or
+  # directory" the first time tests:cli actually failed for real.
+  local pkg_dir
+  pkg_dir="$(pnpm --filter "@ship/${pkg}" exec pwd 2>/dev/null | tail -1)"
+  [ -d "$pkg_dir" ] || pkg_dir="${WT_ROOT}/${pkg}"
   pnpm --filter "@ship/${pkg}" test --reporter=json --outputFile="$json" > "$log" 2>&1
   if [ ! -f "$json" ]; then
     record "tests:${pkg}" fail "runner produced no report — see .factory/${pkg}-tests.log"
@@ -181,7 +189,7 @@ run_tests() { # run_tests <pkg>
       while IFS= read -r tf; do
         [ -z "$tf" ] && continue
         standalone_total=$((standalone_total + 1))
-        if (cd "${WT_ROOT}/${pkg}" && npx vitest run "$tf" > /dev/null 2>&1); then
+        if (cd "$pkg_dir" && npx vitest run "$tf" > /dev/null 2>&1); then
           standalone_pass=$((standalone_pass + 1))
           echo "PASSED standalone: $tf" >> "$OUT_DIR/${pkg}-standalone.txt"
         else

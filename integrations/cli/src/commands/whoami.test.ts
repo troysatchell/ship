@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { FileTokenStore } from '@ship/sdk';
+import { FileTokenStore } from '@ship/sdk/node';
 import { runWhoami } from './whoami.js';
 import { createCapturingIo } from '../io.js';
 
