@@ -25,6 +25,48 @@ const ABSOLUTE_SESSION_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 // Absolute warning appears 5 minutes before timeout
 const ABSOLUTE_WARNING_THRESHOLD_MS = 5 * 60 * 1000;
 
+// TRO-593: page.clock.fastForward() "only fires due timers at most once"
+// (https://playwright.dev/docs/clock), while page.clock.runFor() fires every
+// timer callback progressively — once per real occurrence. Every periodic
+// timer mounted app-wide (the WebSocket keepalive ping in useRealtimeEvents.tsx,
+// react-query's refetchInterval polls) does real async work each time it fires,
+// so a runFor() spanning many periods multiplies that real work by the number
+// of periods elapsed, while fastForward() pays that cost at most once
+// regardless of span. Confirmed the mechanism directly: a bare 1Hz interval on
+// a blank page costs ~255ms of real time for a 62-simulated-second runFor (not
+// ~60s), so the cost lives in what the real app does per callback, not in
+// Playwright's clock implementation. Over a 14-minute span this is enough to
+// occasionally exceed the 60s test timeout under load; over the 12-hour
+// absolute-timeout span it reliably crashes the browser context.
+//
+// fastForward's "at most once" firing is exactly right for a one-shot
+// setTimeout (the inactivity/absolute warning schedulers below are one-shot
+// timers, not intervals) and is what most tests in this file already use to
+// reach the same 14-minute warning point. Tests that must observe a repeating
+// setInterval actually complete (e.g. the countdown reaching zero and
+// triggering the real onTimeout() callback) still need runFor — see the
+// "logs user out when countdown reaches zero"-style tests below, which pair a
+// fastForward() to the warning point with a short runFor() for the final
+// countdown only.
+//
+// Advances the fake clock up to `target` in bounded chunks, dispatching a
+// mousemove between chunks so the 14-minute inactivity timer never
+// accumulates enough idle time to fire and steal focus from whatever
+// longer-horizon behavior (e.g. the 12-hour absolute timeout) the test is
+// actually exercising — the same dodge the original "12-hour mark" test used
+// with runFor, now with fastForward so it stays cheap over many chunks.
+async function fastForwardWithActivity(page: Page, target: number, chunkMs = 10 * 60 * 1000) {
+  for (let elapsed = 0; elapsed < target; elapsed += chunkMs) {
+    const toAdvance = Math.min(chunkMs, target - elapsed);
+    await page.clock.fastForward(toAdvance);
+    if (elapsed + toAdvance < target) {
+      await page.evaluate(() => {
+        document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+      });
+    }
+  }
+}
+
 test.describe('Session Timeout Warning', () => {
   test('shows warning modal when 60 seconds remain before timeout', async ({ page }) => {
     // Install fake timers BEFORE login/navigation
@@ -203,6 +245,14 @@ test.describe('Session Timeout Warning', () => {
   });
 
   test('logs user out when countdown reaches zero', async ({ page }) => {
+    // The final runFor() below has to progressively fire a real 60-tick (1
+    // minute) countdown interval to reach zero and trigger the app's real
+    // onTimeout() — see the TRO-593 comment above. Measured comfortably
+    // under the default 60s timeout on an idle machine (~25-30s) but
+    // observed crossing it under heavy concurrent load during this ticket's
+    // own verification runs. test.slow() gives it the same realistic
+    // margin as the file's 300-tick countdown tests.
+    test.slow();
     await page.clock.install();
     await login(page);
     await page.goto('/docs');
@@ -223,6 +273,9 @@ test.describe('Session Timeout Warning', () => {
   });
 
   test('shows session expired message after forced logout', async ({ page }) => {
+    // Same 60-tick countdown-completion budget concern as "logs user out
+    // when countdown reaches zero" above — see that test's comment.
+    test.slow();
     await page.clock.install();
     await login(page);
     await page.goto('/docs');
@@ -274,7 +327,7 @@ test.describe('Timer Reset Behavior', () => {
     });
 
     // Advance to warning
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -346,9 +399,10 @@ test.describe('12-Hour Absolute Timeout', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    // Advance to 11 hours 55 minutes (5 minutes before absolute timeout)
-    // Using runFor to ensure setTimeout callbacks fire properly
-    await page.clock.runFor(ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
+    // Advance to 11 hours 55 minutes (5 minutes before absolute timeout),
+    // dodging inactivity along the way so the 14-minute inactivity warning
+    // never fires and preempts the absolute one (see TRO-593 comment above).
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -361,7 +415,7 @@ test.describe('12-Hour Absolute Timeout', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to absolute warning time
-    await page.clock.runFor(ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -379,7 +433,7 @@ test.describe('12-Hour Absolute Timeout', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to absolute warning time
-    await page.clock.runFor(ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -391,13 +445,26 @@ test.describe('12-Hour Absolute Timeout', () => {
   });
 
   test('clicking I Understand on absolute warning does NOT extend session', async ({ page }) => {
+    // This test's final runFor() has to progressively fire a real 300-tick
+    // (5-minute) countdown interval to actually reach zero and trigger the
+    // app's onTimeout() — see the TRO-593 comment above. That is 5x the
+    // ticks of the file's other ~60-tick countdown-completion tests, and
+    // measured consistently over the default 60s test timeout under normal
+    // CI/dev-machine load (unlike those, which fit comfortably). Chunking
+    // the runFor call wouldn't reduce the real work being done — it is
+    // still 300 real async round trips either way — so the correct fix is
+    // giving this test a realistic budget for the amount of real timer work
+    // it inherently performs, not pretending the work is cheaper than it is.
+    // e2e/AGENTS.md's own guidance: don't reach for test.slow() as a first
+    // resort, but it is the right tool "for genuinely long tests" — this is one.
+    test.slow();
     await page.clock.install();
     await login(page);
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to absolute warning time
-    await page.clock.runFor(ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -415,32 +482,29 @@ test.describe('12-Hour Absolute Timeout', () => {
   });
 
   test('logs user out at 12-hour mark regardless of activity', async ({ page }) => {
+    // Same 300-tick progressive-countdown budget concern as "clicking I
+    // Understand..." above — see that test's comment.
+    test.slow();
     await page.clock.install();
     await login(page);
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    // Advance time in chunks, simulating activity to prevent inactivity timeout
-    // We need to keep active every 14 minutes (before the 15-minute inactivity warning)
-    const chunkSize = 10 * 60 * 1000; // 10 minutes
-    const totalTime = ABSOLUTE_SESSION_TIMEOUT_MS;
+    // Advance in chunks, simulating activity to prevent inactivity timeout, up
+    // to (not past) the absolute-warning threshold — fastForward per chunk
+    // keeps this cheap (see TRO-593 comment above; the previous runFor-based
+    // version of this loop covered the same 12-hour span but fired every
+    // periodic app timer progressively the whole way, which is what crashed).
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
-    for (let elapsed = 0; elapsed < totalTime; elapsed += chunkSize) {
-      const remaining = totalTime - elapsed;
-      const toAdvance = Math.min(chunkSize, remaining);
-      await page.clock.runFor(toAdvance);
-
-      // Don't try activity after logout
-      if (elapsed + toAdvance < totalTime) {
-        // Simulate activity to prevent inactivity timeout
-        await page.evaluate(() => {
-          document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-        });
-      }
-    }
+    // Final stretch needs progressive firing: the 5-minute absolute-warning
+    // countdown is a real setInterval ticking once per simulated second, and
+    // it has to actually complete to call the app's own onTimeout() — a
+    // single fastForward would only fire it once, never reaching zero.
+    await page.clock.runFor(ABSOLUTE_WARNING_THRESHOLD_MS + 2000);
 
     // Should be redirected to login page despite activity
-    await expect(page).toHaveURL(/\/login/);
+    await expect(page).toHaveURL(/\/login/, { timeout: 10000 });
   });
 
   test('absolute timeout takes precedence if it occurs before inactivity timeout', async ({ page }) => {
@@ -450,7 +514,7 @@ test.describe('12-Hour Absolute Timeout', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to absolute warning time (11:55)
-    await page.clock.runFor(ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -519,13 +583,13 @@ test.describe('Activity Tracking', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance time to just before warning threshold (13 minutes)
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Simulate mouse activity
     await page.mouse.click(100, 100);
 
     // Advance another 13 minutes - timer should have been reset so no warning yet
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Warning should NOT appear because mouse activity reset the timer
     const modal = page.getByRole('alertdialog');
@@ -539,13 +603,13 @@ test.describe('Activity Tracking', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance time to just before warning threshold
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Simulate keyboard activity
     await page.keyboard.press('Tab');
 
     // Advance another 13 minutes
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Warning should NOT appear because keyboard activity reset the timer
     const modal = page.getByRole('alertdialog');
@@ -564,7 +628,7 @@ test.describe('Activity Tracking', () => {
     await expect(page.locator('[data-testid="tiptap-editor"]')).toBeVisible();
 
     // Advance time to just before warning threshold
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Type in the editor (triggers keydown events)
     const editor = page.locator('[data-testid="tiptap-editor"]');
@@ -572,7 +636,7 @@ test.describe('Activity Tracking', () => {
     await page.keyboard.type('Hello');
 
     // Advance another 13 minutes
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Warning should NOT appear because typing reset the timer
     const modal = page.getByRole('alertdialog');
@@ -586,7 +650,7 @@ test.describe('Activity Tracking', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance time to just before warning threshold
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Simulate scroll activity
     await page.evaluate(() => {
@@ -594,7 +658,7 @@ test.describe('Activity Tracking', () => {
     });
 
     // Advance another 13 minutes
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Warning should NOT appear because scroll activity reset the timer
     const modal = page.getByRole('alertdialog');
@@ -608,16 +672,16 @@ test.describe('Activity Tracking', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance time to just before warning threshold (13.5 minutes into 15 min session)
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Simulate rapid activity - only first click counts due to 1-second throttle
     for (let i = 0; i < 5; i++) {
       await page.mouse.click(100 + i * 10, 100);
-      await page.clock.runFor(100); // 100ms between clicks (within throttle window)
+      await page.clock.fastForward(100); // 100ms between clicks (within throttle window)
     }
 
     // Advance another 13.5 minutes (timer was reset by first click)
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS - 30000);
 
     // Warning should NOT appear because the first click reset the timer
     const modal = page.getByRole('alertdialog');
@@ -650,7 +714,7 @@ test.describe('Extend Session API', () => {
     });
 
     // Advance to warning
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -677,7 +741,7 @@ test.describe('Accessibility', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to warning
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     // Modal should have role="alertdialog"
     const modal = page.getByRole('alertdialog');
@@ -690,7 +754,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -703,7 +767,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -721,7 +785,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -739,7 +803,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -762,7 +826,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -785,7 +849,7 @@ test.describe('Accessibility', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to absolute warning time (11hr 55min)
-    await page.clock.runFor(ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
+    await fastForwardWithActivity(page, ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -818,7 +882,7 @@ test.describe('Accessibility', () => {
     await docsButton.focus();
     await expect(docsButton).toBeFocused();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -846,7 +910,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -856,7 +920,7 @@ test.describe('Accessibility', () => {
     await expect(liveRegion).toBeVisible();
 
     // Advance to 30 seconds - one of the announcement thresholds
-    await page.clock.runFor(30 * 1000);
+    await page.clock.fastForward(30 * 1000);
 
     // The live region should contain announcement text (or be updated)
     // Note: actual announcement content depends on timeRemaining state
@@ -868,7 +932,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -885,7 +949,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -912,7 +976,7 @@ test.describe('Accessibility', () => {
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -939,15 +1003,22 @@ test.describe('Accessibility', () => {
 
 test.describe('Edge Cases', () => {
   test('handles computer sleep/wake gracefully', async ({ page }) => {
-    // Advance clock past timeout (simulating sleep), verify immediate logout on wake
+    // Advance clock past timeout (simulating sleep), verify immediate logout on wake.
+    // Same 61-tick countdown-completion budget concern as the other
+    // countdown-completion tests in this file — see the TRO-593 comment above.
+    test.slow();
     await page.clock.install();
     await login(page);
     await page.goto('/docs');
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
-    // Simulate computer waking up after a long sleep (past session timeout)
-    // Jump forward past the entire session timeout
-    await page.clock.runFor(SESSION_TIMEOUT_MS + 1000);
+    // Simulate computer waking up after a long sleep (past session timeout).
+    // Reach the warning point cheaply (fastForward, one-shot timer), then use
+    // a short runFor for the final stretch — the countdown that actually
+    // triggers the redirect is a real setInterval that must complete, not
+    // just cross a boundary. See TRO-593 comment near the top of this file.
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.runFor(WARNING_THRESHOLD_MS + 1000);
 
     // Should be redirected to login immediately
     await expect(page).toHaveURL(/\/login/, { timeout: 10000 });
@@ -960,7 +1031,7 @@ test.describe('Edge Cases', () => {
     await expect(page.getByRole('heading', { name: /sign in/i })).toBeVisible();
 
     // Advance past timeout threshold
-    await page.clock.runFor(SESSION_TIMEOUT_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS);
 
     // Warning modal should NOT appear on login page
     const modal = page.getByRole('alertdialog');
@@ -977,7 +1048,7 @@ test.describe('Edge Cases', () => {
     await page.getByRole('textbox', { name: /email/i }).fill('dev@ship.local');
 
     // Advance time while still on login page
-    await page.clock.runFor(SESSION_TIMEOUT_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS);
 
     // Should still be on login page with no warning
     const modal = page.getByRole('alertdialog');
@@ -987,6 +1058,11 @@ test.describe('Edge Cases', () => {
 
   test('race condition: user clicks Stay Logged In as timer expires', async ({ page }) => {
     // Click button at exact moment countdown hits 0, verify no error/crash
+    // Same 58-tick countdown-progression budget concern as the countdown-
+    // completion tests above (this one needs runFor, not fastForward, for
+    // the final approach — see this file's TRO-593 comment — since the
+    // whole point is clicking near the exact moment the countdown expires).
+    test.slow();
     await page.clock.install();
     await login(page);
     await page.goto('/docs');
@@ -1008,7 +1084,7 @@ test.describe('Edge Cases', () => {
     });
 
     // Advance to warning
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -1033,7 +1109,7 @@ test.describe('Edge Cases', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // Advance to warning
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
@@ -1059,7 +1135,7 @@ test.describe('Edge Cases', () => {
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 
     // First, advance time to trigger the warning modal
-    await page.clock.runFor(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
+    await page.clock.fastForward(SESSION_TIMEOUT_MS - WARNING_THRESHOLD_MS);
 
     const modal = page.getByRole('alertdialog');
     await expect(modal).toBeVisible({ timeout: 5000 });
