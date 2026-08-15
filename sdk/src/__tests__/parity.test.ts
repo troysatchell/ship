@@ -70,19 +70,16 @@
  * as `route-fitness.test.ts`'s `KNOWN_EXEMPTIONS`), each checked for
  * staleness the same way `SDK_TO_OPERATION` is:
  *   - `SDK_EXEMPTIONS`: an SDK method that deliberately has no OpenAPI
- *     operation. Two reasons appear today — `iterate()` (PF-402) is a
- *     client-side pagination convenience wrapping `list()`'s cursor in an
- *     async generator, not a second HTTP call shape (this ticket's own brief
- *     names this exact case); and `webhooks.replayDelivery`, which targets
- *     `/webhooks/deliveries/:id/replay`, a route PF-306 has not built yet
- *     (verified absent from the real, merged registration).
- *     `webhooks.listDeliveries` was the identical kind of exemption until
- *     PF-305 (Linear TRO-442) landed the real `GET /webhooks/deliveries`
- *     route — moved to `SDK_TO_OPERATION` at that point, per exactly the
- *     "delete the line, add a real entry" instruction this comment used to
- *     describe in the future tense. This exemption kind should SHRINK over
- *     time, not grow: the day PF-306 lands, delete `replayDelivery`'s line
- *     too.
+ *     operation. Today that's just `iterate()` (PF-402) — a client-side
+ *     pagination convenience wrapping `list()`'s cursor in an async
+ *     generator, not a second HTTP call shape (this ticket's own brief names
+ *     this exact case). Both `webhooks.listDeliveries` (PF-305, TRO-442) and
+ *     `webhooks.replayDelivery` (PF-306, TRO-446) used to live here too, as
+ *     forward-declarations against routes that hadn't landed yet — each
+ *     moved to `SDK_TO_OPERATION` the moment its real route was registered,
+ *     per exactly the "delete the line, add a real entry" instruction this
+ *     comment used to describe in the future tense for both. This exemption
+ *     kind is meant to SHRINK over time, not grow.
  *   - `OPENAPI_EXEMPTIONS`: an operation that deliberately has no typed SDK
  *     method — `GET /health` and `GET /openapi.json`, both infra/meta
  *     endpoints rather than typed domain resources (the identical two
@@ -209,6 +206,11 @@ const SDK_TO_OPERATION: Readonly<Record<string, OpenApiOperation>> = {
   // registered v1Registry operation — moved out of SDK_EXEMPTIONS below per
   // that table's own "delete this line and add a real entry" instruction.
   'webhooks.listDeliveries': { method: 'get', path: '/webhooks/deliveries' },
+  // PF-306 (Linear TRO-446) landed: POST /webhooks/deliveries/{id}/replay is
+  // now a real, registered v1Registry operation — moved out of
+  // SDK_EXEMPTIONS below per that table's own "the day PF-306 lands, delete
+  // replayDelivery's line too" instruction.
+  'webhooks.replayDelivery': { method: 'post', path: '/webhooks/deliveries/{id}/replay' },
   // PF-205 (Linear TRO-414) additions.
   'sprints.get': { method: 'get', path: '/sprints/{id}' },
   'documents.getAssociations': { method: 'get', path: '/documents/{id}/associations' },
@@ -226,8 +228,6 @@ const SDK_EXEMPTIONS: Readonly<Record<string, string>> = {
     'Client-side pagination convenience over issues.list() (PF-402) — same reasoning as documents.iterate.',
   'sprints.iterate':
     'Client-side pagination convenience over sprints.list() (PF-402) — same reasoning as documents.iterate.',
-  'webhooks.replayDelivery':
-    'Targets POST /webhooks/deliveries/:id/replay — PF-306 (replay) has not landed; same verification as listDeliveries above. Remove this exemption once PF-306 lands.',
   'people.iterate':
     'Client-side pagination convenience over people.list() (PF-205, same pattern as PF-402) — an async-generator wrapper around list()\'s cursor, not a distinct HTTP call shape.',
 };
@@ -329,7 +329,8 @@ describe('PF-405: /api/v1 <-> @ship/sdk bidirectional parity fitness test (Linea
           '/api/v1/openapi.json document. It was renamed, removed, or never existed server-side. This ' +
           'is exactly the orphan-method drift PF-405 exists to catch — fix the mapping, fix the route, ' +
           'or add a reasoned SDK_EXEMPTIONS entry if the method is a deliberate forward-declaration ' +
-          '(see webhooks.listDeliveries/replayDelivery above for that pattern).'
+          '(see webhooks.listDeliveries/webhooks.replayDelivery\'s own history in SDK_TO_OPERATION\'s ' +
+          'comments above for that pattern — both lived here until their routes landed).'
       ).toBe(true);
     });
   });

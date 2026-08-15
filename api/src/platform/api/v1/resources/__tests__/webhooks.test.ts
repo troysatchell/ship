@@ -25,13 +25,13 @@
  * above.
  */
 
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
 import request from 'supertest';
 import type { Express } from 'express';
 import crypto from 'crypto';
 import { createApp } from '../../../../../app.js';
 import { pool } from '../../../../../db/client.js';
-import { decryptSecret, SECRET_ENCRYPTION_KEY_ENV } from '../../../../webhooks/secretEncryption.js';
+import { decryptSecret, encryptSecret, SECRET_ENCRYPTION_KEY_ENV } from '../../../../webhooks/secretEncryption.js';
 import { sign, verify } from '../../../../webhooks/signer.js';
 import { EVENT_TYPES } from '../../../../webhooks/events.js';
 
@@ -70,6 +70,7 @@ interface DeliveryBody {
   response_excerpt: string | null;
   latency_ms: number | null;
   next_attempt_at: string | null;
+  replayed_from_id: string | null;
   created_at: string;
 }
 
@@ -151,6 +152,28 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
     return onlyRow(result.rows).id;
   }
 
+  /** Same as `insertSubscription`, but with a REAL, decryptable
+   * `signing_secret_ciphertext` (via `encryptSecret`) rather than the CRUD
+   * fixtures' placeholder string — needed for the PF-306 replay describe
+   * block below, whose calls go all the way through
+   * `InMemoryWebhookDeliverer.attemptNow()` (real decrypt + sign), unlike
+   * every other describe block in this file, which inserts
+   * `webhook_deliveries` rows directly and never exercises the deliverer at
+   * all (see this file's own header). */
+  async function insertSubscriptionWithRealSecret(
+    inAppId: string,
+    eventType: string,
+    targetUrl: string
+  ): Promise<{ id: string; secret: string }> {
+    const secret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+    const result = await pool.query<{ id: string }>(
+      `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+       VALUES ($1, $2, $3, $4, true) RETURNING id`,
+      [inAppId, eventType, targetUrl, encryptSecret(secret)]
+    );
+    return { id: onlyRow(result.rows).id, secret };
+  }
+
   /** Inserts a `webhook_deliveries` row directly — see this describe block's
    * own header for why (PF-304's deliverer is the only production writer,
    * and it does not run during this test). `createdAt` defaults to `now()`
@@ -162,22 +185,25 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
     subscriptionId: string;
     eventId?: string;
     eventType?: string;
+    payload?: Record<string, unknown>;
+    idempotencyKey?: string;
     attemptNumber?: number;
     status?: string;
     responseStatus?: number | null;
     responseExcerpt?: string | null;
     latencyMs?: number | null;
     createdAt?: Date;
-  }): Promise<{ id: string; createdAt: Date }> {
+  }): Promise<{ id: string; createdAt: Date; eventId: string; idempotencyKey: string }> {
     const eventId = options.eventId ?? crypto.randomUUID();
     const eventType = options.eventType ?? 'document.created';
+    const payload = options.payload ?? { hello: 'world' };
     const attemptNumber = options.attemptNumber ?? 1;
     const status = options.status ?? 'success';
     const responseStatus = options.responseStatus === undefined ? 200 : options.responseStatus;
     const responseExcerpt = options.responseExcerpt === undefined ? 'ok' : options.responseExcerpt;
     const latencyMs = options.latencyMs === undefined ? 42 : options.latencyMs;
     const createdAt = options.createdAt ?? new Date();
-    const idempotencyKey = crypto.randomUUID();
+    const idempotencyKey = options.idempotencyKey ?? crypto.randomUUID();
 
     const result = await pool.query<{ id: string; created_at: Date }>(
       `INSERT INTO webhook_deliveries
@@ -188,7 +214,7 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         options.subscriptionId,
         eventId,
         eventType,
-        JSON.stringify({ hello: 'world' }),
+        JSON.stringify(payload),
         idempotencyKey,
         attemptNumber,
         status,
@@ -199,7 +225,7 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       ]
     );
     const row = onlyRow(result.rows);
-    return { id: row.id, createdAt: row.created_at };
+    return { id: row.id, createdAt: row.created_at, eventId, idempotencyKey };
   }
 
   /** Reads back `signing_secret_ciphertext` for one subscription, throwing
@@ -885,6 +911,444 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(res.status).toBe(400);
       expect(res.body.code).toBe('validation_failed');
       expect(res.body.details?.fieldErrors?.status).toBeTruthy();
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // PF-306 (Linear TRO-446) — POST /api/v1/webhooks/deliveries/:id/replay
+  // ────────────────────────────────────────────────────────────────────────
+
+  describe('PF-306: POST /api/v1/webhooks/deliveries/:id/replay (Linear TRO-446)', () => {
+    /** A `fetchImpl` double, explicitly typed as `typeof fetch` so every
+     * call's arguments are inferred at the call site — no `as [string,
+     * RequestInit]` cast needed to read them back out of `.mock.calls`. Same
+     * helper `deliverer.test.ts` already establishes for the identical need;
+     * duplicated here rather than imported, matching this file's own
+     * `onlyRow` precedent of small per-file test helpers. */
+    function fetchMockAlways(factory: () => Response) {
+      return vi.fn<typeof fetch>(async () => factory());
+    }
+
+    /** Narrows `RequestInit['headers']` (the full fetch union: `Headers`,
+     * `string[][]`, or a plain record) down to a single header's value,
+     * without an `as Record<string, string>` cast past the non-record
+     * shapes — same helper/rationale as `deliverer.test.ts`'s own. */
+    function extractHeader(headers: RequestInit['headers'], name: string): string | undefined {
+      if (!headers) return undefined;
+      if (headers instanceof Headers) return headers.get(name) ?? undefined;
+      if (Array.isArray(headers)) {
+        const lowerName = name.toLowerCase();
+        for (const pair of headers) {
+          const key = pair[0];
+          if (key !== undefined && key.toLowerCase() === lowerName) return pair[1];
+        }
+        return undefined;
+      }
+      const value = headers[name];
+      if (value === undefined) return undefined;
+      return typeof value === 'string' ? value : value.join(', ');
+    }
+
+    let replaySubscriptionId: string;
+    let otherWorkspaceReplaySubscriptionId: string;
+
+    beforeAll(async () => {
+      const sub = await insertSubscriptionWithRealSecret(appId, 'document.created', 'https://example.com/replay-hook');
+      replaySubscriptionId = sub.id;
+      otherWorkspaceReplaySubscriptionId = await insertSubscription(
+        otherWorkspaceAppId,
+        'document.created',
+        'https://example.com/other-ws-replay-hook'
+      );
+    });
+
+    // `attemptNow()` really dispatches through global `fetch` — stubbed per
+    // test, always undone (rule: a stubGlobal must be undone by
+    // unstubAllGlobals, in afterEach so it runs even when an assertion
+    // above it throws, never a bare mockRestore() as the test's own last
+    // line).
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it('requires a bearer token (401)', async () => {
+      const res = await request(app).post(
+        '/api/v1/webhooks/deliveries/00000000-0000-0000-0000-000000000000/replay'
+      );
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('unauthorized');
+    });
+
+    it('requires the webhooks:manage scope (403, names the missing scope)', async () => {
+      const res = await request(app)
+        .post('/api/v1/webhooks/deliveries/00000000-0000-0000-0000-000000000000/replay')
+        .set('Authorization', `Bearer ${noScopeToken}`);
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden');
+      expect(res.body.details?.missing_scope).toBe('webhooks:manage');
+    });
+
+    it('404s for an unknown delivery id', async () => {
+      const res = await request(app)
+        .post('/api/v1/webhooks/deliveries/00000000-0000-0000-0000-000000000000/replay')
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('404s for a malformed (non-UUID) delivery id', async () => {
+      const res = await request(app)
+        .post('/api/v1/webhooks/deliveries/not-a-uuid/replay')
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(404);
+    });
+
+    it('404s for a delivery belonging to another workspace\'s subscription', async () => {
+      const crossTenant = await insertDelivery({
+        subscriptionId: otherWorkspaceReplaySubscriptionId,
+        status: 'success',
+      });
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${crossTenant.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('404s for a delivery whose subscription was since deactivated — replay must not re-send to a webhook the owner turned off (CodeRabbit, this PR review)', async () => {
+      const deactivatedSub = await insertSubscriptionWithRealSecret(
+        appId,
+        'document.created',
+        'https://example.com/deactivated-replay-hook'
+      );
+      const original = await insertDelivery({
+        subscriptionId: deactivatedSub.id,
+        status: 'success',
+      });
+
+      // DELETE /:id deactivates (active = false) rather than a hard delete —
+      // this file's own header. The delivery row survives (history stays
+      // queryable via GET /deliveries), but replay must stop working the
+      // moment the owner turns the subscription off.
+      const deleteRes = await request(app)
+        .delete(`/api/v1/webhooks/${deactivatedSub.id}`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(deleteRes.status).toBe(204);
+
+      const fetchMock = fetchMockAlways(() => new Response('should never be called', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+      // The strongest proof: no HTTP call was ever attempted.
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Confirmed via the log route too: the original row is still visible
+      // there (deactivation doesn't hide history), just not replayable.
+      const listRes = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${deactivatedSub.id}`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(listRes.status).toBe(200);
+      expect((listRes.body as { data: Array<{ id: string }> }).data.map((d) => d.id)).toContain(original.id);
+    });
+
+    it('replays a successful delivery: reaches the subscriber with the ORIGINAL Idempotency-Key, records a NEW row, and leaves the original untouched', async () => {
+      const originalPayload = { hello: 'replay-me' };
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: originalPayload,
+        attemptNumber: 1,
+        status: 'success',
+        responseStatus: 200,
+        responseExcerpt: 'original-ok',
+        latencyMs: 11,
+      });
+
+      const fetchMock = fetchMockAlways(() => new Response('replayed-ok', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+
+      // A NEW row — never the original's own id.
+      expect(body.id).not.toBe(original.id);
+      expect(body.subscription_id).toBe(replaySubscriptionId);
+      // Same logical event as the original.
+      expect(body.event_id).toBe(original.eventId);
+      // THE core AC: the ORIGINAL Idempotency-Key, never a freshly generated
+      // one — this is the subscriber-dedupe contract PF-801's e2e test
+      // verifies end to end.
+      expect(body.idempotency_key).toBe(original.idempotencyKey);
+      // attempt_number continues the same event's series (original was 1).
+      expect(body.attempt_number).toBe(2);
+      expect(body.status).toBe('success');
+      expect(body.response_status).toBe(200);
+      // Linked back to the original it replayed.
+      expect(body.replayed_from_id).toBe(original.id);
+
+      // The deliverer actually dispatched ONE HTTP request, and it carried
+      // the ORIGINAL idempotency key on the wire — not just a DB row
+      // claiming it did.
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const call = fetchMock.mock.calls[0];
+      if (!call) throw new Error('expected the deliverer to call fetch');
+      const [calledUrl, calledInit] = call;
+      expect(calledUrl).toBe('https://example.com/replay-hook');
+      if (!calledInit) throw new Error('expected the deliverer to pass a RequestInit to fetch');
+      expect(extractHeader(calledInit.headers, 'Idempotency-Key')).toBe(original.idempotencyKey);
+      expect(extractHeader(calledInit.headers, 'Ship-Signature')).toBeTruthy();
+      expect(calledInit.body).toBe(JSON.stringify(originalPayload));
+
+      // The original row is completely unchanged — a replay records, it
+      // never mutates.
+      const originalAfter = await pool.query<{
+        status: string;
+        response_status: number | null;
+        response_excerpt: string | null;
+        latency_ms: number | null;
+        attempt_number: number;
+        idempotency_key: string;
+      }>(
+        `SELECT status, response_status, response_excerpt, latency_ms, attempt_number, idempotency_key
+         FROM webhook_deliveries WHERE id = $1`,
+        [original.id]
+      );
+      const originalRow = onlyRow(originalAfter.rows);
+      expect(originalRow.status).toBe('success');
+      expect(originalRow.response_status).toBe(200);
+      expect(originalRow.response_excerpt).toBe('original-ok');
+      expect(originalRow.latency_ms).toBe(11);
+      expect(originalRow.attempt_number).toBe(1);
+      expect(originalRow.idempotency_key).toBe(original.idempotencyKey);
+
+      // GET /deliveries (the list serializer, a separate code path from the
+      // replay response above) exposes replayed_from_id too — not just the
+      // POST /replay response (CodeRabbit, this PR review).
+      const listRes = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${replaySubscriptionId}`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(listRes.status).toBe(200);
+      const listedReplay = (listRes.body as { data: DeliveryBody[] }).data.find((d) => d.id === body.id);
+      if (!listedReplay) throw new Error('expected the new replay row to appear in GET /deliveries');
+      expect(listedReplay.replayed_from_id).toBe(original.id);
+    });
+
+    it('replays a dead (DLQ) delivery successfully — the graded replay-after-DLQ scenario', async () => {
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: { hello: 'dlq-replay' },
+        attemptNumber: 6,
+        status: 'dead',
+        responseStatus: 503,
+        responseExcerpt: 'gave up after 6 attempts',
+        latencyMs: 99,
+      });
+
+      const fetchMock = fetchMockAlways(() => new Response('replayed-after-dlq', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.id).not.toBe(original.id);
+      expect(body.event_id).toBe(original.eventId);
+      expect(body.idempotency_key).toBe(original.idempotencyKey);
+      expect(body.attempt_number).toBe(7);
+      expect(body.status).toBe('success');
+      expect(body.replayed_from_id).toBe(original.id);
+
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      const call = fetchMock.mock.calls[0];
+      if (!call) throw new Error('expected the deliverer to call fetch');
+      const [, calledInit] = call;
+      if (!calledInit) throw new Error('expected the deliverer to pass a RequestInit to fetch');
+      expect(extractHeader(calledInit.headers, 'Idempotency-Key')).toBe(original.idempotencyKey);
+
+      // The original DLQ row is still 'dead' — replay does not resurrect it,
+      // it only ever creates a new row.
+      const originalAfter = await pool.query<{ status: string; attempt_number: number }>(
+        `SELECT status, attempt_number FROM webhook_deliveries WHERE id = $1`,
+        [original.id]
+      );
+      const originalRow = onlyRow(originalAfter.rows);
+      expect(originalRow.status).toBe('dead');
+      expect(originalRow.attempt_number).toBe(6);
+    });
+
+    it('replaying a dead (DLQ) delivery that fails AGAIN with a 5xx goes straight back to dead — attempt_number continues past MAX_ATTEMPTS with no further retry scheduled (CodeRabbit, this PR review)', async () => {
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: { hello: 'dlq-replay-fails-again' },
+        attemptNumber: 6,
+        status: 'dead',
+        responseStatus: 503,
+        responseExcerpt: 'gave up after 6 attempts',
+        latencyMs: 99,
+      });
+
+      const fetchMock = fetchMockAlways(() => new Response('still down', { status: 503 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.attempt_number).toBe(7);
+      // A 5xx is normally retryable — but attempt_number (7) is already
+      // >= MAX_ATTEMPTS (6), so attempt()'s pre-existing exhaustion rule
+      // applies exactly as it would to a 6th automatic attempt: dead
+      // immediately, no retry sibling. Documented in this route's own file
+      // header and in attemptNow()'s doc comment (deliverer.ts).
+      expect(body.status).toBe('dead');
+      expect(body.response_status).toBe(503);
+      expect(body.replayed_from_id).toBe(original.id);
+
+      // No THIRD row was created — exactly the replay row above, nothing
+      // scheduled after it.
+      const allRowsForEvent = await pool.query<{ id: string; attempt_number: number; status: string }>(
+        `SELECT id, attempt_number, status FROM webhook_deliveries WHERE event_id = $1 ORDER BY attempt_number`,
+        [original.eventId]
+      );
+      expect(allRowsForEvent.rows.map((r) => ({ attempt_number: r.attempt_number, status: r.status }))).toEqual([
+        { attempt_number: 6, status: 'dead' },
+        { attempt_number: 7, status: 'dead' },
+      ]);
+    });
+
+    it('a retryable replay (attempt_number below MAX_ATTEMPTS) that fails again schedules a retry sibling that stays un-polled until a process restart — a real, documented, narrow limitation (TRO-603, CodeRabbit this PR review)', async () => {
+      // Below MAX_ATTEMPTS (6) — unlike the DLQ-exhaustion test above, this
+      // replay's failure IS retryable per attempt()'s own backoff rule, so a
+      // new 'pending' sibling row gets scheduled rather than going straight
+      // to 'dead'.
+      const original = await insertDelivery({
+        subscriptionId: replaySubscriptionId,
+        payload: { hello: 'retryable-replay-schedules-orphaned-sibling' },
+        attemptNumber: 2,
+        status: 'failed',
+        responseStatus: 503,
+        responseExcerpt: 'transient failure',
+        latencyMs: 88,
+      });
+
+      const fetchMock = fetchMockAlways(() => new Response('still down', { status: 503 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.attempt_number).toBe(3);
+      // Below MAX_ATTEMPTS: attempt() marks THIS replay row 'failed' (not
+      // 'dead') and schedules a retry sibling, per its normal backoff rule.
+      expect(body.status).toBe('failed');
+      expect(body.replayed_from_id).toBe(original.id);
+
+      // The sibling WAS created: a THIRD row, attempt_number 4, 'pending',
+      // due for retry.
+      const siblingResult = await pool.query<{
+        id: string;
+        attempt_number: number;
+        status: string;
+        next_attempt_at: Date | null;
+      }>(
+        `SELECT id, attempt_number, status, next_attempt_at FROM webhook_deliveries
+         WHERE event_id = $1 AND attempt_number = 4`,
+        [original.eventId]
+      );
+      expect(siblingResult.rows).toHaveLength(1);
+      const sibling = siblingResult.rows[0];
+      if (sibling === undefined) throw new Error('expected the sibling row to exist');
+      expect(sibling.status).toBe('pending');
+      expect(sibling.next_attempt_at).not.toBeNull();
+
+      // The documented limitation (TRO-603, not fixed by this ticket): that
+      // sibling is durable in Postgres, proven above — but it was queued
+      // only on the THROWAWAY `InMemoryWebhookDeliverer` this HTTP request's
+      // route handler constructed (webhooks.ts, `const deliverer = new
+      // InMemoryWebhookDeliverer(pool)`), which this test process discards
+      // the moment the request above resolves. This test suite never starts
+      // a production-shaped singleton's `processDue()` polling loop, exactly
+      // mirroring the real route's own behavior — the sibling staying
+      // 'pending' here is not a tautology, it is the same orphaning the real
+      // deployed route produces, reproduced under test rather than merely
+      // asserted in a comment. See TRO-603 for the fix (inject the app's
+      // real running deliverer instead of constructing a throwaway one).
+    });
+
+    it('if attemptNow() itself fails to execute (a non-deterministic decrypt failure), the route still returns 201 with the row\'s actual (pending) state — never an opaque 500 (CodeRabbit, this PR review)', async () => {
+      // A ciphertext that is the right LENGTH (so it is not the deterministic
+      // MalformedCiphertextError case) but whose final byte is flipped —
+      // decrypting it fails GCM auth-tag verification, which attempt() (per
+      // its own doc comment) treats as a non-deterministic, process-level
+      // failure and RETHROWS rather than dead-lettering. Same technique
+      // deliverer.test.ts's own "GCM auth-tag mismatch ... treated as
+      // TRANSIENT" case uses, duplicated here per this file's own small
+      // per-file test-helper convention.
+      function corruptedButCorrectlySizedCiphertext(secret: string): string {
+        const valid = Buffer.from(encryptSecret(secret), 'base64');
+        const tampered = Buffer.from(valid);
+        const lastIndex = tampered.length - 1;
+        const lastByte = tampered[lastIndex] ?? 0;
+        tampered[lastIndex] = lastByte ^ 0xff;
+        return tampered.toString('base64');
+      }
+
+      const brokenSubscription = await pool.query<{ id: string }>(
+        `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+         VALUES ($1, $2, $3, $4, true) RETURNING id`,
+        [appId, 'document.created', 'https://example.com/replay-broken-hook', corruptedButCorrectlySizedCiphertext('whsec_test')]
+      );
+      const brokenSubscriptionId = onlyRow(brokenSubscription.rows).id;
+
+      const original = await insertDelivery({
+        subscriptionId: brokenSubscriptionId,
+        payload: { hello: 'broken-secret-replay' },
+        attemptNumber: 1,
+        status: 'success',
+        responseStatus: 200,
+      });
+
+      // fetch must never be reached — decrypt fails before any HTTP call.
+      const fetchMock = fetchMockAlways(() => new Response('unreachable', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+
+      // Not a 500 — the new row was genuinely created, so the response
+      // reflects its real (pending) state rather than an opaque failure.
+      expect(res.status).toBe(201);
+      const body = res.body as DeliveryBody;
+      expect(body.id).not.toBe(original.id);
+      expect(body.replayed_from_id).toBe(original.id);
+      expect(body.idempotency_key).toBe(original.idempotencyKey);
+      expect(body.status).toBe('pending');
+      expect(body.response_status).toBeNull();
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Confirmed durable, not just reflected in this one response — a
+      // fresh SELECT shows the same 'pending' state.
+      const persisted = await pool.query<{ status: string }>(
+        `SELECT status FROM webhook_deliveries WHERE id = $1`,
+        [body.id]
+      );
+      expect(onlyRow(persisted.rows).status).toBe('pending');
     });
   });
 });
