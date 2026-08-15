@@ -31,11 +31,15 @@ export class IssuesClient {
    * `GET /api/v1/issues` — one page. `state`/`priority`/`assignee_id` are
    * already lifted to top-level typed fields by the server (no raw
    * `properties` blob on this response, unlike `documents`/`sprints`).
+   *
+   * `assignee_id` (PF-702, TRO-428) — forwarded as a query filter now; see
+   * `ListIssuesParams`'s own doc comment for the gap this closes.
    */
   async list(params: ListIssuesParams = {}): Promise<IssueList> {
     return this.request.get<IssueList>(BASE_PATH, {
       limit: params.limit,
       cursor: params.cursor,
+      assignee_id: params.assignee_id,
     });
   }
 

@@ -21,6 +21,176 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-428 (PF-702) — Agent reads via SDK behind `AGENT_PLATFORM_MODE` flag, and two real SDK gaps it uncovered
+
+**CodeRabbit triage (local CLI, 6 findings, PR #238).** Fixed 5, dismissed 1:
+- **major** (`agent/src/index.ts`) — the shared `ShipClient`'s `token: config.shipApiToken as string`
+  lied to the type system (pre-existing line, unchanged by this ticket until now). Fixed to
+  `?? ''`: behaviorally identical in every currently-reachable path (`isConfigComplete()` already
+  guarantees `shipApiToken` truthy whenever this code runs, in either mode) but no longer asserts
+  something the type system can't verify. The fuller fix CodeRabbit suggested — widen
+  `ShipClientOptions.token` to `string | undefined` and push the requirement into `internal`-mode's
+  own code paths — changes the constructor's public contract used by every existing `ShipClient`
+  call site including several tests; deferred to PF-704, which already owns this rough edge (see
+  below).
+- **minor** (`agent/src/shipClient.ts`, `getCommentsViaSdk`) — a comment whose author user was
+  deleted was mapped to a fabricated `'(unknown)'` author to satisfy `CommentEntry`'s non-null
+  `author` field. Correctly identified as a WORSE parity mismatch than dropping the row: the
+  internal route INNER JOINs and simply never returns such a comment. Fixed to filter it out
+  instead, matching internal mode's actual behavior rather than inventing a value it would never
+  produce.
+- **minor** (`agent/src/__tests__/shipClientParity.liveServer.test.ts`, `getIssuesByAssignee` case)
+  — the hardcoded expected literal included `updated_at: viaSdk[0]?.updated_at`, comparing a value
+  to itself (tautological). Fixed: the real proof for `updated_at` parity is the existing
+  cross-mode `pickIssue(viaSdk)).toEqual(pickIssue(viaInternal))` line above it; the hardcoded-value
+  check now covers only `id`/`title`/`state`.
+- **trivial** (`agent/src/shipClient.ts`, `getDocumentViaSdk`) — an unnecessary
+  `as ShipDocument['properties']` cast. Removed: `doc.properties` (`Record<string, unknown>`) is
+  already structurally compatible with `ShipDocument['properties']`'s own `[key: string]: unknown`
+  index signature.
+- **trivial** (`agent/src/shipClient.ts`, `collectAllPages`) — a result truncated at the
+  `maxPages` bound was silently indistinguishable from a genuinely complete collection. Fixed: logs
+  a `console.warn` when the bound is hit with a `next_cursor` still set.
+- **minor, dismissed** (`sdk/src/client.clientCredentials.test.ts`) — a fixed 15ms `setTimeout` in
+  the single-flight concurrency test, suggested to become a real request barrier. Dismissed: this
+  is the identical, already-merged technique `client.refresh.test.ts`'s own concurrency test uses
+  for the identical proof requirement (same comment, same reasoning) — fixing it in only the newer
+  file while the older one keeps the pattern would be inconsistent, not an improvement. A real fix
+  belongs to both files at once, as its own follow-up, not a drive-by in this ticket.
+
+**What was added.** `agent/src/shipClient.ts`'s `ShipClient` class gains an optional `sdk` field
+(a `@ship/sdk` `ShipClient` instance). Each of its 10 read methods (`getChangeFeed`, `getDocument`,
+`getPeople`, `getAssociations`, `getReverseAssociations`, `getBacklinks`, `getComments`,
+`getIssuesByAssignee`, `listDocuments`, `getWeekDates`) is now a public dispatcher plus a
+`ViaInternal`/`ViaSdk` private pair kept adjacent for diffing — `internal` mode (default, unchanged)
+calls `/api/*` exactly as before; `sdk` mode delegates through `@ship/sdk`'s typed `/api/v1/*`
+resource clients instead. `AGENT_PLATFORM_MODE=internal|sdk` (new, `agent/src/config.ts`, default
+`internal`) selects the mode; this ticket does **not** flip the default — that is PF-704's job once
+the full flag-matrix/audit proof lands. `agent/package.json` gains `"@ship/sdk": "workspace:*"` —
+explicitly allowed (agent is a platform client, integrations-equivalent status per PLUGFORGE.MD
+§1.3), documented in `api/src/platform/README.md`'s boundary-rules section next to PF-003's
+`platform/api/v1/**` import ban, and already anticipated by `scripts/check-integration-deps.mjs`'s
+own header comment (that script deliberately does not scan `agent/`).
+
+**Two real, verified gaps found while wiring this — not silently papered over (CLAUDE.md's claim-
+provenance rule):**
+
+1. **The architect notes assumed PF-404 already built a Client Credentials flow for the SDK. It had
+   not.** Grepped before writing any code: PF-404 built exactly `deviceLogin` (RFC 8628) and
+   `authorizationCodeFlow` (PKCE) — both public-client, user-present flows — plus refresh-on-401 via
+   `grant_type=refresh_token`. Nothing implemented `grant_type=client_credentials` anywhere under
+   `sdk/src/`, even though the SERVER has supported it since PF-104/PF-701 (`api/src/platform/oauth/
+   token.ts`'s `issueClientCredentialsToken`, §1.4.4). Added `sdk/src/clientCredentials.ts`
+   (`runClientCredentialsFlow`) and `ShipClient.clientCredentials()` (static method, same pattern as
+   `deviceLogin`/`authorizationCodeFlow`). Client Credentials issues no refresh token (verified in
+   `token.ts` directly), so re-auth-on-401 needed a new mechanism: `RequestClient.setReauthenticator()`
+   (`sdk/src/internal/requestClient.ts`) — a caller-supplied async callback, tried on a 401 when
+   `isRefreshable()` is false, single-flight via the same memoized-promise shape `refreshOnce()`
+   already uses. `ShipClient.clientCredentials()` wires this to re-run the original client_credentials
+   request with the same stored `clientId`/`clientSecret`/`scope`.
+2. **`IssuesClient.list()` never forwarded `assignee_id`, even though the server has accepted that
+   filter since PF-205.** The agent's `getIssuesByAssignee()` needs exactly this filter to work in
+   `sdk` mode. Added `assignee_id?: string` to `ListIssuesParams` (`sdk/src/types.ts`) and forwarded
+   it in `IssuesClient.list()` (`sdk/src/resources/issues.ts`).
+
+**A third, structural gap — documented and deliberately NOT fixed in this ticket:**
+`GET /api/v1/documents/:id`'s own doc comment states it plainly — "Deliberately narrower than the
+full internal `documents` row (no `content`, `yjs_state`, `visibility`, etc.)". `content` and
+`completed_at` are absent from the v1 response entirely; `visibility`/`created_by` are absent too,
+which matters because `agent/src/visibility.ts`'s `isDocumentVisibleTo` (the "never surface a
+document the recipient can't see" security check) requires real values for both.
+`getDocumentViaSdk` synthesizes `content: null`, and `visibility`/`created_by` values that make
+`isDocumentVisibleTo` **fail closed** (never treated as visible) rather than fabricating
+`'workspace'`/a matching `created_by`, which would silently widen who a private document gets
+surfaced to — the same "wrong direction to be wrong in" posture that file's own docstring already
+states for its missing-admin-check case. This is a real, functional limitation of `sdk` mode's
+`getDocument()` today (mention-extraction and retro-completion-date logic that reads
+`content`/`completed_at` would silently see nothing), acceptable only because the default stays
+`internal` and `sdk` mode is opt-in/testing-only until PF-704. **Recommend a follow-up ticket**
+before PF-704 makes `sdk` mode graduation-ready: either widen `GET /api/v1/documents/:id`'s response
+(a product/security decision about what the public API should ever expose, not this ticket's call to
+make unilaterally) or scope PF-704's flag matrix to exclude `getDocument` from `sdk` mode.
+
+**Also found and fixed: `agent/`'s new `@ship/sdk` dependency broke the build-order assumption two
+CI paths and the factory gate never had to make before.** `sdk/package.json`'s `exports` point at
+`./dist/index.d.ts`/`./dist/index.js` — those don't exist until `sdk` is built. `.github/workflows/
+ci.yml`'s `verify` job already built `sdk` before `type-check` (added for TRO-449/PF-802's
+browser-demo, the first `@ship/sdk` consumer), but `.gitlab-ci.yml`'s equivalent step never did, its
+own separate `e2e-agent` job's `pnpm --filter @ship/agent build` step never did, `ci.yml`'s own
+separate `e2e-agent` job never did, and `scripts/factory/gate.sh`'s G1 (`pnpm type-check`) never did
+either. Fixed all four: `.gitlab-ci.yml` (two spots), `ci.yml`'s `e2e-agent` job, and `gate.sh` (added
+`pnpm build:shared && pnpm build:sdk` immediately before G1, mirroring `ci.yml`'s already-fixed
+`verify` job).
+
+**Also found and fixed: two agent test files racing over unscoped shared DB state.** The new
+`shipClientParity.liveServer.test.ts` (below) does real inserts against the shared worktree
+Postgres database in `beforeAll`; the pre-existing `gateWriteBoundary.dbRoundTrip.test.ts` asserts a
+GLOBAL, workspace-unscoped `SELECT COUNT(*) FROM documents` is unchanged across its own
+before/after window. `agent/vitest.config.ts` had no `fileParallelism: false` (unlike
+`api/vitest.config.ts`, set for the identical class of hazard), so vitest's default file
+parallelism let the two race — observed directly: `documentsCount: 8` expected vs `2` received, a
+flake caused by the new file's seed running inside the old file's snapshot window, not a real
+regression. Fixed by adding `fileParallelism: false` to `agent/vitest.config.ts`, mirroring `api`'s
+existing config for the same reason.
+
+**The AC's required proof — a behavior-parity test per read method.** New file:
+`agent/src/__tests__/shipClientParity.liveServer.test.ts` — a REAL `createApp()` (both `/api/*` and
+`/api/v1/*` mounted on the same app) plus the REAL seeded worktree Postgres, ONE seeded `api_tokens`
+row (internal routes accept a Bearer API token via `authMiddleware`; v1 routes accept the same
+table's rows via `bearerAuth` + `requireScope` — verified, not assumed) authenticating BOTH an
+`internal`-mode `ShipClient` (a real `ResilientClient`, real fetch, not mocked) and an `sdk`-mode one
+against the same fixtures. 10 tests, one per read method:
+
+| Method | Parity asserted |
+|---|---|
+| `getDocument` | id/document_type/title/properties identical; content/visibility/created_by divergence asserted explicitly (see gap #3 above) |
+| `getPeople` | identical, field-renamed camelCase |
+| `getAssociations` | identical, with and without a `type` filter |
+| `getReverseAssociations` | identical, with a `type` filter |
+| `getBacklinks` | identical, including `display_id` |
+| `getComments` | identical, order-independent |
+| `getIssuesByAssignee` | identical (gap #2's fix, proven against a real server) |
+| `listDocuments` | identical |
+| `getWeekDates` | identical calendar date (internal returns a full ISO datetime, v1 a bare `YYYY-MM-DD`; the only real consumer, `retroDraft.ts`'s `computeWeekWindow`, already slices to the first 10 chars — a disclosed, functionally-inert format difference, asserted as such rather than ignored) |
+| `getChangeFeed` | identical documents/history/comments entries, reassembled from v1's single tagged `data[]` array back into the internal three-array shape |
+
+Several comparisons project both sides onto the fields the agent's own narrow types declare, rather
+than raw wire payloads: `internal` mode's `getJson<T>()` does an unchecked `as T` cast, and several
+internal routes (`associations.ts`, `issues.ts`, `documents.ts`, `weeks.ts`) `res.json(result.rows)`
+the full raw SQL row — wider than the agent's own interfaces even in `internal` mode today, verified
+by running the test before narrowing the assertions (it failed with the extra fields visible). This
+is documented in the test file itself, not silently narrowed.
+
+**How to verify.**
+
+```bash
+# PostgreSQL running, this worktree's DATABASE_URL migrated (source .factory-env)
+pnpm build:shared && pnpm build:sdk   # sdk/dist must exist before agent's type-check/tests
+pnpm type-check                        # clean across all 6 packages
+pnpm --filter @ship/sdk test           # 208/208, incl. the two new gap-fix test files
+pnpm --filter @ship/agent test         # 524/524 — internal mode (default)
+AGENT_PLATFORM_MODE=sdk pnpm --filter @ship/agent test   # 524/524 — sdk mode (AC's "both modes")
+scripts/factory/gate.sh
+```
+
+**Not built in this ticket, deliberately (scope boundary, PRD verbatim):** flipping the default mode
+(PF-704); any new agent-facing write route (PF-703); widening `/api/v1/documents/:id`'s response
+shape (flagged as a follow-up above, not this ticket's call).
+
+**Rollback.** Revert this ticket's commit(s) on `fix/pf-702-agent-sdk-mode-flag`. `AGENT_PLATFORM_MODE`
+defaults to `internal` and nothing else in this repo sets it to `sdk`, so a revert is behaviorally
+inert for every existing deployment — the only observable change disappears with it. Scope: `agent/
+src/shipClient.ts`, `agent/src/config.ts`, `agent/src/index.ts`, `agent/package.json`,
+`agent/vitest.config.ts`, `agent/src/__tests__/shipClientParity.liveServer.test.ts`,
+`sdk/src/clientCredentials.ts` (new), `sdk/src/client.ts`, `sdk/src/client.clientCredentials.test.ts`
+(new), `sdk/src/clientCredentials.test.ts` (new), `sdk/src/__tests__/
+client.clientCredentials.liveServer.test.ts` (new), `sdk/src/internal/requestClient.ts`,
+`sdk/src/types.ts`, `sdk/src/resources/issues.ts`, `sdk/src/resources/__tests__/
+issuesAssigneeFilter.test.ts` (new), `sdk/src/index.ts`, `api/src/platform/README.md`,
+`scripts/factory/gate.sh`, `.gitlab-ci.yml`, `.github/workflows/ci.yml`.
+
+---
+
 ## TRO-447 — PF-801: Idempotency-Key drill (deliver → replay → dedupe, end to end)
 
 **Investigate-tier, proof/docs only — no migration.** TRO-442/PF-305 (delivery log) and
