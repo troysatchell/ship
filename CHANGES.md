@@ -21,6 +21,107 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-605 — Widen GET /api/v1/documents(/:id): content/visibility/created_by/completed_at
+
+**Root cause / gap, not a bug.** `api/src/platform/api/v1/resources/documents.ts`'s `DocumentRow`/
+`serializeDocument()` deliberately excluded `content`, `visibility`, `created_by`, `completed_at` from
+the public v1 response — a documented decision when PF-200 was built. PF-701–704's later agent-as-
+platform-citizen work assumed sdk-mode `getDocument()` (`agent/src/shipClient.ts`) would have real
+content/visibility to work with; it didn't, so sdk-mode agent reads degraded silently (content
+absent, not just visibility failing closed) compared to internal mode — verified directly in PF-702's
+own build (`getDocumentViaSdk`'s `content: null, visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN,
+created_by: null, completed_at: undefined` synthesis, still present after this ticket — see below).
+PM decision (2026-08-15, TRO-605's Linear description): widen the public API rather than scope
+around the gap, since it blocks TRO-440/PF-704 (Epic 7's submission evidence) from an honest sdk-mode
+parity claim.
+
+**What changed.**
+- `api/src/platform/api/v1/resources/documents.ts`: `DocumentRow` and `serializeDocument()` widened to
+  include `content` (JSONB TipTap content — confirmed plain/JSON-serializable via `schema.sql:113`,
+  NOT the Yjs binary blob), `visibility` (`schema.sql:158`'s `'private' | 'workspace'` text enum),
+  `created_by`, and `completed_at` (`schema.sql:140`, ISO string or `null`). Both `GET /` and
+  `GET /:id`'s SQL `SELECT`s widened to fetch the four columns. `yjs_state` stays excluded — genuinely
+  internal collaboration-protocol binary state, not part of this widening (explicitly out of scope
+  per the ticket).
+- `api/src/platform/openapi/schemas/documents.ts`: `DocumentResponseSchema` gained the four fields
+  (`visibility` as a real `z.enum(['private','workspace'])`, `created_by` as nullable uuid,
+  `completed_at` as nullable datetime, `content` as `z.unknown()` matching `properties`'s own
+  per-key typing). `docs/openapi.json` regenerated via `pnpm openapi:generate:v1` — 30-line diff,
+  purely additive to the `Document` schema.
+- `sdk/src/types.ts`: `Document` interface gained the same four fields, typed narrowly
+  (`visibility: 'private' | 'workspace'`, `created_by`/`completed_at`: `string | null`,
+  `content: unknown`). `sdk/src/resources/__tests__/iterate.test.ts`'s `doc()` fixture updated to
+  satisfy the widened type (arbitrary values — that suite only asserts on pagination request counts).
+
+**Not touched, deliberately — `agent/src/shipClient.ts`'s `getDocumentViaSdk`.** It still synthesizes
+`content: null` / `visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN` / `created_by: null` /
+`completed_at: undefined` regardless of what `sdk.documents.get()` now actually returns — it never
+reads those fields off the SDK response at all. The v1 API and the SDK type now genuinely carry real
+values; `shipClient.ts` simply doesn't use them yet. The ticket's own brief explicitly steered toward
+NOT touching `agent/` here ("lean toward NOT touching agent/ code... that's PF-704's job to wire up
+the parity claim"), so this is disclosed rather than fixed. Confirmed via
+`agent/src/__tests__/shipClientParity.liveServer.test.ts`'s existing `getDocument()` case, which
+still passes unchanged — it asserts the OLD documented divergence (`viaSdk.content === null`, etc.),
+and that assertion is still literally true after this ticket, because `shipClient.ts` hasn't changed.
+**Follow-up needed on TRO-440/PF-704**: update `getDocumentViaSdk` to read the real
+`content`/`visibility`/`created_by`/`completed_at` off `sdk.documents.get()`'s response instead of
+synthesizing, then flip this parity test's assertions from "documented divergence" to "parity" —
+otherwise PF-704's flag-matrix evidence would still be asserting a gap that no longer needs to exist.
+
+**Claim-provenance note — the ticket's own premise, checked before writing the test.** The ticket text
+says a private-visibility regression test should confirm "visibility gating should still work exactly
+as before." Read `resources/documents.ts` and `resources/people.ts`'s own header comment before
+writing that test: **this route has never applied any visibility-based filtering** — `GET /` and
+`GET /:id` both scope only by `workspace_id` (+ `deleted_at IS NULL`), full stop. `people.ts`'s header
+already discloses this explicitly as "a pre-existing gap inherited from the pattern, not something
+new introduced here." So "unchanged visibility behavior" here means literally unchanged — a private
+document belonging to another workspace member was already fully readable (title/properties/etc.)
+through this endpoint before this ticket, and still is; this ticket only adds `content`/`visibility`
+itself to what was already returned. The regression test proves the new fields round-trip correctly
+for a private document, and does not assert a 403/404 that the code has never produced.
+
+**Regression test — red before green, confirmed by temporary revert (not memory).**
+`api/src/platform/api/v1/resources/__tests__/documents.test.ts`'s new `describe('TRO-605: ...')` block
+(5 cases: full round-trip on `GET /:id`, `completed_at: null` for an uncompleted doc, `GET /` list
+carries the same fields, `yjs_state` still never leaks, and the private-visibility case above).
+Verified red for the right reason: `git checkout HEAD -- api/src/platform/api/v1/resources/
+documents.ts` (reverting only the route file, pre-fix) then `cd api && npx vitest run
+src/platform/api/v1/resources/__tests__/documents.test.ts -t TRO-605` — 4 of 5 failed with
+`AssertionError: expected undefined to deeply equal {...}` / `expected {...} to have property
+'completed_at'` (the 5th, "never exposes yjs_state", correctly passed both before and after — it was
+never broken, since `yjs_state` was excluded before this ticket too and still is). Restored the fix,
+re-ran the full file: 21/21 pass.
+
+**Other verification run.** `pnpm type-check` (all 8 workspace packages, after `pnpm --filter
+@ship/sdk build` — a fresh worktree has no `sdk/dist` yet, which `integrations/browser-demo` resolves
+against; unrelated to this diff, just an environment step). `api/src/platform/api/v1/__tests__/
+route-fitness.test.ts` (116 tests, PF-203) and `api/src/scripts/generate-v1-openapi.test.ts` (7 tests,
+PF-204's drift check) both green against the regenerated `docs/openapi.json`. `sdk/src/__tests__/
+parity.test.ts` (53 tests, PF-405) and `webhookResponseShape.test.ts` (5 tests, unrelated resource,
+confirms nothing else drifted) both green.
+`agent/src/__tests__/shipClientParity.liveServer.test.ts` (10 tests, PF-702's own proof) green,
+including the `getDocument()` case discussed above.
+
+**Not verified.** Whether `content: z.unknown()` should be marked `.required()` in the generated
+OpenAPI schema — observed that `docs/openapi.json`'s `Document.required` array includes `visibility`/
+`created_by`/`completed_at` but not `content`, because `@asteasolutions/zod-to-openapi` does not treat
+a bare `z.unknown()` as required (zod's own `ZodUnknown` accepts `undefined`). The real server
+response always includes the `content` key regardless — this is a schema-documentation looseness, not
+a functional gap, and matches how `properties`' own per-key values are typed (`z.record(z.unknown())`)
+elsewhere in this file.
+
+**How to run it.** `source .factory-env && cd api && npx vitest run
+src/platform/api/v1/resources/__tests__/documents.test.ts`. Full gate: `scripts/factory/gate.sh`.
+
+**Roll back.** Revert this ticket's commit(s): `api/src/platform/api/v1/resources/documents.ts`,
+`api/src/platform/openapi/schemas/documents.ts`, `docs/openapi.json`, `sdk/src/types.ts`,
+`sdk/src/resources/__tests__/iterate.test.ts`, and the new `TRO-605` test block in
+`api/src/platform/api/v1/resources/__tests__/documents.test.ts`. No migration (no schema change —
+these columns already existed), no server-side behavior change beyond the response shape widening, so
+a plain revert is safe and fully restores the prior (narrower) public response.
+
+---
+
 ## TRO-599 — SDK response types drift from real server shapes: WebhookSubscription + WebhookDelivery
 
 **Root cause.** `sdk/src/resources/webhooks.ts`'s `WebhookSubscription`/`WebhookDelivery` interfaces were
