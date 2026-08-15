@@ -31,6 +31,10 @@ interface DocumentBody {
   title: string;
   document_type: string;
   properties?: Record<string, unknown>;
+  content?: unknown;
+  visibility?: string;
+  created_by?: string | null;
+  completed_at?: string | null;
   created_at?: string;
   updated_at?: string;
 }
@@ -503,6 +507,187 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.code).toBe('not_found');
+    });
+  });
+
+  // TRO-605 — widen GET /:id and GET / to include content/visibility/
+  // created_by/completed_at, which `serializeDocument()` previously dropped
+  // entirely (PF-702's sdk-mode agent reads were degrading silently as a
+  // result — see TRO-605's Linear description). These fields did not exist
+  // on the response body at all before this change, so every `.toEqual`/
+  // `.toBe` assertion below against a real, non-default value would have
+  // failed on the unfixed code with `undefined` on the left-hand side — a
+  // genuine assertion failure, confirmed red before the fix (see this
+  // ticket's PR description for the exact command and output).
+  describe('TRO-605: content/visibility/created_by/completed_at round-trip', () => {
+    /** Inserts a document with every TRO-605 field set to an explicit,
+     *  non-default value, so a test asserting on it can't pass by accident
+     *  against a column default (e.g. visibility's own DEFAULT 'workspace',
+     *  or completed_at's implicit NULL). */
+    async function insertFullyPopulatedDocument(params: {
+      title: string;
+      createdAt: Date;
+      content: Record<string, unknown>;
+      visibility: 'private' | 'workspace';
+      createdBy: string;
+      completedAt: Date;
+    }): Promise<string> {
+      const result = await pool.query<{ id: string }>(
+        `INSERT INTO documents
+           (workspace_id, title, document_type, content, visibility, created_by, completed_at, created_at, updated_at)
+         VALUES ($1, $2, 'issue', $3, $4, $5, $6, $7, $7)
+         RETURNING id`,
+        [
+          workspaceId,
+          params.title,
+          JSON.stringify(params.content),
+          params.visibility,
+          params.createdBy,
+          params.completedAt,
+          params.createdAt,
+        ]
+      );
+      const row = result.rows[0];
+      if (!row) throw new Error('seed insertFullyPopulatedDocument produced no row');
+      return row.id;
+    }
+
+    it('GET /:id returns the real content/visibility/created_by/completed_at values, not defaults', async () => {
+      const content = {
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text: 'TRO-605 round-trip body' }] }],
+      };
+      const completedAt = new Date(BASE_MS + 60_000);
+      const docId = await insertFullyPopulatedDocument({
+        title: 'TRO-605 widened doc',
+        createdAt: new Date(BASE_MS + 59_000),
+        content,
+        visibility: 'workspace',
+        createdBy: userId,
+        completedAt,
+      });
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as DocumentBody;
+      expect(body.content).toEqual(content);
+      expect(body.visibility).toBe('workspace');
+      expect(body.created_by).toBe(userId);
+      expect(body.completed_at).toBe(completedAt.toISOString());
+    });
+
+    it('a document that was never completed returns completed_at: null (not omitted, not a default)', async () => {
+      const anchorId = await insertDocument('TRO-605 never completed', new Date(BASE_MS + 61_000));
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${anchorId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as DocumentBody;
+      expect(body).toHaveProperty('completed_at');
+      expect(body.completed_at).toBeNull();
+      // The column default applies here (schema.sql:158) — this document's
+      // visibility was never set explicitly, distinguishing "field is wired
+      // up" from "field happens to equal the value this test hardcodes".
+      expect(body.visibility).toBe('workspace');
+      expect(body.created_by).toBeNull();
+    });
+
+    it('GET / (list) carries the same widened fields on every row, not just GET /:id', async () => {
+      const content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'list row' }] }] };
+      const docId = await insertFullyPopulatedDocument({
+        title: 'TRO-605 list row',
+        createdAt: new Date(BASE_MS + 62_000),
+        content,
+        visibility: 'workspace',
+        createdBy: userId,
+        completedAt: new Date(BASE_MS + 62_500),
+      });
+
+      const res = await request(app)
+        .get(`/api/v1/documents?type=issue`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      const body = res.body as ListResponseBody;
+      const row = body.data.find((d) => d.id === docId);
+      expect(row, 'seeded row not found on the list response').toBeDefined();
+      expect(row?.content).toEqual(content);
+      expect(row?.visibility).toBe('workspace');
+      expect(row?.created_by).toBe(userId);
+      expect(typeof row?.completed_at).toBe('string');
+    });
+
+    it('never exposes yjs_state, even though the underlying row has one set', async () => {
+      const docId = await insertDocument('TRO-605 has yjs state', new Date(BASE_MS + 63_000));
+      await pool.query('UPDATE documents SET yjs_state = $1 WHERE id = $2', [
+        Buffer.from([1, 2, 3]),
+        docId,
+      ]);
+
+      const res = await request(app)
+        .get(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body).not.toHaveProperty('yjs_state');
+    });
+
+    // Claim-provenance note (CLAUDE.md): this route has never applied any
+    // visibility-based access filtering — GET / and GET /:id both scope
+    // ONLY by workspace_id (+ deleted_at IS NULL), confirmed by reading the
+    // handler directly; `resources/people.ts`'s own header documents this as
+    // "a pre-existing gap inherited from the pattern, not something new
+    // introduced here". Widening the response to include `content`/
+    // `visibility` does not change that — a private document belonging to
+    // another user was already fully readable (title/properties/etc.)
+    // through this endpoint before this ticket, and still is. This test
+    // proves the new fields round-trip correctly for a private document; it
+    // deliberately does NOT assert a 403/404, because that behavior does not
+    // exist on this route today and asserting it would be testing a
+    // hypothesis, not the code.
+    describe("visibility: 'private' — new fields round-trip correctly; this ticket does not change (and this test does not assert) any access-filtering behavior, because none exists on this route", () => {
+      it("a private document created by a DIFFERENT user in the same workspace still round-trips content/visibility/created_by (unchanged pre-existing behavior + the new fields)", async () => {
+        const otherUserResult = await pool.query<{ id: string }>(
+          `INSERT INTO users (email, password_hash, name, last_workspace_id)
+           VALUES ($1, 'test-hash', 'TRO-605 Other User', $2) RETURNING id`,
+          [`tro605-other-${testRunId}@ship.local`, workspaceId]
+        );
+        const otherUserId = otherUserResult.rows[0]?.id;
+        if (!otherUserId) throw new Error('seed other-user insert produced no row');
+
+        const content = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'private body' }] }] };
+        const docId = await insertFullyPopulatedDocument({
+          title: 'TRO-605 private doc',
+          createdAt: new Date(BASE_MS + 64_000),
+          content,
+          visibility: 'private',
+          createdBy: otherUserId,
+          completedAt: new Date(BASE_MS + 64_500),
+        });
+
+        // readOnlyToken belongs to `userId`, NOT `otherUserId` — a different
+        // principal than the document's creator.
+        const res = await request(app)
+          .get(`/api/v1/documents/${docId}`)
+          .set('Authorization', `Bearer ${readOnlyToken}`);
+
+        expect(
+          res.status,
+          'this route has never filtered by visibility (documented pre-existing gap) — a private ' +
+            'document from another user in the same workspace was, and still is, returned as 200'
+        ).toBe(200);
+        const body = res.body as DocumentBody;
+        expect(body.visibility).toBe('private');
+        expect(body.created_by).toBe(otherUserId);
+        expect(body.content).toEqual(content);
+
+        await pool.query('DELETE FROM users WHERE id = $1', [otherUserId]);
+      });
     });
   });
 });
