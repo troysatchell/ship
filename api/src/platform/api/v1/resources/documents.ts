@@ -110,6 +110,71 @@ async function assertDocumentExists(id: string, workspaceId: string, requestId: 
 }
 
 /**
+ * TRO-611 — the write-path sibling of `assertDocumentExists` above. That
+ * function (still used, unchanged, by `PATCH /:id` until this ticket, and by
+ * the four read-only sub-resource routes below) checks only
+ * `id`/`workspace_id`/`deleted_at IS NULL` — no `visibility`/`created_by`
+ * check at all. For a *read*, this file's own module docs already disclose
+ * that gap as pre-existing and out of scope (`serializeDocument`'s header,
+ * `resources/people.ts`'s header) — a private document's metadata has always
+ * been readable workspace-wide here, deliberately left unfixed rather than
+ * retrofitting full ACL onto every route as a side effect of an unrelated
+ * ticket. A *write* is a different severity: it lets a caller who cannot
+ * even see a private document's content silently overwrite it, which is
+ * this ticket's actual finding — so only the write path (`PATCH /:id`)
+ * gets a stricter check, not the four read-only sub-resource routes, which
+ * stay on `assertDocumentExists` and keep their disclosed, unfixed gap
+ * exactly as before (out of scope here — see this ticket's Linear
+ * description for why that's a deliberate boundary, not an oversight).
+ *
+ * Mirrors the internal API's own already-correct pattern
+ * (`api/src/routes/documents.ts`: `visibility = 'workspace' OR created_by =
+ * $2 OR $3 = TRUE`) MINUS the workspace-admin bypass (`$3 = TRUE` there):
+ * `Principal` (`platform/oauth/principal.ts`) is `{ app, user, scopes }`
+ * only — no workspace-role/admin concept an internal session has via
+ * `isWorkspaceAdmin()`. Disclosed simplification: omit the bypass rather
+ * than invent an admin concept this identity type doesn't carry, i.e. fail
+ * toward MORE restrictive, not less. A future ticket can add one if a public
+ * "admin override" surface is ever specified.
+ *
+ * `created_by = $3` with `viewerUserId` possibly SQL NULL (an app-only,
+ * Client Credentials token — `principal.user` is null, `principal.ts`'s own
+ * doc comment) relies on ordinary SQL three-valued logic: `x = NULL`
+ * evaluates to NULL, which `WHERE` treats as not-true either way, so an
+ * ownerless private document (`created_by IS NULL`) is never matched by a
+ * null viewer — the same fail-closed pairing `serializeDocument`'s own
+ * `viewerUserId !== null &&` guard enforces explicitly for the read path.
+ *
+ * 404s (not 403) on "exists but caller may not write it" — this file has no
+ * existing 403 for an `:id` route's "exists but inaccessible" case anywhere
+ * (`assertDocumentExists`'s own doc comment: "matching GET /:id's existing
+ * 'malformed or missing id both 404' convention", PF-200 test design AC-4).
+ * Treating "exists, not writable by you" the same as "does not exist" keeps
+ * that convention consistent across all three cases, and also avoids
+ * confirming a private document's existence to a caller who can't act on
+ * it.
+ */
+async function assertDocumentWritable(
+  id: string,
+  workspaceId: string,
+  viewerUserId: string | null,
+  requestId: string
+): Promise<void> {
+  if (!UUID_RE.test(id)) {
+    throw notFoundError(requestId);
+  }
+  const result = await pool.query<{ id: string }>(
+    `SELECT id FROM documents
+     WHERE id = $1 AND workspace_id = $2 AND deleted_at IS NULL
+       AND (visibility = 'workspace' OR created_by = $3)`,
+    [id, workspaceId, viewerUserId]
+  );
+  if (!result.rows[0]) {
+    throw notFoundError(requestId);
+  }
+}
+
+/**
  * Same defensive fallback pattern as `errorMiddleware.ts`'s own
  * `requestIdOf` (not exported from there — this is a two-line duplicate
  * rather than reaching across a module boundary for it): every request
@@ -476,10 +541,13 @@ documentsRouter.patch(
     }
 
     const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
-    // 404s on a malformed/nonexistent id or wrong workspace before the
-    // UPDATE runs — matches every other :id route in this file's "malformed
-    // or missing id both 404" convention (PF-200 test design AC-4).
-    await assertDocumentExists(id, workspaceId, requestId);
+    // TRO-611: 404s on a malformed/nonexistent id, wrong workspace, OR a
+    // document this caller may not write (private, and not theirs) before
+    // the UPDATE runs — see assertDocumentWritable's own doc comment above
+    // for why this is a stricter, write-path-only sibling of
+    // assertDocumentExists (still used, unchanged, by the read-only
+    // sub-resource routes below).
+    await assertDocumentWritable(id, workspaceId, principal.user?.id ?? null, requestId);
 
     const updated = await updateDocument({
       id,
