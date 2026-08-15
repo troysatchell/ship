@@ -43,6 +43,14 @@ exercise "does the real multi-stage Docker build succeed," the same accepted-exc
 this project's terraform tickets (e.g. PF-900). The real `docker build` run above is the actual
 proof, disclosed rather than silently claimed.
 
+**How to run it.**
+```bash
+docker build --target build -t ship-build-verify .
+docker run --rm ship-build-verify sh -c "find /app/api/src -name '__tests__' -o -name '*.test.ts'"
+# expect: build succeeds, find output is empty
+docker rmi ship-build-verify
+```
+
 **Rollback.** Revert this commit (one file, `.dockerignore`). Test files would again reach the
 Docker build context — safe to revert only once `webhooks.test.ts`'s cross-boundary import is
 independently fixed (TRO-604's original three suggested options for that import specifically are
