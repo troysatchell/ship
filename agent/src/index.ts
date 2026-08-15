@@ -269,7 +269,30 @@ if (!isConfigComplete(config)) {
   // state than the on-demand read path did (see `onDemandShipClientFactory`'s
   // own comment). `GateShipClient` itself holds no token — see
   // `shipClient.ts`'s "gate's write-capable client" section.
-  gateShipClient = new GateShipClient({ baseUrl: config.shipApiBaseUrl, client: resilientHttpClient });
+  //
+  // PF-703 (TRO-435) — `sdkClientFactory` is set ONLY in `sdk` mode, same
+  // "presence decides the mode" convention `onDemandShipClientFactory` above
+  // (and `ShipClient`'s own `sdk` option, PF-702) already use — never a
+  // separate mode flag threaded an extra layer down. Each accepted write
+  // gets a FRESH `@ship/sdk` `ShipClient` bound to THAT call's own token
+  // (`shipClient.ts`'s `GateShipClientOptions.sdkClientFactory` doc comment
+  // has the full "why per-call, why cheap" reasoning) — never the shared
+  // `sharedSdkClient` app-identity client above (that one authenticates as
+  // ship_app_fleetgraph itself; a gate write must never run under the app's
+  // own identity, only the accepting human's, per this ticket's whole
+  // point). The token itself still comes from wherever it always did —
+  // `api/src/routes/agent.ts`'s `POST /accept-draft` mints it fresh per
+  // request (PF-703 extends that mint to request `documents:write`/
+  // `issues:write` scopes so the SAME token also satisfies sdk mode's
+  // bearer middleware, not just internal mode's).
+  gateShipClient = new GateShipClient({
+    baseUrl: config.shipApiBaseUrl,
+    client: resilientHttpClient,
+    sdkClientFactory:
+      config.agentPlatformMode === 'sdk'
+        ? (token: string) => new SdkShipClient({ token, baseUrl: config.shipApiBaseUrl })
+        : undefined,
+  });
   // TRO-348: closes the gap `gate.ts`'s own `GateDeps.draftSurvivalTracker`
   // docstring named — "nothing currently constructs the production
   // `FileDraftSurvivalTracker` ... because nothing calls `acceptDraft` from a

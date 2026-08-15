@@ -74,12 +74,34 @@ interface MintedTokenRow {
  * themselves via `POST /api/api-tokens` — `authMiddleware`
  * (`middleware/auth.ts`) validates it the identical way, resolving
  * `req.userId`/`req.workspaceId`/`req.isSuperAdmin` from the SAME
- * `api_tokens` row shape. This is the mechanism that makes the agent's
- * on-demand Ship reads genuinely run under the asking person's own
- * permissions (FLEETGRAPH.MD: "it can reach anything you could reach, and
- * nothing you could not") rather than the agent's own elevated identity.
+ * `api_tokens` row shape, and never reads the `scopes` column at all
+ * (verified directly, not assumed — `validateApiToken`'s own `SELECT`
+ * omits it). This is the mechanism that makes the agent's on-demand Ship
+ * reads genuinely run under the asking person's own permissions
+ * (FLEETGRAPH.MD: "it can reach anything you could reach, and nothing you
+ * could not") rather than the agent's own elevated identity.
+ *
+ * `scopes` (PF-703, TRO-435): optional, `undefined` by default — every
+ * existing caller (`POST /chat`'s `askingUserToken`) is unaffected, and a
+ * `NULL`-scopes row remains what it always was (the legacy-unscoped shape,
+ * still perfectly valid for internal-API auth above). When a caller DOES
+ * pass `scopes`, this becomes a "scoped personal token" — PF-107's SECOND
+ * `/api/v1` bearer-auth token class (`bearerAuth.ts`'s own header:
+ * "migration 043 only added the `scopes` column"; a `NULL`-scopes row is
+ * rejected there, never a `[]`-scopes one). `routes/agent.ts`'s
+ * `POST /accept-draft` is the one caller that passes it today, requesting
+ * `['documents:write', 'issues:write']` so the SAME minted token
+ * authenticates BOTH the internal write path (`authMiddleware`, scopes
+ * ignored, as this doc comment states above) AND `agent/`'s sdk-mode
+ * `GateShipClient` writes through `/api/v1/*` (`bearerAuth`, which DOES
+ * check `scopes`) — one token, valid against whichever wire protocol the
+ * running agent process happens to be configured for.
  */
-export async function mintEphemeralAgentToken(userId: string, workspaceId: string): Promise<MintedAgentToken> {
+export async function mintEphemeralAgentToken(
+  userId: string,
+  workspaceId: string,
+  scopes?: string[]
+): Promise<MintedAgentToken> {
   const randomBytes = crypto.randomBytes(32).toString('hex');
   const token = `ship_${randomBytes}`;
   const hash = crypto.createHash('sha256').update(token).digest('hex');
@@ -90,10 +112,10 @@ export async function mintEphemeralAgentToken(userId: string, workspaceId: strin
   const expiresAt = new Date(Date.now() + EPHEMERAL_TOKEN_EXPIRY_MS);
 
   const result = await pool.query<MintedTokenRow>(
-    `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, expires_at, scopes)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      RETURNING id`,
-    [userId, workspaceId, name, hash, prefix, expiresAt]
+    [userId, workspaceId, name, hash, prefix, expiresAt, scopes ?? null]
   );
 
   const row = result.rows[0];
