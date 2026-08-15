@@ -19,10 +19,44 @@
  * under it.
  */
 
+/**
+ * A `created_at` value guaranteed to carry Postgres's full microsecond
+ * precision — the ONLY thing `encodeCursor` will accept for its
+ * `created_at` field (TRO-602). A plain `string` cannot make that
+ * guarantee (a JS `Date#toISOString()` result is a `string` too, and is
+ * exactly the lossy value that caused TRO-602's silent-row-drop bug: `pg`'s
+ * default parser truncates `timestamptz` to millisecond precision, so two
+ * rows landing in the same millisecond can put a not-yet-fetched row on the
+ * wrong side of the cursor boundary, permanently and silently). This
+ * nominal brand makes that mistake a compile error instead of a bug that
+ * only shows up under a same-millisecond collision in production.
+ *
+ * The one sanctioned way to produce one is `preciseTimestamp()` below,
+ * called on a `created_at::text` SQL alias (Postgres's own text
+ * serialization of `timestamptz` preserves full precision — no lossy
+ * round-trip through a JS `Date`) — see `resources/audit.ts`'s
+ * `AUDIT_COLUMNS`/`created_at_precise` for the pattern this generalizes
+ * from, and any resource file under `resources/` for the same convention
+ * applied via this shared type.
+ */
+export type PreciseTimestamp = string & { readonly __brand: 'PreciseTimestamp' };
+
+/**
+ * Brands a `created_at::text`-selected column value as a `PreciseTimestamp`.
+ * Deliberately the ONLY function in this module that produces one — never
+ * call this on `Date#toISOString()` or any other Date-derived string; there
+ * is nothing this function can check at runtime that distinguishes a
+ * precise value from a lossy one (both are plain strings by the time they
+ * reach here), so the guarantee is enforced entirely by convention at this
+ * one call site plus the type system everywhere downstream of it.
+ */
+export function preciseTimestamp(raw: string): PreciseTimestamp {
+  return raw as PreciseTimestamp;
+}
+
 export interface KeysetCursor {
   readonly id: string;
-  /** ISO 8601 string — the exact form `Date#toISOString()` produces. */
-  readonly created_at: string;
+  readonly created_at: PreciseTimestamp;
 }
 
 /**
@@ -39,7 +73,11 @@ export function encodeCursor(cursor: KeysetCursor): string {
  * that isn't a validly-shaped cursor — a garbled, truncated, or
  * hand-crafted `?cursor=` value — so the caller can turn that into a
  * `validation_failed` `ApiError` rather than a raw parse exception reaching
- * the client as a 500.
+ * the client as a 500. The decoded `created_at` is re-branded via
+ * `preciseTimestamp()` without a fresh precision check — safe because it
+ * can only ever have been produced by this module's own `encodeCursor`
+ * (which itself only ever accepted a `PreciseTimestamp`), not supplied
+ * directly by a caller.
  */
 export function decodeCursor(raw: string): KeysetCursor | null {
   let parsed: unknown;
@@ -55,5 +93,5 @@ export function decodeCursor(raw: string): KeysetCursor | null {
   if (typeof candidate.id !== 'string' || typeof candidate.created_at !== 'string') {
     return null;
   }
-  return { id: candidate.id, created_at: candidate.created_at };
+  return { id: candidate.id, created_at: preciseTimestamp(candidate.created_at) };
 }

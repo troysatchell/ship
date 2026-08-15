@@ -101,7 +101,7 @@ import {
   serverError,
   validationFailedError,
 } from '../errors.js';
-import { encodeCursor, decodeCursor, type KeysetCursor } from '../pagination.js';
+import { encodeCursor, decodeCursor, preciseTimestamp, type KeysetCursor } from '../pagination.js';
 import { resolvePrincipalWorkspaceId } from './workspaceContext.js';
 import { EVENT_TYPES } from '../../../webhooks/events.js';
 import { generateWebhookSecret } from '../../../webhooks/secrets.js';
@@ -179,9 +179,14 @@ interface WebhookSubscriptionRow {
   target_url: string;
   active: boolean;
   created_at: Date;
+  /** `created_at::text` — cursor-internal only (TRO-602), harmlessly
+   *  present on every query reusing `SUBSCRIPTION_COLUMNS`, not just the
+   *  list route that actually builds a cursor from it. */
+  created_at_precise: string;
 }
 
-const SUBSCRIPTION_COLUMNS = 'ws.id, ws.app_id, ws.event_type, ws.target_url, ws.active, ws.created_at';
+const SUBSCRIPTION_COLUMNS =
+  'ws.id, ws.app_id, ws.event_type, ws.target_url, ws.active, ws.created_at, ws.created_at::text AS created_at_precise';
 
 function serializeSubscription(row: WebhookSubscriptionRow) {
   return {
@@ -231,10 +236,12 @@ interface WebhookDeliveryRow {
   next_attempt_at: Date | null;
   replayed_from_id: string | null;
   created_at: Date;
+  /** `created_at::text` — cursor-internal only (TRO-602). */
+  created_at_precise: string;
 }
 
 const DELIVERY_COLUMNS =
-  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.replayed_from_id, wd.created_at';
+  'wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.idempotency_key, wd.attempt_number, wd.status, wd.response_status, wd.response_excerpt, wd.latency_ms, wd.next_attempt_at, wd.replayed_from_id, wd.created_at, wd.created_at::text AS created_at_precise';
 
 function serializeDelivery(row: WebhookDeliveryRow) {
   return {
@@ -431,7 +438,7 @@ webhooksRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({
@@ -517,7 +524,7 @@ webhooksRouter.get(
     const lastRow = page[page.length - 1];
     const nextCursor =
       hasMore && lastRow
-        ? encodeCursor({ id: lastRow.id, created_at: lastRow.created_at.toISOString() })
+        ? encodeCursor({ id: lastRow.id, created_at: preciseTimestamp(lastRow.created_at_precise) })
         : null;
 
     res.status(200).json({

@@ -21,6 +21,79 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-602 — Shared /api/v1 cursor pagination silently dropped rows landing in the same millisecond
+
+**What was broken.** `platform/api/v1/pagination.ts`'s `encodeCursor` built every `/api/v1` list
+route's keyset cursor from `row.created_at.toISOString()` — `pg`'s default parser gives a
+**millisecond**-precision JS `Date`, while Postgres's own `timestamptz` retains **microsecond**
+precision. Two rows landing in the same millisecond (found live and reliably reproducible via
+ordinary sequential `await`ed inserts against local Docker Postgres — not a rare race; TRO-432's
+own PR #225 hit it on nearly every pagination-test run before that test was rewritten to seed
+second-spaced timestamps instead) could put a not-yet-fetched row on the wrong side of a
+truncated cursor boundary. That row was then **silently and permanently dropped** — never
+appeared on any later page, no error anywhere. Affected every `/api/v1` list route:
+`documents`/`issues`/`sprints`/`people`/`webhooks`/`webhook-deliveries` — 10 call sites across 5
+resource files, only `audit` (PF-501/TRO-432) had a local, per-route workaround
+(`created_at::text AS created_at_precise`, bypassing `pg`'s lossy `Date` parsing for the cursor).
+
+**The centralization decision (the ticket's own open question).** Repeating `audit.ts`'s SQL
+pattern per resource (option 1) would have fixed the bug but left the *guarantee* undefended —
+nothing stops a future new list route from reintroducing the identical mistake, since a lossy
+`Date#toISOString()` string and a precise `created_at::text` string are both just `string` to
+TypeScript. Centralized instead (option 2), but not by having `pagination.ts` own the SQL (it
+can't — every resource selects different columns, so there's no single query for it to author):
+`pagination.ts` now exports a nominal branded type, `PreciseTimestamp = string & { __brand }`, and
+`encodeCursor` only accepts that type for its `created_at` field, not a bare `string`. The **one**
+sanctioned way to produce one is the new `preciseTimestamp()` function, meant to be called only on
+a `created_at::text` SQL alias. This makes the bug's exact root cause **a compile error**, not
+something that only surfaces under a same-millisecond collision in production — verified directly:
+tightening the type alone made `tsc` enumerate all 10 remaining lossy call sites as errors, which
+is how every site below was found and fixed (not a fresh manual audit that could have missed one).
+
+**Fixed:** `documents.ts` (5 sites — main list, forward/reverse associations, backlinks, comments),
+`issues.ts`, `people.ts`, `sprints.ts`, `webhooks.ts` (2 sites — subscriptions, deliveries), plus
+`audit.ts`'s own already-correct site updated to the new shared type for consistency. Every SELECT
+gained a `created_at::text AS created_at_precise` column (harmless, additive — matches
+`audit.ts`'s proven pattern); every cursor-building call now passes
+`preciseTimestamp(lastRow.created_at_precise)`. No response-body field changed — every resource's
+own serializer still uses `row.created_at.toISOString()` for what it returns to the caller; only
+the *opaque, internal* cursor's precision changed, matching the AC's "no API contract change."
+
+One real type-collision the compiler caught along the way: `documents.ts`'s `serializeDocument()`
+is also called from `POST /`'s create path with a differently-shaped row from
+`services/documentService.ts` (a same-named but unrelated `DocumentRow` interface, from a
+single-record create response that never builds a cursor) — making `created_at_precise` a
+*required* field on the type `serializeDocument` accepts broke that call site. Fixed by narrowing
+`serializeDocument`'s parameter to `Omit<DocumentRow, 'created_at_precise'>`, which both callers
+satisfy structurally.
+
+**Proof.** A new deterministic regression test (`documents.test.ts`, "TRO-602: cursor precision")
+seeds two rows at the exact same millisecond but different microsecond offsets — via raw SQL
+`interval` arithmetic (`to_timestamp($ms/1000.0) + '$microseconds microseconds'::interval`), not a
+JS `Date` (which cannot represent sub-millisecond precision at all, so passing one in could never
+produce a genuine collision to seed with) — then walks a `limit=1` page boundary forced to land
+exactly between them and asserts the earlier row is never dropped. **Red-before-green verified
+directly, not assumed:** temporarily reverted just the one call site's fix
+(`preciseTimestamp(lastRow.created_at.toISOString())`, forcing the brand onto a deliberately lossy
+value) and re-ran — the test failed with exactly the predicted message ("earlierId was silently
+dropped across the millisecond-collision page boundary"), then the fix was restored and the same
+run went green. Full `api` suite: **122/122 files, 1372/1372 tests green** — nothing else broke
+across the 10 touched call sites.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api type-check
+pnpm --filter @ship/api exec vitest run src/platform/api/v1/resources/__tests__/documents.test.ts
+pnpm --filter @ship/api test
+```
+
+**Rollback.** `git revert` this commit. `pagination.ts`'s `PreciseTimestamp`/`preciseTimestamp()`
+and the 10 SELECT/`encodeCursor` call-site changes revert together; nothing outside
+`api/src/platform/api/v1/` changes.
+
+---
+
 ## TRO-451 (PF-803) — Slack integration: verified Ship webhooks → channel posts, the 5th and last committed reference integration
 
 **What was added.** `integrations/slack/` — an Express receiver verifying every delivery with
