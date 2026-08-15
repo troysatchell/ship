@@ -24,6 +24,7 @@
 import {
   ListDocumentsQuerySchema,
   CreateDocumentRequestSchema,
+  UpdateDocumentRequestSchema,
   DocumentTypeSchema,
   SubResourceListQuerySchema,
 } from '../../api/v1/resources/documents.js';
@@ -154,6 +155,41 @@ v1Registry.registerPath({
     },
     401: UNAUTHORIZED_RESPONSE,
     403: FORBIDDEN_RESPONSE,
+  },
+});
+
+// ─── PATCH /documents/{id} ────────────────────────────────────────────────
+
+v1Registry.registerPath({
+  method: 'patch',
+  path: '/documents/{id}',
+  tags: ['Documents'],
+  summary: 'Update a document\'s content',
+  description: 'Overwrites a document\'s content field (PF-703, TRO-435) — a deliberately narrow update surface (content only, no title/properties, no document_type filter). Built for the agent gate\'s sdk-mode write path (GateShipClient.setStandupContent). Requires the documents:write scope.',
+  security: BEARER_SECURITY,
+  request: {
+    params: z.object({
+      id: z.string().openapi({ description: 'Document id. A non-UUID value 404s rather than validation-failing.' }),
+    }),
+    body: {
+      content: { 'application/json': { schema: UpdateDocumentRequestSchema } },
+    },
+  },
+  responses: {
+    200: {
+      description: 'The updated document.',
+      content: { 'application/json': { schema: DocumentResponseSchema } },
+    },
+    400: {
+      description: 'Invalid request body.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
+    401: UNAUTHORIZED_RESPONSE,
+    403: FORBIDDEN_RESPONSE,
+    404: {
+      description: 'No document with this id exists in the caller\'s workspace, or the id is malformed.',
+      content: { 'application/json': { schema: ApiErrorSchema } },
+    },
   },
 });
 

@@ -86,6 +86,11 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     // Updated again by PF-306 (Linear TRO-446): /webhooks/deliveries/{id}/replay
     // registered (same file) — same class of legitimate addition, not a
     // weakened check.
+    //
+    // Updated again by PF-703 (Linear TRO-435): PATCH /documents/{id} (an
+    // existing path, new method — no new top-level path key) and
+    // PATCH /issues/{id} (a genuinely new path key) — the agent gate's
+    // sdk-mode write path. Same class of legitimate addition.
     const paths = document.paths ?? {};
     expect(Object.keys(paths).sort()).toEqual(
       [
@@ -99,6 +104,7 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
         '/documents/{id}/reverse-associations',
         '/health',
         '/issues',
+        '/issues/{id}',
         '/me',
         '/openapi.json',
         '/people',
@@ -117,11 +123,13 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/documents']?.get).toBeDefined();
     expect(paths['/documents']?.post).toBeDefined();
     expect(paths['/documents/{id}']?.get).toBeDefined();
+    expect(paths['/documents/{id}']?.patch).toBeDefined();
     expect(paths['/documents/{id}/associations']?.get).toBeDefined();
     expect(paths['/documents/{id}/reverse-associations']?.get).toBeDefined();
     expect(paths['/documents/{id}/backlinks']?.get).toBeDefined();
     expect(paths['/documents/{id}/comments']?.get).toBeDefined();
     expect(paths['/issues']?.get).toBeDefined();
+    expect(paths['/issues/{id}']?.patch).toBeDefined();
     expect(paths['/sprints']?.get).toBeDefined();
     expect(paths['/sprints/{id}']?.get).toBeDefined();
     expect(paths['/me']?.get).toBeDefined();
@@ -142,7 +150,9 @@ describe('PF-202: generateV1OpenAPIDocument()', () => {
     expect(paths['/documents']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/documents']?.post?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/documents/{id}']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/documents/{id}']?.patch?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/issues']?.get?.security).toEqual([{ bearerAuth: [] }]);
+    expect(paths['/issues/{id}']?.patch?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/sprints']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks']?.get?.security).toEqual([{ bearerAuth: [] }]);
     expect(paths['/webhooks']?.post?.security).toEqual([{ bearerAuth: [] }]);

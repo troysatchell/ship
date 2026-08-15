@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { GateShipClient, ShipApiError, ShipClient, plainTextToTipTapDoc } from '../shipClient.js';
+import { GateShipClient, ShipApiError, ShipClient, plainTextToTipTapDoc, type GateSdkClientLike } from '../shipClient.js';
 
 function fakeClient(response: Response) {
   return { get: vi.fn().mockResolvedValue(response) };
@@ -195,6 +195,198 @@ describe('GateShipClient', () => {
     await expect(gate.postStandup('tok', '2026-08-04')).rejects.toBeInstanceOf(ShipApiError);
   });
 });
+
+// PF-703 (TRO-435) — sdk mode: each write constructs (via `sdkClientFactory`,
+// injected the same way `onDemandShipClientFactory` is elsewhere in this
+// package) a per-call `@ship/sdk`-shaped client and routes through
+// `/api/v1/*` methods instead of `this.client.request`. Internal mode's own
+// describe block above is entirely unmodified — every one of its cases omits
+// `sdkClientFactory`, proving the default (`undefined`) stays byte-for-byte
+// the pre-existing behavior.
+describe('GateShipClient sdk mode (PF-703 / TRO-435)', () => {
+  function fakeSdkClient(overrides: Partial<{
+    meUserId: string | null;
+    createResult: Record<string, unknown>;
+    updateResult: Record<string, unknown>;
+    issueUpdateResult: Record<string, unknown>;
+  }> = {}): GateSdkClientLike & {
+    me: ReturnType<typeof vi.fn>;
+    documents: { create: ReturnType<typeof vi.fn>; update: ReturnType<typeof vi.fn> };
+    issues: { update: ReturnType<typeof vi.fn> };
+  } {
+    // `meUserId: null` returns the REAL "no acting user" shape (`user:
+    // null`), not a malformed `{ id: null }` object — `@ship/sdk`'s real
+    // `Me` type is `{ user: MeUser | null; ... }`, never a MeUser with a
+    // null id (CodeRabbit, this PR: the previous fixture's `{ id: null }`
+    // let `me.user?.id` reach the same `?? null` fallback by coincidence,
+    // without ever exercising the real `me.user?.` short-circuit branch).
+    return {
+      me: vi.fn().mockResolvedValue(
+        overrides.meUserId === null
+          ? { user: null, app: null, scopes: [] }
+          : { user: { id: overrides.meUserId ?? 'user-a', email: 'user-a@ship.local', name: 'User A' }, app: null, scopes: [] }
+      ),
+      documents: {
+        create: vi.fn().mockResolvedValue(
+          overrides.createResult ?? {
+            id: 'standup-1',
+            title: 'Tuesday Aug 4 Standup',
+            document_type: 'standup',
+            properties: { author_id: 'user-a', date: '2026-08-04' },
+            created_at: '2026-08-04T00:00:00.000Z',
+            updated_at: '2026-08-04T00:00:00.000Z',
+          }
+        ),
+        update: vi.fn().mockResolvedValue(
+          overrides.updateResult ?? {
+            id: 'standup-1',
+            title: 'Tuesday Aug 4 Standup',
+            document_type: 'standup',
+            properties: {},
+            created_at: '2026-08-04T00:00:00.000Z',
+            updated_at: '2026-08-04T00:01:00.000Z',
+          }
+        ),
+      },
+      issues: {
+        update: vi.fn().mockResolvedValue(overrides.issueUpdateResult ?? { id: 'issue-1', state: 'in_review' }),
+      },
+    };
+  }
+
+  it('postStandup calls me() then documents.create with a computed title and document_type: standup, using the CALLER-SUPPLIED token', async () => {
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    const result = await gate.postStandup('accepter-token', '2026-08-04');
+
+    expect(sdkClientFactory).toHaveBeenCalledWith('accepter-token');
+    expect(sdk.me).toHaveBeenCalled();
+    expect(sdk.documents.create).toHaveBeenCalledWith({
+      title: 'Tuesday Aug 4 Standup',
+      document_type: 'standup',
+      properties: { author_id: 'user-a', date: '2026-08-04' },
+    });
+    // content is disclosed-null in sdk mode (this file's own postStandupViaSdk doc comment) —
+    // the public /api/v1/documents route never returns it.
+    expect(result.content).toBeNull();
+    expect(result.id).toBe('standup-1');
+  });
+
+  it('postStandup sets properties.author_id to null (not a crash) when me() has no user', async () => {
+    const sdk = fakeSdkClient({ meUserId: null });
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await gate.postStandup('tok', '2026-08-04');
+
+    expect(sdk.documents.create).toHaveBeenCalledWith(
+      expect.objectContaining({ properties: { author_id: null, date: '2026-08-04' } })
+    );
+  });
+
+  it('postStandup rejects a malformed date BEFORE ever calling the sdk, rather than creating an "Invalid Date" titled document', async () => {
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await expect(gate.postStandup('tok', 'not-a-real-date')).rejects.toThrow(/not a valid YYYY-MM-DD date/);
+    expect(sdk.me).not.toHaveBeenCalled();
+    expect(sdk.documents.create).not.toHaveBeenCalled();
+  });
+
+  it('postStandup rejects a calendar-impossible date (Feb 30) — a shape check alone is not enough (CodeRabbit round 2)', async () => {
+    // `new Date('2026-02-30T00:00:00Z')` does not throw or produce Invalid
+    // Date — it silently rolls over to 2026-03-02 (verified directly before
+    // writing this test, not assumed). A regex-shape check alone
+    // (/^\d{4}-\d{2}-\d{2}$/) would let "2026-02-30" straight through to a
+    // wrong-date title; this proves the round-trip check catches it too.
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await expect(gate.postStandup('tok', '2026-02-30')).rejects.toThrow(/not a valid YYYY-MM-DD date/);
+    expect(sdk.me).not.toHaveBeenCalled();
+    expect(sdk.documents.create).not.toHaveBeenCalled();
+  });
+
+  it('the factory is called with whichever token is passed per call — no stickiness to a prior call\'s token', async () => {
+    const sdkClientFactory = vi.fn().mockImplementation(() => fakeSdkClient());
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await gate.postStandup('token-for-alice', '2026-08-04');
+    await gate.postStandup('token-for-bob', '2026-08-05');
+
+    expect(sdkClientFactory.mock.calls.map((call) => call[0])).toEqual(['token-for-alice', 'token-for-bob']);
+  });
+
+  it('setStandupContent calls documents.update(id, { content }) and echoes back the exact content it just sent', async () => {
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    const result = await gate.setStandupContent('accepter-token', 'standup-1', 'Line one.\nLine two.');
+
+    const expectedContent = {
+      type: 'doc',
+      content: [
+        { type: 'paragraph', content: [{ type: 'text', text: 'Line one.' }] },
+        { type: 'paragraph', content: [{ type: 'text', text: 'Line two.' }] },
+      ],
+    };
+    expect(sdk.documents.update).toHaveBeenCalledWith('standup-1', { content: expectedContent });
+    expect(result.content).toEqual(expectedContent);
+  });
+
+  it('applyIssueTransition calls issues.update(id, { state }), never automated_by', async () => {
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await gate.applyIssueTransition('accepter-token', 'issue-1', 'in_review');
+
+    expect(sdk.issues.update).toHaveBeenCalledWith('issue-1', { state: 'in_review' });
+  });
+
+  it('applyIssueTransition rejects an unrecognized state BEFORE ever calling the sdk (guarded cast)', async () => {
+    const sdk = fakeSdkClient();
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await expect(gate.applyIssueTransition('tok', 'issue-1', 'not_a_real_state')).rejects.toThrow(
+      /not a recognized issue state/
+    );
+    expect(sdk.issues.update).not.toHaveBeenCalled();
+  });
+
+  it('propagates the sdk\'s own thrown error unchanged (never wrapped in ShipApiError, never silently swallowed)', async () => {
+    const sdk = fakeSdkClient();
+    // Identity comparison (CodeRabbit, this PR), not just a message-pattern
+    // match: a named error instance, rejected with THAT EXACT object, and
+    // asserted as the same reference on the other side — proves the error
+    // passes through unchanged rather than merely being re-thrown with a
+    // matching message (which a buggy `catch (e) { throw new Error(e.message)
+    // }` would also satisfy under a message-only assertion).
+    const sdkError = new Error('sdk: PATCH /api/v1/issues/issue-1 returned 403');
+    sdk.issues.update.mockRejectedValueOnce(sdkError);
+    const sdkClientFactory = vi.fn().mockReturnValue(sdk);
+    const gate = new GateShipClient({ baseUrl: 'https://ship.example.gov', client: fakeRequestClientUnused(), sdkClientFactory });
+
+    await expect(gate.applyIssueTransition('tok', 'issue-1', 'in_review')).rejects.toBe(sdkError);
+  });
+});
+
+// A `Pick<ResilientClient, 'request'>` fake that fails loudly if sdk-mode
+// tests ever accidentally fall through to the internal-mode path — every sdk
+// mode case above supplies `sdkClientFactory`, so `.request(` should never
+// be reached; if it is, this makes that a clear test failure instead of a
+// silently-passing call to a real network layer.
+function fakeRequestClientUnused() {
+  return {
+    request: vi.fn().mockRejectedValue(new Error('GateShipClient: .request( called in sdk mode — sdkClientFactory should have been used instead')),
+  };
+}
 
 describe('plainTextToTipTapDoc', () => {
   it('converts one line per paragraph, and a blank line into an empty paragraph', () => {

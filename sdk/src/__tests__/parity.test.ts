@@ -194,7 +194,11 @@ const SDK_TO_OPERATION: Readonly<Record<string, OpenApiOperation>> = {
   'documents.list': { method: 'get', path: '/documents' },
   'documents.get': { method: 'get', path: '/documents/{id}' },
   'documents.create': { method: 'post', path: '/documents' },
+  // PF-703 (Linear TRO-435) — the agent gate's sdk-mode write path.
+  'documents.update': { method: 'patch', path: '/documents/{id}' },
   'issues.list': { method: 'get', path: '/issues' },
+  // PF-703 (Linear TRO-435) — the agent gate's sdk-mode write path.
+  'issues.update': { method: 'patch', path: '/issues/{id}' },
   'sprints.list': { method: 'get', path: '/sprints' },
   'webhooks.listSubscriptions': { method: 'get', path: '/webhooks' },
   'webhooks.createSubscription': { method: 'post', path: '/webhooks' },

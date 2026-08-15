@@ -690,4 +690,129 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
       });
     });
   });
+
+  // PF-703 (Linear TRO-435) — the agent gate's sdk-mode write path
+  // (GateShipClient.setStandupContent). See UpdateDocumentRequestSchema's
+  // own doc comment for the deliberate content-only scope narrowing.
+  describe('PATCH /api/v1/documents/:id (PF-703, TRO-435)', () => {
+    it('overwrites content and bumps updated_at; a follow-up GET reflects the untouched title/document_type', async () => {
+      const docId = await insertDocument('PATCH content doc', new Date(BASE_MS + 50000), 'standup');
+      const newContent = { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'patched' }] }] };
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: newContent });
+
+      expect(res.status).toBe(200);
+      const body = res.body as DocumentBody;
+      expect(body.id).toBe(docId);
+      expect(body.title).toBe('PATCH content doc');
+      expect(body.document_type).toBe('standup');
+      // updated_at must have moved past the fixed seed timestamp
+      // (CodeRabbit, this PR) — the response's own updated_at is real proof,
+      // not just "a 200 came back."
+      expect(new Date(body.updated_at as string).getTime()).toBeGreaterThan(BASE_MS + 50000);
+      // TRO-605: the PATCH response itself now carries `content` too (it
+      // goes through the same, now-widened `serializeDocument()` as GET) —
+      // real proof at the HTTP layer, not only via the direct SQL read below.
+      expect(body.content).toEqual(newContent);
+
+      const row = await pool.query<{ content: unknown; title: string }>(
+        `SELECT content, title FROM documents WHERE id = $1`,
+        [docId]
+      );
+      expect(row.rows[0]?.content).toEqual(newContent);
+      // properties/title are untouched by a content-only PATCH.
+      expect(row.rows[0]?.title).toBe('PATCH content doc');
+
+      // A follow-up GET reflects title/document_type (unchanged) AND the
+      // patched content — TRO-605 widened GET /:id's response to include
+      // `content` (previously it did not; see TRO-605's CHANGES.md entry).
+      // This assertion used to be `expect('content' in getBody).toBe(false)`
+      // — updated because the API's own documented response shape changed,
+      // not weakened: it now asserts a stronger, real round-trip instead of
+      // asserting the field's absence.
+      const getRes = await request(app)
+        .get(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`);
+      expect(getRes.status).toBe(200);
+      const getBody = getRes.body as DocumentBody;
+      expect(getBody.title).toBe('PATCH content doc');
+      expect(getBody.document_type).toBe('standup');
+      expect(getBody.content).toEqual(newContent);
+    });
+
+    it('a well-formed but nonexistent id -> 404 not_found', async () => {
+      const res = await request(app)
+        .patch(`/api/v1/documents/${crypto.randomUUID()}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('a malformed (non-UUID) id -> 404 not_found (CodeRabbit, this PR — assertDocumentExists\'s UUID_RE guard, exercised directly for PATCH)', async () => {
+      const res = await request(app)
+        .patch('/api/v1/documents/not-a-uuid')
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+    });
+
+    it('a missing content field -> 400 validation_failed', async () => {
+      const docId = await insertDocument('PATCH missing content doc', new Date(BASE_MS + 51000));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({});
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+    });
+
+    it('a request body with an unrecognized extra field -> 400 validation_failed (strict schema)', async () => {
+      const docId = await insertDocument('PATCH strict schema doc', new Date(BASE_MS + 51500));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${writeToken}`)
+        .send({ content: { type: 'doc', content: [] }, title: 'Sneaky title change' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.code).toBe('validation_failed');
+
+      // Never silently applied.
+      const row = await pool.query<{ title: string }>(`SELECT title FROM documents WHERE id = $1`, [docId]);
+      expect(row.rows[0]?.title).toBe('PATCH strict schema doc');
+    });
+
+    it('a documents:read-only token -> 403, details.missing_scope = documents:write', async () => {
+      const docId = await insertDocument('PATCH missing scope doc', new Date(BASE_MS + 52000));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .set('Authorization', `Bearer ${readOnlyToken}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(403);
+      expect(res.body.code).toBe('forbidden');
+      expect(res.body.details).toEqual({ missing_scope: 'documents:write' });
+    });
+
+    it('no Authorization header gets 401 in ApiError shape', async () => {
+      const docId = await insertDocument('PATCH no auth doc', new Date(BASE_MS + 53000));
+
+      const res = await request(app)
+        .patch(`/api/v1/documents/${docId}`)
+        .send({ content: { type: 'doc', content: [] } });
+
+      expect(res.status).toBe(401);
+      expect(res.body.code).toBe('unauthorized');
+    });
+  });
 });

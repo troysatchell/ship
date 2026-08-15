@@ -141,6 +141,15 @@ export interface CreateDocumentBody {
   readonly properties?: Record<string, unknown>;
 }
 
+/** `PATCH /api/v1/documents/:id` request body (PF-703, TRO-435) — mirrors
+ *  `UpdateDocumentRequestSchema` (`resources/documents.ts`). Deliberately
+ *  `content` only — see that schema's own doc comment for the scope
+ *  narrowing (built for the agent gate's `setStandupContent` write, not a
+ *  general-purpose document PATCH). */
+export interface UpdateDocumentBody {
+  readonly content: Record<string, unknown>;
+}
+
 /**
  * `shared/src/types/document.ts`'s `IssueState`/`IssuePriority` unions,
  * verbatim — same provenance `api/src/platform/api/v1/resources/issues.ts`'s
@@ -190,6 +199,15 @@ export interface ListIssuesParams {
 /** `issues.iterate()`'s params (PF-402) — same reasoning as
  *  `IterateDocumentsParams` above. */
 export type IterateIssuesParams = Omit<ListIssuesParams, 'cursor'>;
+
+/** `PATCH /api/v1/issues/:id` request body (PF-703, TRO-435) — mirrors
+ *  `UpdateIssueRequestSchema` (`resources/issues.ts`). Deliberately `state`
+ *  only — see that schema's own doc comment for the scope narrowing (built
+ *  for the agent gate's `applyIssueTransition` write, not a general-purpose
+ *  issue PATCH). */
+export interface UpdateIssueBody {
+  readonly state: IssueState;
+}
 
 /** Matches `serializeSprint()`'s actual return shape
  *  (`api/src/platform/api/v1/resources/sprints.ts:57-66`) field-for-field —
