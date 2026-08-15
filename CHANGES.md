@@ -21,6 +21,106 @@ leaves compare mode with no fixed reference point; a tag already pushed also nee
 
 ---
 
+## TRO-447 — PF-801: Idempotency-Key drill (deliver → replay → dedupe, end to end)
+
+**Investigate-tier, proof/docs only — no migration.** TRO-442/PF-305 (delivery log) and
+TRO-446/PF-306 (replay) were both already merged and already proved, at the DB-column level, that a
+replay reuses the original `idempotency_key`. What had never been proven: that a REAL subscriber
+process, receiving the actual wire traffic (not a stubbed `fetch`), sees the identical key twice and
+genuinely dedupes on it — this ticket's own AC. Verified no migration was needed: `ls
+api/src/db/migrations/ | sort -V | tail -5` showed 047–051 taken (050/051 are PF-306's own, not
+049 — that's `049_public_api_audit.sql`, a different ticket); the next free number is 052, but
+nothing here touches schema, so it stays free.
+
+**What was added.**
+
+- **`createReferenceSubscriber()`** (`docs/submission/demo-webhook-listener.mjs`) — the reference
+  subscriber-dedupe implementation this ticket's AC asks for, and the artifact integrators actually
+  copy. Extends TRO-441's existing demo listener (established convention/location for this kind of
+  reference artifact — reused and extended in place, not duplicated) rather than replacing it: same
+  file, same CLI entry point (`node docs/submission/demo-webhook-listener.mjs`), now refactored into
+  an exported, importable factory plus a thin CLI wrapper. A real, standalone `http.Server` — never
+  a mock — that verifies `Ship-Signature` via an INJECTED `verify(header, rawBody, secret)`
+  function (never reimplemented; see below for why two byte-identical implementations exist), then
+  check-then-stores on `Idempotency-Key`: a key seen before is recognized as a duplicate and NOT
+  reprocessed, but the response is still 200 either way, matching `deliverer.ts`'s own retry
+  contract (2xx = handled, don't retry; 5xx/timeout = retryable; anything else = permanent failure)
+  — a subscriber that 4xx'd or 5xx'd a recognized duplicate would get it retried or dead-lettered,
+  neither of which is "already handled."
+- **`docs/submission/demo-webhook-listener.d.mts`** — hand-written type declarations for the `.mjs`
+  module (lessons.md rule 21: a plain `.js`/`.mjs` import is an untyped boundary in this repo's
+  `strict`/`noImplicitAny` tsconfig; both consuming test files needed this to avoid an implicit
+  `any`).
+- **`verify` is injected, not hardcoded**, because two byte-identical implementations of the
+  Ship-Signature algorithm already exist in this repo (`sdk/src/verifyWebhook.ts`'s own header:
+  "Port of `signer.ts`'s `verify()` — same algorithm, byte-identical"): the CLI block still injects
+  the SDK's `verifyWebhook()` (what a real external integrator actually has available — unchanged
+  behavior from before this ticket, still needs `pnpm --filter @ship/sdk build` first, documented in
+  the file's own header), while both test suites below inject `signer.ts`'s own `verify()` instead,
+  so neither `pnpm test` nor the e2e suite needs an SDK build as a hidden prerequisite just to prove
+  the dedupe contract.
+- **`e2e/webhook-idempotency-key-drill.spec.ts`** — the narrated, real-browser/real-process e2e
+  drill, matching `e2e/oauth-pkce-chain.spec.ts` / `e2e/oauth-refresh-rotation-stolen-token.spec.ts`'s
+  structure: logs in as the real seeded admin, creates a subscription via the real
+  `POST /api/v1/webhooks`, starts the reference subscriber on a real reserved loopback port, creates
+  a document via the real app (which publishes `document.created` through the real, already-running
+  production deliverer — `apiServer` spawns the real `dist/index.js`, so `InMemoryWebhookDeliverer`'s
+  polling loop genuinely runs), confirms the reference subscriber processed it (not a dupe) via
+  `expect.poll` (no real sleeps — the delivery is genuinely async, on the deliverer's real 1s
+  interval), replays it via `POST /api/v1/webhooks/deliveries/:id/replay`, confirms the SAME
+  `Idempotency-Key` reaches the subscriber a second time and gets recognized as a duplicate, and
+  confirms via `GET /deliveries` that the log shows two distinct rows linked by `replayed_from_id`.
+  Per `ship-qa`'s own rule, this file is ADDITIVE — `gate.sh` counts it toward the regression-test
+  grep but never executes it (neither vitest config collects `e2e/`).
+- **The gate-executed proof** — a new "PF-801" describe block in
+  `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts`, at the tier `gate.sh` actually
+  runs. Distinct from that file's pre-existing "replays a successful delivery" test (which stubs
+  `fetch` and inserts the ORIGINAL delivery directly via SQL, so it only ever captures one real HTTP
+  call and compares it against a DB column): this test dispatches BOTH the fresh delivery (via
+  `InMemoryWebhookDeliverer.enqueueEvent()` + `processDue()`, real HTTP over a real loopback socket)
+  and the replay (via the real route) into the SAME reference-subscriber instance, and asserts the
+  fixture's own dedupe state — not just a captured header. Uses a fully isolated
+  workspace/user/app/token (not the file's shared fixtures): `enqueueEvent()` matches EVERY active
+  subscription in a workspace for the given `event_type`, and this file's own "every registered
+  event_type is accepted" test leaves one active `document.created` subscription behind under the
+  shared workspace — reusing it would have made `processDue()` fire real outbound HTTP attempts at
+  every other subscription's `target_url` too (mostly `https://example.com/...` placeholders),
+  observed directly during development (`enqueuedCount` was 6, not 1, on the first run) before the
+  isolation fix.
+- **`docs/architecture.md`** — new "Subscriber dedupe contract" subsection under "Webhook Pipeline":
+  idempotency keys are stable across replay (restating the existing "Idempotency-Key origin" bullet
+  from the integrator's side), how to implement dedup (check-then-store, 200 either way, and why),
+  and a pointer at `createReferenceSubscriber()` as copyable sample code.
+- **`docs/submission/PLUGFORGE-DEMO-SCRIPT.md`** — Act 4 corrected: it previously said "PF-306 isn't
+  on `main` yet," which was stale (both PF-306 and this ticket are merged as of this revision) — left
+  uncorrected, it would have sat directly next to this ticket's own new, true claims. Also fixed a
+  known-wrong command in the same paragraph (`pnpm --filter @ship/api test -- deliverer` does NOT
+  scope to the path — lessons.md's 2026-08-12 entry — replaced with the working `cd api && npx
+  vitest run <path>` form), and added a pointer at the new e2e spec as the recorded dedupe proof.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+pnpm exec playwright test e2e/webhook-idempotency-key-drill.spec.ts --workers=1
+```
+
+**Not verified.** The CLI demo path (`node docs/submission/demo-webhook-listener.mjs`, using the
+SDK's `verifyWebhook()`) was checked with `node --check` for syntax only, not run end-to-end against
+a live `pnpm dev` instance in this session — unchanged risk profile from before this ticket, since
+that code path is identical to what TRO-441 already shipped, only refactored into an importable
+factory function.
+
+**Roll back.** Revert this ticket's commit(s). `docs/submission/demo-webhook-listener.mjs` reverts
+to its TRO-441 shape (no dedupe tracking, no exported factory — the file becomes non-importable
+again). Deletes `docs/submission/demo-webhook-listener.d.mts`,
+`e2e/webhook-idempotency-key-drill.spec.ts`, and the "PF-801" describe block in `webhooks.test.ts`.
+Reverts the `docs/architecture.md` and `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` doc edits. No
+schema/migration involved, so no database rollback step.
+
+---
+
 ## TRO-423 — PF-701: Seed first-party app ship_app_fleetgraph — idempotent, secret via env, boot check
 
 **Scope note.** In scope: the idempotent seed + its regression test (AC-1), the boot-time check in

@@ -34,6 +34,14 @@ import { pool } from '../../../../../db/client.js';
 import { decryptSecret, encryptSecret, SECRET_ENCRYPTION_KEY_ENV } from '../../../../webhooks/secretEncryption.js';
 import { sign, verify } from '../../../../webhooks/signer.js';
 import { EVENT_TYPES } from '../../../../webhooks/events.js';
+import { InMemoryWebhookDeliverer } from '../../../../webhooks/deliverer.js';
+// The reference-subscriber fixture (PF-801 / TRO-447) — see its own file
+// header for why this is the SAME implementation the e2e drill
+// (`e2e/webhook-idempotency-key-drill.spec.ts`) and the CLI demo both use,
+// and why `verify` (signer.ts's, imported above) is injected here instead of
+// the SDK's byte-identical `verifyWebhook()`: this file must never need
+// `pnpm --filter @ship/sdk build` as a hidden prerequisite for `pnpm test`.
+import { createReferenceSubscriber } from '../../../../../../../docs/submission/demo-webhook-listener.mjs';
 
 function sha256Hex(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
@@ -1349,6 +1357,190 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
         [body.id]
       );
       expect(onlyRow(persisted.rows).status).toBe('pending');
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // PF-801 (Linear TRO-447) — Idempotency-Key drill: proves the SAME key
+  // travels on BOTH the fresh delivery's and the replay's real HTTP call,
+  // against a real reference-subscriber double (not a fetch mock) — the
+  // gate-executed vitest-level proof `ship-qa`'s own rule requires (an
+  // e2e-only regression test passes the gate's "test added" grep without
+  // ever being run by it; see e2e/webhook-idempotency-key-drill.spec.ts's
+  // own header for the additive, real-browser/real-process version of this
+  // same story).
+  //
+  // Distinct from the pre-existing "replays a successful delivery" test
+  // above: that test stubs `fetch` and inserts the ORIGINAL delivery
+  // directly via SQL, so it only ever captures ONE real HTTP call's headers
+  // (the replay's) and compares them against a DB column — it never
+  // dispatches a first HTTP call at all, so it cannot prove "the SAME key
+  // was sent on both calls," only "the replay used the row's stored key."
+  // This test dispatches BOTH the fresh delivery and the replay for real,
+  // over an actual loopback socket, into a listener that independently
+  // tracks what it received — the same reference-subscriber fixture the
+  // e2e drill and the CLI demo also use.
+  // ────────────────────────────────────────────────────────────────────────
+
+  describe('PF-801: Idempotency-Key is stable across replay, and a reference subscriber dedupes on it (Linear TRO-447)', () => {
+    it('a fresh delivery and its replay carry the SAME Idempotency-Key on the wire; the reference-subscriber fixture recognizes the second as a duplicate without reprocessing it', async () => {
+      // A FULLY ISOLATED workspace/user/app/token for this one test, not the
+      // shared `workspaceId`/`appId`/`manageToken` every other describe
+      // block in this file uses. Reason (found the hard way, first draft of
+      // this test): `InMemoryWebhookDeliverer.enqueueEvent()` matches EVERY
+      // active subscription in the event's workspace with the same
+      // event_type — and "every registered event_type is accepted" (the
+      // CRUD describe block above) alone leaves one active 'document.created'
+      // subscription behind under `appId`'s shared workspace, on top of
+      // several more from other tests. Reusing that workspace would make
+      // `deliverer.processDue()` below fan out REAL outbound HTTP attempts to
+      // every one of those OTHER subscriptions' target_urls too (mostly
+      // `https://example.com/...` placeholders) — slow, non-deterministic,
+      // and liable to hang under a network-sandboxed CI runner. A workspace
+      // this test owns exclusively guarantees exactly one match: itself.
+      const isolatedWorkspaceResult = await pool.query<{ id: string }>(
+        `INSERT INTO workspaces (name) VALUES ($1) RETURNING id`,
+        [`PF-801 Test ${testRunId}`]
+      );
+      const isolatedWorkspaceId = onlyRow(isolatedWorkspaceResult.rows).id;
+
+      // `resolvePrincipalWorkspaceId` resolves a personal token's workspace
+      // via `users.last_workspace_id`, NOT `api_tokens.workspace_id` — see
+      // that file's own header ("a DERIVED approximation ... via
+      // last_workspace_id"). A dedicated user is therefore required too, not
+      // just a dedicated token row.
+      const isolatedUserResult = await pool.query<{ id: string }>(
+        `INSERT INTO users (email, password_hash, name, last_workspace_id)
+         VALUES ($1, 'test-hash', 'PF-801 Test User', $2) RETURNING id`,
+        [`pf801-${testRunId}@ship.local`, isolatedWorkspaceId]
+      );
+      const isolatedUserId = onlyRow(isolatedUserResult.rows).id;
+
+      const isolatedAppId = await insertOauthApp(isolatedWorkspaceId, `PF-801 App ${testRunId}`);
+
+      const isolatedTokenRaw = `ship_${crypto.randomBytes(24).toString('hex')}`;
+      await pool.query(
+        `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, scopes)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [
+          isolatedUserId,
+          isolatedWorkspaceId,
+          'PF-801 token',
+          sha256Hex(isolatedTokenRaw),
+          isolatedTokenRaw.slice(0, 12),
+          ['webhooks:manage'],
+        ]
+      );
+
+      // A secret THIS test generates itself, not insertSubscriptionWithRealSecret's
+      // (that helper mints its own, but the reference subscriber has to be
+      // constructed with the secret BEFORE the subscription row can
+      // reference the subscriber's own listening port in target_url — a
+      // chicken-and-egg insertSubscriptionWithRealSecret's own signature
+      // can't resolve, so this test inserts the row itself, one level down).
+      const secret = `whsec_${crypto.randomBytes(32).toString('hex')}`;
+
+      // signer.ts's OWN verify() (imported at the top of this file) — not
+      // the SDK's verifyWebhook() — see the import comment above for why.
+      const subscriber = createReferenceSubscriber({ secret, verify });
+      const port = await subscriber.listen(0);
+
+      try {
+        const subResult = await pool.query<{ id: string }>(
+          `INSERT INTO webhook_subscriptions (app_id, event_type, target_url, signing_secret_ciphertext, active)
+           VALUES ($1, 'document.created', $2, $3, true) RETURNING id`,
+          [isolatedAppId, `http://127.0.0.1:${port}/`, encryptSecret(secret)]
+        );
+        const subscriptionId = onlyRow(subResult.rows).id;
+
+        // ── Fresh delivery: enqueue + dispatch for REAL, over a real
+        // loopback socket, through the SAME InMemoryWebhookDeliverer
+        // production code path production traffic uses — never a fetch
+        // mock. ──
+        const eventId = crypto.randomUUID();
+        const deliverer = new InMemoryWebhookDeliverer(pool);
+        const enqueuedCount = await deliverer.enqueueEvent({
+          id: eventId,
+          type: 'document.created',
+          created_at: new Date().toISOString(),
+          workspace_id: isolatedWorkspaceId,
+          data: { id: crypto.randomUUID(), document_type: 'wiki', title: 'PF-801 drill doc', created_by: null },
+        });
+        // Exactly one match — this isolated workspace has exactly one active
+        // subscription, the one created above.
+        expect(enqueuedCount).toBe(1);
+        await deliverer.processDue();
+
+        const originalRow = onlyRow(
+          (
+            await pool.query<{ id: string; idempotency_key: string; status: string }>(
+              `SELECT id, idempotency_key, status FROM webhook_deliveries
+               WHERE subscription_id = $1 AND event_id = $2 AND attempt_number = 1`,
+              [subscriptionId, eventId]
+            )
+          ).rows
+        );
+        expect(originalRow.status).toBe('success');
+        const idempotencyKey = originalRow.idempotency_key;
+
+        // The reference subscriber genuinely received it, over the real
+        // socket, and did NOT see it as a duplicate the first time.
+        expect(subscriber.wasProcessed(idempotencyKey)).toBe(true);
+        expect(subscriber.wasDeduped(idempotencyKey)).toBe(false);
+        expect(subscriber.deliveries.size).toBe(1);
+
+        // ── Replay: through the REAL route, which reuses the ORIGINAL
+        // idempotency_key (never regenerates one) — this ticket's own AC,
+        // proved end to end this time via a live subscriber instead of a
+        // DB-column comparison. ──
+        const replayRes = await request(app)
+          .post(`/api/v1/webhooks/deliveries/${originalRow.id}/replay`)
+          .set('Authorization', `Bearer ${isolatedTokenRaw}`);
+        expect(replayRes.status).toBe(201);
+        const replayBody = replayRes.body as DeliveryBody;
+
+        // THE core assertion: the SAME Idempotency-Key was sent on BOTH real
+        // HTTP calls.
+        expect(replayBody.idempotency_key).toBe(idempotencyKey);
+        expect(replayBody.replayed_from_id).toBe(originalRow.id);
+        expect(replayBody.status).toBe('success');
+
+        // The reference-subscriber fixture is what a dedup check would key
+        // on: it now recognizes this key as a duplicate, and never
+        // reprocessed the second delivery as a separate logical event — only
+        // ONE entry exists in its delivery map, with duplicateCount 1.
+        expect(subscriber.wasDeduped(idempotencyKey)).toBe(true);
+        expect(subscriber.deliveries.size).toBe(1);
+        expect(subscriber.deliveries.get(idempotencyKey)?.duplicateCount).toBe(1);
+
+        // The delivery log distinguishes fresh vs replayed keys via
+        // replayed_from_id — TWO distinct rows for this event, even though
+        // the subscriber only ever genuinely processed one of them.
+        const logRes = await request(app)
+          .get(`/api/v1/webhooks/deliveries?subscription_id=${subscriptionId}`)
+          .set('Authorization', `Bearer ${isolatedTokenRaw}`);
+        expect(logRes.status).toBe(200);
+        const logBody = logRes.body as DeliveryListResponseBody;
+        expect(logBody.data).toHaveLength(2);
+        const [replayedRow, originalRowFromLog] = logBody.data; // newest first
+        expect(replayedRow?.id).toBe(replayBody.id);
+        expect(replayedRow?.replayed_from_id).toBe(originalRow.id);
+        expect(originalRowFromLog?.id).toBe(originalRow.id);
+        expect(originalRowFromLog?.replayed_from_id).toBeNull();
+        expect(replayedRow?.idempotency_key).toBe(idempotencyKey);
+        expect(originalRowFromLog?.idempotency_key).toBe(idempotencyKey);
+      } finally {
+        await subscriber.close();
+        // Isolated rows this test owns exclusively — explicit order, same
+        // FK-dependency shape the file's own top-level `afterAll` already
+        // uses (webhook_subscriptions -> oauth_apps -> api_tokens -> users ->
+        // workspaces).
+        await pool.query('DELETE FROM webhook_subscriptions WHERE app_id = $1', [isolatedAppId]);
+        await pool.query('DELETE FROM oauth_apps WHERE workspace_id = $1', [isolatedWorkspaceId]);
+        await pool.query('DELETE FROM api_tokens WHERE workspace_id = $1', [isolatedWorkspaceId]);
+        await pool.query('DELETE FROM users WHERE id = $1', [isolatedUserId]);
+        await pool.query('DELETE FROM workspaces WHERE id = $1', [isolatedWorkspaceId]);
+      }
     });
   });
 });
