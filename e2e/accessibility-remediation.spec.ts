@@ -1403,10 +1403,52 @@ test.describe('Phase 3: Moderate Violations', () => {
       // because the hover tooltip never closed, without focus having caused
       // anything. The actual claim under test: the same tooltip that hover
       // reveals must ALSO be revealed by focus, not just by a mouse pointer.
-      await page.mouse.move(0, 0)
+      await page.mouse.move(0, 0, { steps: 10 })
       await expect(tooltipOnHover, 'Moving the mouse away should hide the hover tooltip').toBeHidden({ timeout: 3000 })
       await tooltipTrigger.focus()
       await expect(tooltipOnHover, 'The same tooltip must also appear when the trigger receives keyboard focus').toBeVisible({ timeout: 3000 })
+    })
+
+    test('tooltip re-hover after hide works cleanly (TRO-594 regression)', async ({ page }) => {
+      // TRO-594: the hover-hide-on-mouse-away race (see the sibling test's
+      // full writeup) is a Radix Tooltip 1.2.8 "hoverable content" grace-area
+      // bug -- the tooltip can get stuck open because the document-level
+      // pointermove listener that would close it attaches asynchronously
+      // (after a React effect commits) and a single-step Playwright mouse
+      // move can race past it, in which case no FURTHER pointermove ever
+      // arrives to retry the close. That race is specific to mouse-away; this
+      // test checks a related but distinct property the same bug class could
+      // also break: that after hiding, the tooltip's internal open/close
+      // state machine is genuinely reset, not left in some stuck
+      // "grace area still armed" state that would prevent a CLEAN re-open on
+      // the next hover.
+      await login(page)
+      await page.goto('/issues')
+      await page.waitForLoadState('networkidle')
+      await page.getByRole('button', { name: 'Kanban view' }).click()
+
+      const card = page.locator('[data-issue]').first()
+      await expect(card, 'Seed data should include at least one issue to render as a kanban card. Run: pnpm db:seed').toBeVisible({ timeout: 5000 })
+      await card.hover()
+
+      const tooltipTrigger = card.getByRole('button', { name: /actions/i })
+      await expect(tooltipTrigger).toBeVisible({ timeout: 3000 })
+      const tooltip = page.getByRole('tooltip')
+
+      await tooltipTrigger.hover()
+      await expect(tooltip, 'First hover should show the tooltip').toBeVisible({ timeout: 3000 })
+
+      await page.mouse.move(0, 0, { steps: 10 })
+      await expect(tooltip, 'Moving away should hide it').toBeHidden({ timeout: 3000 })
+
+      // Re-hover the SAME trigger. If the grace-area state machine were
+      // left stuck (rather than genuinely reset), this could either fail to
+      // reopen at all, or reopen only after an unexpectedly long delay --
+      // this asserts it reopens within the component's own configured
+      // 300ms show-delay (Tooltip.tsx's default `delayDuration`), not just
+      // "eventually, within some generous timeout."
+      await tooltipTrigger.hover()
+      await expect(tooltip, 'Re-hovering after a clean hide should show the tooltip again').toBeVisible({ timeout: 1000 })
     })
 
     test('images do not have redundant alt text', async ({ page }) => {
