@@ -112,7 +112,7 @@
               "private",
               "workspace"
             ],
-            "description": "'private' (creator only) or 'workspace' (all workspace members)."
+            "description": "'private' or 'workspace'. NOTE (CodeRabbit finding, TRO-605): this route does not currently gate on visibility for most fields — id/title/document_type/properties/visibility/created_by/timestamps are returned for any document in the caller's workspace regardless of this value (a pre-existing, disclosed gap, see resources/documents.ts). Only `content` is actually restricted: it is null for a 'private' document the caller did not create."
           },
           "created_by": {
             "type": [

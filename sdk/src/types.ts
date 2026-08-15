@@ -105,7 +105,12 @@ export interface Document {
    *  TRO-605 CodeRabbit finding — this route has no other visibility
    *  enforcement, but `content` can carry real private body text). */
   readonly content: unknown;
-  /** `'private'` (creator only) or `'workspace'` (all workspace members). */
+  /** `'private'` or `'workspace'`. NOTE (CodeRabbit finding, TRO-605): this
+   *  field does not itself gate what a caller can see — most other fields
+   *  (title/properties/visibility/created_by/timestamps) are returned for
+   *  any document in the caller's workspace regardless of this value, a
+   *  pre-existing, disclosed gap in the server route. Only `content` is
+   *  actually restricted by it (see `content`'s own doc comment above). */
   readonly visibility: 'private' | 'workspace';
   readonly created_by: string | null;
   /** ISO 8601 timestamp, or null if this document has never been completed

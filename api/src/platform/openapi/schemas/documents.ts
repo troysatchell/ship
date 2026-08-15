@@ -51,7 +51,7 @@ const DocumentResponseSchema = z.object({
   document_type: DocumentTypeSchema,
   properties: z.record(z.unknown()),
   content: z.unknown().openapi({ description: "TipTap JSON document content (not the Yjs binary collaboration state, which stays internal-only). Null when visibility is 'private' and the caller is not the document's creator." }),
-  visibility: z.enum(['private', 'workspace']).openapi({ description: "'private' (creator only) or 'workspace' (all workspace members)." }),
+  visibility: z.enum(['private', 'workspace']).openapi({ description: "'private' or 'workspace'. NOTE (CodeRabbit finding, TRO-605): this route does not currently gate on visibility for most fields — id/title/document_type/properties/visibility/created_by/timestamps are returned for any document in the caller's workspace regardless of this value (a pre-existing, disclosed gap, see resources/documents.ts). Only `content` is actually restricted: it is null for a 'private' document the caller did not create." }),
   created_by: z.string().uuid().nullable().openapi({ description: 'User id of the document creator, or null.' }),
   completed_at: z.string().datetime().nullable().openapi({ description: 'ISO 8601 timestamp when this document (e.g. an issue) was marked done, or null.' }),
   created_at: z.string().datetime().openapi({ description: 'ISO 8601 creation timestamp.' }),

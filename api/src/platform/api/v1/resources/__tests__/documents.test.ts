@@ -21,6 +21,8 @@ import type { Express } from 'express';
 import crypto from 'crypto';
 import { createApp } from '../../../../../app.js';
 import { pool } from '../../../../../db/client.js';
+import { createOAuthApp } from '../../../../oauth/appRegistration.js';
+import { issueClientCredentialsToken } from '../../../../oauth/token.js';
 
 function sha256Hex(raw: string): string {
   return crypto.createHash('sha256').update(raw).digest('hex');
@@ -746,6 +748,58 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
         expect(row?.visibility).toBe('private');
         expect(row?.created_by).toBe(otherUserId);
         expect(row?.content).toBeNull();
+      });
+
+      // CodeRabbit finding (2nd round, this ticket): `row.created_by === viewerUserId`
+      // alone would treat an ownerless private document (created_by IS NULL)
+      // as visible to a caller with no linked user at all (viewerUserId also
+      // null) — null === null. A client-credentials OAuth token is exactly
+      // that: `principal.user` is null (Client Credentials grants have no
+      // acting user — principal.ts's own doc comment).
+      it('a private, ownerless document (created_by IS NULL) is masked for a client-credentials (app-only, no linked user) caller', async () => {
+        const created = await createOAuthApp({
+          workspaceId,
+          ownerUserId: userId,
+          name: `TRO-605 null-viewer app ${testRunId}`,
+          clientType: 'confidential',
+          redirectUris: [],
+          requestedScopes: ['documents:read'],
+        });
+        if (!created.clientSecret) {
+          throw new Error('expected createOAuthApp to return a raw secret for a confidential client');
+        }
+        const grant = await issueClientCredentialsToken({
+          clientId: created.app.client_id,
+          clientSecret: created.clientSecret,
+          scope: undefined,
+        });
+        if (!grant.ok) {
+          throw new Error(`issueClientCredentialsToken did not succeed: ${grant.error} ${grant.errorDescription}`);
+        }
+
+        const docResult = await pool.query<{ id: string }>(
+          `INSERT INTO documents (workspace_id, title, document_type, content, visibility, created_by, created_at, updated_at)
+           VALUES ($1, 'TRO-605 ownerless private doc', 'issue', $2, 'private', NULL, $3, $3)
+           RETURNING id`,
+          [workspaceId, JSON.stringify(content), new Date(BASE_MS + 67_000)]
+        );
+        const docId = docResult.rows[0]?.id;
+        if (!docId) throw new Error('seed ownerless-private-document insert produced no row');
+
+        const res = await request(app)
+          .get(`/api/v1/documents/${docId}`)
+          .set('Authorization', `Bearer ${grant.accessToken}`);
+
+        expect(res.status).toBe(200);
+        const body = res.body as DocumentBody;
+        expect(body.visibility).toBe('private');
+        expect(body.created_by).toBeNull();
+        expect(
+          body.content,
+          'null created_by must never be treated as matching a null viewerUserId'
+        ).toBeNull();
+
+        await pool.query('DELETE FROM oauth_apps WHERE id = $1', [created.app.id]);
       });
     });
   });

@@ -235,8 +235,18 @@ interface DocumentRow {
 // masked here; every other field's pre-existing (unfixed, disclosed)
 // behavior is left exactly as it was. See CHANGES.md's TRO-605 entry for
 // the full writeup, including what remains unfixed and why.
+//
+// `viewerUserId !== null &&` (2nd CodeRabbit finding, same round): without
+// this guard, a `null === null` comparison would treat an ownerless private
+// document (`created_by IS NULL` — a legacy/system-created row) as "visible"
+// to a caller whose principal has no linked user at all (an app-only
+// OAuth/client-credentials token, `principal.user` undefined) — the exact
+// wrong-direction failure this file's own module docstring already warns
+// against elsewhere (`shipClient.ts`'s "fail closed, never open"). A missing
+// creator and a missing viewer must never be treated as a match.
 function serializeDocument(row: Omit<DocumentRow, 'created_at_precise'>, viewerUserId: string | null) {
-  const contentVisibleToViewer = row.visibility !== 'private' || row.created_by === viewerUserId;
+  const contentVisibleToViewer =
+    row.visibility !== 'private' || (viewerUserId !== null && row.created_by === viewerUserId);
   return {
     id: row.id,
     title: row.title,

@@ -104,19 +104,43 @@ read-path finding and on code this ticket did not author. Flagged for a follow-u
 fixed here (a write-path auth change on a route from a different, already-merged ticket is squarely the
 kind of change this factory's own contract says to escalate, not decide unilaterally, mid-ticket).
 
-**Regression test — red before green, confirmed by temporary revert (not memory), twice: once for the
-widening, once for the CodeRabbit fix.** `api/src/platform/api/v1/resources/__tests__/documents.test.ts`'s
-`describe('TRO-605: ...')` block (7 cases: full round-trip on `GET /:id`, `completed_at: null` for an
-uncompleted doc, `GET /` list carries the same fields, `yjs_state` still never leaks, content masked
-for a different user's private doc (`GET /:id` and `GET /` both), and the creator still sees their own
-private content in full). First revert (the widening itself): `git checkout HEAD --
-api/src/platform/api/v1/resources/documents.ts` then `-t TRO-605` — 4 of 5 then-existing cases failed
-with `AssertionError: expected undefined to deeply equal {...}` / `expected {...} to have property
-'completed_at'`. Second revert (the masking fix, added after CodeRabbit's finding): reverted only the
+**CodeRabbit triage, 2nd round (after merging PF-601/TRO-450 forward) — 2 findings, both fixed.**
+1. **Minor**, `openapi/schemas/documents.ts`: the `visibility` field's OpenAPI description said
+   `'private' (creator only)`, which overclaims — this route does NOT actually gate on visibility for
+   most fields (id/title/document_type/properties/visibility/created_by/timestamps are returned
+   regardless of visibility, the pre-existing disclosed gap above); only `content` is restricted.
+   Fixed by rewording the description (and the matching `sdk/src/types.ts` doc comment) to say exactly
+   what the route does today, instead of what the column name implies it should do — the same
+   unmarked-inference failure CLAUDE.md's claim-provenance rule warns against, caught by CodeRabbit
+   rather than by re-reading my own prose.
+2. **Critical**, `documents.ts`'s `serializeDocument()`: `row.created_by === viewerUserId` alone
+   treats a `null === null` (an ownerless private document, `created_by IS NULL`, viewed by a
+   principal with no linked user — a Client Credentials OAuth token, where `principal.user` is always
+   null per `principal.ts`'s own doc comment) as a MATCH, i.e. NOT masked — the exact wrong-direction
+   failure `shipClient.ts`'s own "fail closed, never open" posture warns against elsewhere in this
+   codebase. Fixed: `viewerUserId !== null && row.created_by === viewerUserId`. New regression test
+   mints a REAL client-credentials token via `issueClientCredentialsToken` (same fixture pattern
+   `me.test.ts` uses for the identical grant type) against an ownerless private document, and asserts
+   `content` is masked — confirmed red before green: reverted only the added `viewerUserId !== null &&`
+   guard, the new test failed with the real private body text returned instead of `null`; restored,
+   passes.
+
+**Regression test — red before green, confirmed by temporary revert (not memory), three times: once
+for the widening, once for each CodeRabbit round.**
+`api/src/platform/api/v1/resources/__tests__/documents.test.ts`'s `describe('TRO-605: ...')` block (8
+cases: full round-trip on `GET /:id`, `completed_at: null` for an uncompleted doc, `GET /` list carries
+the same fields, `yjs_state` still never leaks, content masked for a different user's private doc
+(`GET /:id` and `GET /` both), the creator still sees their own private content in full, and the
+ownerless/client-credentials edge case above). First revert (the widening itself): `git checkout HEAD
+-- api/src/platform/api/v1/resources/documents.ts` then `-t TRO-605` — 4 of 5 then-existing cases
+failed with `AssertionError: expected undefined to deeply equal {...}` / `expected {...} to have
+property 'completed_at'`. Second revert (round-1 CodeRabbit fix): reverted only the
 `content: contentVisibleToViewer ? row.content : null` line back to unconditional `content: row.content`
 — the 2 masking-specific cases failed with `expected {...} to be null` (real private body text
 returned instead of `null`); the "creator sees own content" case correctly still passed (unmasked
-either way). Restored the fix both times; full file: 30/30 pass.
+either way). Third revert (round-2 CodeRabbit fix): reverted only the `viewerUserId !== null &&` guard
+— the new ownerless/client-credentials case failed the same way. Restored the fix each time; full file:
+31/31 pass.
 
 **Other verification run.** `pnpm type-check` (all 8 workspace packages, after `pnpm --filter
 @ship/sdk build` — a fresh worktree has no `sdk/dist` yet, which `integrations/browser-demo` resolves
