@@ -84,16 +84,38 @@ export type DocumentType =
 
 /**
  * Matches `serializeDocument()`'s actual return shape
- * (`api/src/platform/api/v1/resources/documents.ts:108-117`) field-for-field
- * — verified by reading that function before writing this, not guessed from
+ * (`api/src/platform/api/v1/resources/documents.ts`) field-for-field —
+ * verified by reading that function before writing this, not guessed from
  * PLUGFORGE.MD's prose. `properties` is always an object (defaulted to `{}`
- * server-side), never `null`.
+ * server-side), never `null`. `content`/`visibility`/`created_by`/
+ * `completed_at` were widened onto the public response by TRO-605 — see that
+ * ticket for why (PF-702's sdk-mode agent reads were degrading silently
+ * without real values for these). `yjs_state` (the Yjs binary collaboration
+ * state) deliberately stays off this type — genuinely internal, not part of
+ * TRO-605's widening.
  */
 export interface Document {
   readonly id: string;
   readonly title: string;
   readonly document_type: DocumentType;
   readonly properties: Record<string, unknown>;
+  /** TipTap JSON document content — an arbitrary JSON value, not the Yjs
+   *  binary collaboration state. `null` when `visibility` is `'private'`
+   *  and the caller is not the document's creator (server-side masking,
+   *  TRO-605 CodeRabbit finding — this route has no other visibility
+   *  enforcement, but `content` can carry real private body text). */
+  readonly content: unknown;
+  /** `'private'` or `'workspace'`. NOTE (CodeRabbit finding, TRO-605): this
+   *  field does not itself gate what a caller can see — most other fields
+   *  (title/properties/visibility/created_by/timestamps) are returned for
+   *  any document in the caller's workspace regardless of this value, a
+   *  pre-existing, disclosed gap in the server route. Only `content` is
+   *  actually restricted by it (see `content`'s own doc comment above). */
+  readonly visibility: 'private' | 'workspace';
+  readonly created_by: string | null;
+  /** ISO 8601 timestamp, or null if this document has never been completed
+   *  (e.g. any non-issue document, or an issue not yet done). */
+  readonly completed_at: string | null;
   readonly created_at: string;
   readonly updated_at: string;
 }
