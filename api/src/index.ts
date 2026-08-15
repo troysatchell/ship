@@ -44,6 +44,70 @@ async function main() {
   const { systemClock } = await import('./platform/webhooks/clock.js');
   const { pool } = await import('./db/client.js');
 
+  // PF-701 (TRO-423) — boot check: guarantee the first-party
+  // ship_app_fleetgraph OAuth app exists in a deployed environment, per the
+  // PRD's "seeding guaranteed in deployed env (terraform env var + boot
+  // check)". Production-only (same NODE_ENV gate as `loadProductionSecrets`
+  // above and `app.ts`'s SESSION_SECRET check) — local `pnpm dev` never has
+  // FLEETGRAPH_OAUTH_CLIENT_SECRET set, and this must not add log noise or
+  // a startup dependency to every engineer's ordinary dev loop.
+  //
+  // Two states this handles differently, both without ever taking the
+  // whole API down:
+  //
+  // - No workspace exists yet (schema/migrations applied, but `pnpm
+  //   db:seed` has never run against this database) — the legitimate
+  //   pre-first-seed state on a genuinely fresh database, since the
+  //   Docker image's own CMD (`migrate.js && index.js`) never runs
+  //   `db:seed` automatically (confirmed: `db:seed` is a separate,
+  //   operator-run step per `terraform/render/README.md`'s adoption memo).
+  //   Logs an informational line and continues; not an error.
+  // - A workspace exists but `seedFirstPartyApp` throws (secret unset) —
+  //   this is a REAL misconfiguration: `terraform/render/variables.tf`'s
+  //   `fleetgraph_oauth_client_secret` has no default, so `terraform
+  //   apply` forces the operator to supply it, meaning the only way to
+  //   reach this branch in a real deployment is if the value was removed
+  //   from Render's env config after the fact. "Fails loudly" here means
+  //   an unmissable `console.error` — deliberately NOT `process.exit`:
+  //   crash-looping the entire API (every document, every issue, the
+  //   whole web app) over one first-party OAuth app's missing row would be
+  //   a strictly worse outcome than a broken agent-identity flow alone,
+  //   the same fail-partial-not-fail-total posture `routes/agent.ts`
+  //   already takes for its own missing `AGENT_INTERNAL_SECRET` (503s the
+  //   agent-proxy routes only, never refuses to boot). The loud log is
+  //   what makes this visible to Render's dashboard/logs and to PF-901's
+  //   deploy-verification step, without introducing a new single point of
+  //   failure for the whole service.
+  if (process.env.NODE_ENV === 'production') {
+    try {
+      const { seedFirstPartyApp } = await import('./platform/oauth/seedFirstPartyApp.js');
+      const workspaceResult = await pool.query<{ id: string }>(
+        'SELECT id FROM workspaces ORDER BY created_at ASC LIMIT 1'
+      );
+      const workspaceRow = workspaceResult.rows[0];
+      if (!workspaceRow) {
+        console.log(
+          'ship_app_fleetgraph boot check: no workspace exists yet — skipping until the ' +
+            'initial `pnpm db:seed` has run.'
+        );
+      } else {
+        const result = await seedFirstPartyApp(pool, workspaceRow.id);
+        console.log(
+          `ship_app_fleetgraph boot check: ${result.status} (client_id: ${result.clientId})`
+        );
+      }
+    } catch (error) {
+      console.error(
+        'ship_app_fleetgraph boot check FAILED — the first-party FleetGraph OAuth app could not ' +
+          'be seeded/verified. The rest of the API will continue starting, but PF-702+ agent-as-' +
+          'platform-citizen reads (Client Credentials grant) will not work until this is fixed. ' +
+          'Most likely cause: FLEETGRAPH_OAUTH_CLIENT_SECRET is unset in this environment — check ' +
+          'terraform/render/variables.tf\'s `fleetgraph_oauth_client_secret` is actually applied. ' +
+          `Error: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
   const webhookDeliverer = new InMemoryWebhookDeliverer(pool, systemClock);
   // Boot-time crash recovery (docs/architecture.md's "Deliverer crash"
   // section) — restore any attempt that was scheduled but never executed

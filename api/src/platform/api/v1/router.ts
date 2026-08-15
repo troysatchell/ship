@@ -7,9 +7,11 @@ import { issuesRouter } from './resources/issues.js';
 import { sprintsRouter } from './resources/sprints.js';
 import { meRouter } from './resources/me.js';
 import { webhooksRouter } from './resources/webhooks.js';
+import { auditRouter } from './resources/audit.js';
 import { peopleRouter } from './resources/people.js';
 import { changesRouter } from './resources/changes.js';
 import { rateLimitDefaults } from '../../ratelimit/middleware.js';
+import { auditLogMiddleware } from '../../audit/middleware.js';
 
 /**
  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
@@ -25,7 +27,13 @@ import { rateLimitDefaults } from '../../ratelimit/middleware.js';
  *      unauthenticated 401, a 404 from an unmatched route, or a genuinely
  *      public route like `GET /health`. See that file's own doc comment for
  *      the full reasoning.
- *   3. `v1Routes` — every actual `/api/v1` endpoint attaches HERE, not
+ *   3. `auditLogMiddleware` (PF-501, TRO-432) — same "before routing" ordering
+ *      rationale as `rateLimitDefaults` immediately above, applied to the
+ *      public audit trail: it attaches a `res.on('finish')` listener that
+ *      writes one `public_api_audit` row per request, observing every
+ *      response `v1Routes` below produces AND every one it doesn't (401s,
+ *      404s, /health). See `platform/audit/middleware.ts`'s own doc comment.
+ *   4. `v1Routes` — every actual `/api/v1` endpoint attaches HERE, not
  *      directly to `v1Router`. Because Express resolves a mounted router's
  *      own stack at request time (not at mount time), anything added to
  *      `v1Routes` later — a future ticket's resource router (PF-200 etc.),
@@ -36,9 +44,9 @@ import { rateLimitDefaults } from '../../ratelimit/middleware.js';
  *      property: those calls run once, at module-load time, so anything
  *      appended to `v1Router` afterwards would land AFTER the catch-all in
  *      step 4 and be permanently unreachable dead code.
- *   4. `notFoundHandler` — nothing above matched; produces the §2.5
+ *   5. `notFoundHandler` — nothing above matched; produces the §2.5
  *      `not_found` shape (PF-002).
- *   5. `errorMiddleware` — terminal. Catches whatever `notFoundHandler`
+ *   6. `errorMiddleware` — terminal. Catches whatever `notFoundHandler`
  *      forwarded, plus any thrown/forwarded error from a v1 route (PF-002).
  *
  * `api/src/platform/api/v1/**` must never import from `api/src/routes/**`
@@ -50,6 +58,7 @@ export const v1Routes = Router();
 
 v1Router.use(requestIdMiddleware);
 v1Router.use(rateLimitDefaults);
+v1Router.use(auditLogMiddleware);
 v1Router.use(v1Routes);
 
 v1Routes.get('/health', (_req, res) => {
@@ -75,6 +84,9 @@ v1Routes.use('/me', meRouter);
 
 // PF-302 (Linear TRO-431) — webhook subscriptions CRUD + rotation.
 v1Routes.use('/webhooks', webhooksRouter);
+
+// PF-501 (Linear TRO-432) — the public API audit trail.
+v1Routes.use('/audit', auditRouter);
 
 // PF-205 (Linear TRO-414) — the agent's remaining reads: people directory
 // and the public change-feed contract (distinct from webhooks — see

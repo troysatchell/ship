@@ -8,7 +8,12 @@ import { ScopeRegistry } from '../registry.js';
  * behavior a unit test can observe.
  */
 describe('PF-107 AC-5: ScopeRegistry (§2.3, scopes as data)', () => {
-  const SEVEN_SCOPES = [
+  // §2.3 named seven scopes; PF-501 (TRO-432) adds an eighth (`audit:read`)
+  // via exactly the OCP path this file's own header describes — one
+  // `ScopeRegistry.register(...)` call in registry.ts, no other file
+  // changed except this count assertion, which by construction must move
+  // every time a scope is added.
+  const EIGHT_SCOPES = [
     'documents:read',
     'documents:write',
     'issues:read',
@@ -16,16 +21,17 @@ describe('PF-107 AC-5: ScopeRegistry (§2.3, scopes as data)', () => {
     'sprints:read',
     'sprints:write',
     'webhooks:manage',
+    'audit:read',
   ];
 
-  it('registers exactly the seven §2.3 scopes at module load', () => {
+  it('registers exactly the eight scopes at module load', () => {
     const names = ScopeRegistry.names();
-    expect(new Set(names)).toEqual(new Set(SEVEN_SCOPES));
-    expect(names).toHaveLength(7);
+    expect(new Set(names)).toEqual(new Set(EIGHT_SCOPES));
+    expect(names).toHaveLength(8);
   });
 
   it('has() recognizes every registered scope', () => {
-    for (const scope of SEVEN_SCOPES) {
+    for (const scope of EIGHT_SCOPES) {
       expect(ScopeRegistry.has(scope)).toBe(true);
     }
   });
@@ -36,9 +42,9 @@ describe('PF-107 AC-5: ScopeRegistry (§2.3, scopes as data)', () => {
 
   it('list() returns a definition (with a non-empty description) for every scope', () => {
     const definitions = ScopeRegistry.list();
-    expect(definitions).toHaveLength(7);
+    expect(definitions).toHaveLength(8);
     for (const def of definitions) {
-      expect(SEVEN_SCOPES).toContain(def.name);
+      expect(EIGHT_SCOPES).toContain(def.name);
       expect(typeof def.description).toBe('string');
       expect(def.description.length).toBeGreaterThan(0);
     }

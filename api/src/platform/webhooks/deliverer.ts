@@ -151,8 +151,27 @@ export const MAX_EXECUTION_FAILURES = 5;
  * is unconstrained TEXT at the database layer (migration 048's deliberate
  * "events as data" call), so a row's real content is not guaranteed to match
  * the type statically. */
-function isKnownEventType(value: string): value is EventType {
+export function isKnownEventType(value: string): value is EventType {
   return (EVENT_TYPES as readonly string[]).includes(value);
+}
+
+/**
+ * Input to `attemptNow()` — everything a delivery attempt needs, for an
+ * ALREADY-PERSISTED `webhook_deliveries` row (`deliveryRowId`) that isn't
+ * sitting in any in-memory queue. See `attemptNow()`'s own doc comment
+ * (PF-306, TRO-446) for why this exists as a distinct entry point from
+ * `enqueueEvent()`/`processDue()`.
+ */
+export interface ReplayAttemptInput {
+  deliveryRowId: string;
+  subscriptionId: string;
+  eventId: string;
+  eventType: EventType;
+  targetUrl: string;
+  signingSecretCiphertext: string;
+  rawBody: string;
+  idempotencyKey: string;
+  attemptNumber: number;
 }
 
 export interface IWebhookDeliverer {
@@ -179,6 +198,68 @@ export interface IWebhookDeliverer {
    * pending restores 0).
    */
   rehydrate(): Promise<number>;
+  /**
+   * Executes ONE delivery attempt immediately against an already-persisted
+   * `webhook_deliveries` row (`item.deliveryRowId`), bypassing the in-memory
+   * queue and `processDue()`'s due-time gating entirely — PF-306's
+   * `POST /webhooks/deliveries/:id/replay` (TRO-446) needs an HTTP response
+   * that reflects the attempt's real terminal outcome inside the same
+   * request/response cycle, not a future `processDue()` poll tick.
+   *
+   * **Precondition (CodeRabbit, this PR review):** `item.deliveryRowId` must
+   * identify a row currently in the `'pending'` state — freshly inserted for
+   * this exact call, not a row already sitting in a terminal `'success'` or
+   * `'dead'` state. This method does not check that itself (it trusts the
+   * caller, same as `attempt()` trusts `processDue()`'s own queue contents);
+   * calling it against an already-terminal row would silently overwrite that
+   * row's real outcome with whatever THIS attempt produces. The replay route
+   * satisfies this by construction: it always inserts a brand-new `'pending'`
+   * row (never reuses an existing id) immediately before calling this.
+   *
+   * Reuses the exact same signing / HTTP-dispatch / response-truncation /
+   * persistence code path as a normal queued attempt (the private
+   * `attempt()` below, which this is a thin public wrapper over) — this
+   * method is NOT a second delivery implementation. It persists the outcome
+   * to `item.deliveryRowId` exactly the way `attempt()` always has: `success`
+   * (2xx), `dead` (4xx, or a retryable outcome at `attemptNumber >=
+   * MAX_ATTEMPTS`), or `failed` + a NEW `'pending'` sibling row scheduled for
+   * the standard backoff (5xx/timeout below `MAX_ATTEMPTS`).
+   *
+   * One disclosed, accepted consequence of calling this OUTSIDE the
+   * long-running production polling loop: if this attempt schedules a retry
+   * sibling, that new `'pending'` row is written to the database but is NOT
+   * pushed into any LIVE in-memory queue (there isn't one — this call sits
+   * inside a single HTTP request, not `start()`'s interval). It becomes a
+   * perfectly normal `'pending'` row, recovered the exact same way any
+   * `'pending'` row not currently held by a live queue is: a future
+   * `rehydrate()` at the next process boot. This is an existing, already-
+   * documented property of this deliverer's single-instance in-memory-queue
+   * architecture (see this file's own header, and migration 048's) — not a
+   * new gap that replay introduces. Replay callers who want an immediate
+   * second attempt can call replay again.
+   *
+   * A second disclosed consequence (CodeRabbit, `resources/webhooks.ts`'s
+   * own PR review): a caller can pass an `attemptNumber` that is already
+   * `>= MAX_ATTEMPTS` (e.g. replaying a delivery that was already
+   * dead-lettered at attempt 6, with `attemptNumber: 7`). `attempt()`'s
+   * pre-existing logic treats that exactly like a 6th automatic attempt
+   * that failed retryably: dead-lettered immediately, no retry sibling
+   * scheduled. Intentional, not a bug — see `resources/webhooks.ts`'s own
+   * header for the replay-specific framing.
+   *
+   * Can THROW rather than resolve, for the same process/deployment-level
+   * failures `attempt()` itself can throw for (a transient DB error while
+   * persisting the outcome, or a non-deterministic decrypt/sign failure —
+   * see `attempt()`'s own doc comment on its `MalformedCiphertextError`
+   * handling for exactly which failures are rethrown rather than
+   * dead-lettered). Callers driving this from an HTTP request (the replay
+   * route) should catch it: the delivery row this call operates on was
+   * already durably persisted as `'pending'` before this method ran, so a
+   * thrown error here does not mean nothing happened — it means the row is
+   * still `'pending'`, recoverable by a future `rehydrate()`, same as any
+   * other `'pending'` row not currently held by a live queue.
+   */
+  attemptNow(item: ReplayAttemptInput): Promise<void>;
 }
 
 /** One scheduled-but-not-yet-executed attempt, held only in process memory
@@ -508,6 +589,20 @@ export class InMemoryWebhookDeliverer implements IWebhookDeliverer {
     }
 
     return restored;
+  }
+
+  /** See `IWebhookDeliverer.attemptNow()` for the full contract and the
+   * disclosed retry-scheduling caveat. This is a thin, direct pass-through to
+   * `attempt()` — the ONLY difference from a normal queued item is that
+   * `dueAtMs`/`executionFailures` are synthesized here (a fresh attempt has
+   * no prior in-memory execution-failure history to carry, and "now" is
+   * always its own due time by construction, matching a normal enqueue). */
+  async attemptNow(item: ReplayAttemptInput): Promise<void> {
+    await this.attempt({
+      ...item,
+      dueAtMs: this.clock.now(),
+      executionFailures: 0,
+    });
   }
 
   /** Starts the production polling loop: calls `processDue()` on a real

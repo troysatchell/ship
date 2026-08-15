@@ -715,6 +715,7 @@ describe('wireDelivererToEventBus', () => {
       enqueueEvent: vi.fn(async () => 0),
       processDue: vi.fn(async () => 0),
       rehydrate: vi.fn(async () => 0),
+      attemptNow: vi.fn(async () => {}),
     };
   }
 
@@ -761,6 +762,7 @@ describe('wireDelivererToEventBus', () => {
       }),
       processDue: vi.fn(async () => 0),
       rehydrate: vi.fn(async () => 0),
+      attemptNow: vi.fn(async () => {}),
     };
     const onEnqueueError = vi.fn();
     wireDelivererToEventBus(deliverer, bus, onEnqueueError);

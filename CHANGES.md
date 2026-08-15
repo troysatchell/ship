@@ -119,6 +119,679 @@ step (needed by any future `@ship/sdk`-in-a-browser-bundle consumer, not just th
 
 ---
 
+## TRO-423 — PF-701: Seed first-party app ship_app_fleetgraph — idempotent, secret via env, boot check
+
+**Scope note.** In scope: the idempotent seed + its regression test (AC-1), the boot-time check in
+`index.ts`, and confirming the terraform wiring PF-900/TRO-411 already committed. Out of scope,
+per the dispatch brief: E7's actual agent-rewire write path (PF-702+) — this ticket only seeds the
+OAuth app row the agent will later authenticate as.
+
+**Terraform — already done, no `.tf` change needed in this branch.** Verified via grep before
+writing any code: `terraform/render/variables.tf`'s `fleetgraph_oauth_client_secret` (sensitive, no
+default) and both `terraform/render/web_service.tf` and `terraform/render/agent_service.tf`'s
+`FLEETGRAPH_OAUTH_CLIENT_SECRET = { value = var.fleetgraph_oauth_client_secret }` were committed by
+TRO-411/PF-900 ahead of this ticket, with a comment on `web_service.tf` naming this exact ticket
+("PF-701 seed reads this exact name"). This ticket's code reads that same literal env var name via
+an exported constant (never a re-declared literal) — no new terraform variable was invented.
+
+**What was added.**
+
+- `api/src/platform/oauth/seedFirstPartyApp.ts` — `seedFirstPartyApp(pool, workspaceId)`, an
+  idempotent seed for the first-party `ship_app_fleetgraph` app. Structurally close to PF-907's
+  `seedGraderApp.ts` (same `credentials.ts` hash-at-rest handling, same
+  check-then-insert-with-`ON CONFLICT` idempotency backed by the real guarantee — the unique index
+  on `oauth_apps.client_id`, migration 042) but differs in two deliberate ways, both per the
+  pre-implementation test design (TRO-423 Linear comment, ship-test-designer, 2026-08-10):
+  1. **`client_id` is the fixed literal `ship_app_fleetgraph`**, not workspace-derived like the
+     grader app's. No `FLEETGRAPH_OAUTH_CLIENT_ID` terraform var exists anywhere (confirmed by
+     grep) — PF-702's agent code and this seed can only agree on one client_id if it's a shared
+     constant, not a value only the seed computes. Assumes single-tenancy for the deployed grading
+     environment, the same assumption `db/seed.ts`'s "Ship Workspace" lookup already makes.
+  2. **A missing `FLEETGRAPH_OAUTH_CLIENT_SECRET` THROWS**, unlike the grader seed's silent
+     `skipped_no_secret`. Required because this function is also called from `index.ts`'s boot
+     path (see below), where the test design's AC-1 explicitly requires "the boot-seed function
+     throws/refuses rather than falling back to a hardcoded default secret." Callers where an
+     unset secret is an expected, non-error state (`db/seed.ts`, local dev) guard the call with a
+     presence check first rather than relying on the function itself to skip.
+  `requested_scopes` is exactly `['documents:read', 'issues:read', 'sprints:read']` (PLUGFORGE.MD
+  §2.3 / PF-700's scope defense) — never a `:write` or `webhooks:manage` scope. `client_type:
+  'confidential'`, `is_first_party: true`.
+- `api/src/db/seed.ts` — calls `seedFirstPartyApp(pool, workspaceId)` right after the grader-app
+  seed call, guarded by `if (process.env.FLEETGRAPH_OAUTH_CLIENT_SECRET)` so a normal local `pnpm
+  db:seed` run (which never has that var set) is unaffected — same "must not break ordinary local
+  dev" requirement the grader app satisfies, just enforced at this call site instead of inside the
+  seed function (see point 2 above for why).
+- `api/src/index.ts` — production-only (`NODE_ENV === 'production'`) boot check, added right after
+  the webhook-deliverer section's `pool` import: looks up the oldest workspace row; if none exists
+  yet (the legitimate pre-first-`db:seed` state on a freshly migrated database — the Docker image's
+  `CMD` runs `migrate.js && index.js`, never `db:seed`, confirmed against `Dockerfile`), logs an
+  informational line and continues. If a workspace exists, calls `seedFirstPartyApp` — success logs
+  `created`/`exists`; a thrown error (secret unset) is caught and logged as a loud, unmissable
+  `console.error` explaining the likely cause, but does **not** `process.exit` or otherwise stop the
+  rest of the API from starting. This is a deliberate design choice, documented at the call site:
+  Terraform's `fleetgraph_oauth_client_secret` has no default, so reaching this branch in a real
+  deploy means the value was removed from Render's env config after `apply` — worth a loud,
+  visible failure, but crash-looping the *entire* API (every document, every issue, the whole web
+  app) over one OAuth app's missing row would be a strictly worse outcome than a broken
+  agent-identity flow alone. Matches the existing fail-partial-not-fail-total posture
+  `routes/agent.ts` already uses for its own missing `AGENT_INTERNAL_SECRET` (503s only the
+  agent-proxy routes, never refuses to boot) rather than `app.ts`'s hard-throw-on-boot precedent
+  for `SESSION_SECRET` (a var every request genuinely needs, unlike this one).
+
+**Regression tests (red-before-green, observed on this branch, `DATABASE_URL` from
+`.factory-env`/`ship_wt_tro_423`).**
+
+- `api/src/platform/oauth/__tests__/seedFirstPartyApp.test.ts` (8 cases). Test-design source:
+  TRO-423's "Test design (pre-implementation)" Linear comment, AC-1 and AC-2 — both in scope here
+  (unlike PF-907's sibling test, which scoped its AC-2-equivalent out): PF-104's `/oauth/token` and
+  PF-201's `/api/v1/me` are both already merged on `main`, so the full `client_credentials` ->
+  `/api/v1/me` path is real, not stubbed. Red first: temporarily replaced the module with a stub
+  that inserts nothing and always reports `'created'` without touching the database (copied the
+  real file aside to the scratchpad first, per the "never `git stash`" rule — restored from that
+  copy afterward, diffed clean). 7 of 8 cases failed for the right reason (row-count/shape/throw
+  assertions against real DB state — e.g. "expected at least one row, got none", "expected 401 to
+  be 200" — never an import or reference error); the 8th (the negative "wrong secret -> 401" case)
+  passed against the stub too, which is expected and fine for a negative assertion. Restored the
+  real implementation, re-ran: 8/8 green. AC-1 covers: two-calls-in-sequence and concurrent-calls
+  both converge to exactly one row; `is_first_party = true`, `client_type: confidential`,
+  `client_id` starts `ship_app_` (and is exactly `ship_app_fleetgraph`), exactly the three
+  read-only scopes; `client_secret_hash` is the SHA-256 hex digest of the env value, never the raw
+  secret; the env var name is read via the module's own exported constant, never a hardcoded
+  literal in the test; an unset secret throws (asserted via `.rejects.toThrow`) and creates no row.
+  AC-2 covers: a real `POST /oauth/token` (`grant_type=client_credentials`) against the seeded app
+  returns a 200 with an `access_token` and no `refresh_token` field at all, and the returned token
+  used against a real `GET /api/v1/me` shows `user: null`, `app: { client_id: 'ship_app_fleetgraph',
+  name: 'FleetGraph Agent', is_first_party: true }`, and `scopes` equal to exactly the three
+  read-only scopes — the PRD's AC sentence, proven end to end. A second case confirms a wrong
+  `client_secret` gets 401 `invalid_client` and never reaches `/api/v1/me`.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/seedFirstPartyApp.test.ts
+
+# Manual end-to-end sanity check (not the graded proof — a local integration smoke check run
+# during this ticket, against this worktree's own database):
+FLEETGRAPH_OAUTH_CLIENT_SECRET=<any-value> pnpm --filter @ship/api exec tsx src/db/seed.ts
+# → "✅ Created first-party FleetGraph OAuth app (client_id: ship_app_fleetgraph)"
+# re-run the same command → "ℹ️  FleetGraph OAuth app already exists (client_id: ship_app_fleetgraph)"
+```
+
+**Observed vs. derived.** Observed: the 8/8 vitest run above, on this worktree's database, and the
+terraform-file grep confirming the env var wiring already exists. Derived, not run: the actual
+production boot check against a real deployed Render environment — no `terraform apply` was run as
+part of this ticket (explicitly out of scope; that's a human-gated deploy action), so "fresh deploy
+has the app" is proven at the unit/integration level (the seed function + the full grant->`/me`
+path) but not yet observed against the live graded instance. That observation belongs to PF-901's
+deploy-verification step, same split PF-907's own CHANGES.md entry already used for its "portal
+reachable" AC.
+
+**Not verified / explicitly deferred.** The boot check's own behavior against a real production
+process start (no vitest coverage is possible for `index.ts`'s `main()` — it is never invoked by
+any test file in this repo, by design, per that file's own header comment) — covered instead by
+manual reasoning in the code comment and by PF-901's live deploy-verification step per the test
+design's own "not vitest-testable" note.
+
+**Rollback.** Delete `api/src/platform/oauth/seedFirstPartyApp.ts` and
+`api/src/platform/oauth/__tests__/seedFirstPartyApp.test.ts`. In `api/src/db/seed.ts`, remove the
+`seedFirstPartyApp`/`FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR` import and the guarded seed-call block
+added right after the grader-app seed step — the rest of the seed file is unaffected. In
+`api/src/index.ts`, remove the `NODE_ENV === 'production'` boot-check block added right after the
+`pool` import (before the webhook-deliverer section) — the rest of `main()` is unaffected. No
+schema change was made (this ticket writes rows into `oauth_apps`, migration 042, already merged)
+— no migration to revert. No terraform change was made — nothing to revert there either. Any
+FleetGraph app row already seeded into a database can be removed with
+`DELETE FROM oauth_apps WHERE client_id = 'ship_app_fleetgraph' AND is_first_party = true;` (cascades
+to any `oauth_tokens` issued under it via `ON DELETE CASCADE`).
+
+---
+
+## TRO-446 — PF-306: Replay from the delivery log
+
+**No new column existed for linking a replay to its original** — checked before writing any code
+(migration 048, `webhook_deliveries`, has no `replayed_from_id` or equivalent). Added migration
+`050_webhook_deliveries_replay.sql`: a nullable, self-referential `replayed_from_id UUID REFERENCES
+webhook_deliveries(id) ON DELETE SET NULL`, plus a partial index (`WHERE replayed_from_id IS NOT
+NULL`) for "every replay of this delivery" lookups. **Renumbered from 049 to 050 (orchestrator, at
+merge-forward time):** originally written as `049_webhook_deliveries_replay.sql` (048 was the
+highest number at the time this ticket started, per `ls api/src/db/migrations/ | sort -V | tail -5`
+run fresh before writing the file), but PF-501/TRO-432 — built concurrently on a sibling factory
+lane — independently claimed 049 for `049_public_api_audit.sql` and merged to `main` first. A
+genuine migration-number collision between two parallel branches, same class as TRO-421/TRO-425's
+own 045-vs-046 race; resolved the same way: this ticket's migration renumbered to the next free slot
+(050), its own immediate follow-up to 051, and every in-repo reference (this file, the route/SDK doc
+comments, the `migrations-042-043.test.ts` exclusion list) updated to match.
+
+**What changed.** `POST /api/v1/webhooks/deliveries/:id/replay` — looks up the original delivery row
+(workspace-scoped, the same `oauth_apps` join every route in this file already uses), then re-runs it
+through `platform/webhooks/deliverer.ts`'s deliverer with the SAME `idempotency_key` the original
+delivery used (read off the row, never regenerated). Creates a NEW `webhook_deliveries` row —
+`replayed_from_id` pointing at the original, same `event_id`, `attempt_number` continuing that
+event's existing series — and never mutates the original row. Works regardless of the original's
+`status`, `dead` (DLQ) included: the lookup query never filters or branches on status, which is the
+entire point of a DLQ-replay endpoint. Added to `api/src/platform/api/v1/resources/webhooks.ts`
+(same file PF-302/PF-305 already put every other webhooks route in) and registered in
+`api/src/platform/openapi/schemas/webhooks.ts`.
+
+- **Route ordering.** Registered alongside `GET /deliveries`, still before `GET /:id` — same
+  Express-registration-order reasoning that route's own header already documents (a literal
+  `deliveries` path segment has to be registered before the generic `/:id` pattern.) In this specific
+  case segment count (3 vs. 1/2) would already disambiguate it regardless, but grouping stays
+  consistent with the file's existing convention.
+- **Invoking the deliverer, not reimplementing it.** Added `IWebhookDeliverer.attemptNow()` /
+  `InMemoryWebhookDeliverer.attemptNow()` to `deliverer.ts` — a thin public wrapper over the existing
+  private `attempt()` (the same signing/HTTP-dispatch/response-truncation/persistence code path every
+  automatic delivery already uses), so the route never touches HTTP delivery logic directly. The route
+  constructs a fresh `InMemoryWebhookDeliverer` per request (cheap — no I/O in the constructor).
+- **`attempt_number` continuation, not a fresh series.** Migration 048's unique index is keyed on
+  `(subscription_id, event_id, attempt_number)`, and its own header already named "Replay/dedup lookup
+  index (PF-306, not built by this ticket)" against `event_id` — reusing the original's `event_id`
+  (not minting a new one) is what keeps that lookup meaningful for a replay. The next `attempt_number`
+  is computed and inserted in ONE atomic `INSERT ... SELECT` (not a separate read-then-write) —
+  `COALESCE(MAX(attempt_number), 0) + 1` evaluated by the database at insert time. A genuine
+  concurrent race (two replay calls for the same delivery landing at once) can still compute the same
+  next number under READ COMMITTED; resolved by retrying on the unique-index violation (`23505`, up to
+  5 attempts) rather than assumed away — the concurrency argument lessons.md rule 18 asks for.
+- **Disclosed, accepted limitation, corrected and given its own regression test (CodeRabbit, PR #229's
+  review — an earlier version of this entry, and of the route's own code comment, claimed a singleton
+  deliverer would not change this; that claim was wrong and has been retracted).** If a replay's own
+  attempt gets a retryable outcome (5xx/timeout) below `MAX_ATTEMPTS`, `attempt()` schedules a normal
+  `'pending'` retry-sibling row exactly as it would for an automatic delivery. That sibling is written
+  to the database correctly, but `InMemoryWebhookDeliverer` owns a PRIVATE per-instance in-memory
+  `queue` — the sibling is queued only on this route's THROWAWAY instance, discarded the moment the
+  HTTP request returns, and the production singleton (`index.ts`'s `start()`/`processDue()` polling
+  loop) never sees it. A real singleton injected into this route WOULD fix it (its queue is the one
+  actually being polled). Recovered the same way any orphaned `'pending'` row is: a future
+  `rehydrate()` at the next process boot, or an operator calling replay again. Proven, not just
+  claimed: `webhooks.test.ts`'s new "a retryable replay ... schedules a retry sibling that stays
+  un-polled until a process restart" case reproduces the sibling row and its `'pending'`/scheduled
+  state under test. Does NOT affect the primary DLQ-replay use case (`attempt_number` already
+  `>= MAX_ATTEMPTS` never schedules a sibling — see the DLQ-exhaustion test above). Fix filed as
+  **TRO-603** (inject the app's real running deliverer instance into the router) — a
+  `createApp()`/`index.ts` dependency-wiring change bigger than this ticket's scope, not attempted
+  here under this sprint's deadline.
+- **Scope:** `webhooks:manage`, same as every sibling route.
+- **OpenAPI:** `WebhookDeliveryResponseSchema` extended with `replayed_from_id` (nullable UUID) — also
+  surfaced on `GET /deliveries`'s existing rows now, not just the replay response, so the delivery log
+  itself shows which rows are replays. New `registerPath` entry for `POST
+  /webhooks/deliveries/{id}/replay`.
+- **SDK parity (`sdk/src/__tests__/parity.test.ts`).** `webhooks.replayDelivery` was a documented
+  `SDK_EXEMPTIONS` forward-declaration ("PF-306 has not landed yet"); moved to a real
+  `SDK_TO_OPERATION` entry now that the route exists, per that table's own "delete this line" note —
+  required for `tests:sdk` to pass, since the parity suite fails any real OpenAPI operation with no
+  SDK mapping. `sdk/src/resources/webhooks.ts`'s header and `replayDelivery()` doc comment updated to
+  match (route is real now).
+- **SDK-response drift (CodeRabbit, PR #229's review) — the `replayed_from_id` field fixed, the rest
+  still TRO-599's.** `sdk/src/resources/webhooks.ts`'s `WebhookDelivery` interface now declares
+  `readonly replayed_from_id: string | null`, matching the real response this ticket's own route
+  returns. The REST of TRO-599's already-tracked gap (`'dead_letter'` vs. the real `'dead'`, and
+  `event_id`/`idempotency_key`/`response_excerpt`/`next_attempt_at` still missing) is unchanged —
+  fixing one new field this ticket introduces is in scope; repairing the whole pre-existing interface
+  is TRO-599's job, not duplicated here.
+- **Migration 050's DDL split (CodeRabbit, PR #229's review — real finding, fixed for the FK, dismissed
+  with a documented reason for the index).** The FK is now added `NOT VALID` (migration 050) and
+  validated separately (new migration `051_webhook_deliveries_replay_validate_fk.sql`) — the standard
+  two-step pattern that avoids a validated-add's table scan + `SHARE ROW EXCLUSIVE` lock, at zero cost
+  regardless of table size. The index is NOT `CONCURRENTLY` — confirmed via source read that
+  `migrationRunner.ts` wraps every migration in `BEGIN`/`COMMIT`, and `CREATE INDEX CONCURRENTLY`
+  cannot run inside a transaction block at all; using it would need a non-transactional migration mode
+  in the runner itself, a change out of this ticket's scope. Accepted as-is because `webhook_deliveries`
+  has zero rows in every real environment right now (048 only just created it) — the write-blocking
+  window this would avoid is currently negligible. Documented in migration 050's own comments.
+
+**How to run it.**
+
+```bash
+source .factory-env   # or your own DATABASE_URL — pointed at a factory-owned db
+cd api && pnpm exec tsx src/db/migrate.ts    # applies migrations 050 and 051
+cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts
+cd api && npx vitest run src/platform/webhooks/__tests__/deliverer.test.ts
+cd sdk && npx vitest run   # parity.test.ts, resources/__tests__/webhooks.test.ts
+```
+
+**Evidence.**
+- **Observed: regression tests failed before the fix, for the right reason.** Added 8 new `PF-306`
+  test cases to `webhooks.test.ts` (a pre-existing 20-case file). Proved red without `git stash`
+  (banned in this repo) by copying the fixed `webhooks.ts`/`deliverer.ts`/`openapi/schemas/webhooks.ts`
+  aside, reverting those three files to `HEAD` with `git checkout HEAD -- <path>`, and running the
+  suite: 4 of the 8 new cases failed — the two 401/403 auth-gate cases got `expected 404 to be
+  401/403` (the route doesn't exist yet, so no matching Express route means `bearerAuth` never even
+  runs), and the happy-path/DLQ-replay cases got `expected 404 to be 201`. The other 4 new cases
+  (unknown id, malformed id, cross-workspace id) passed even before the fix, incidentally — a
+  non-existent route also 404s, which happens to be the right status for those specific negative
+  cases; the positive cases are what actually prove the route's behavior is new. Not an import error
+  or a typo. Restored the fix from the copies afterward.
+- **Observed: 28 cases (20 pre-existing + 8 new) passed after the fix** —
+  `cd api && npx vitest run src/platform/api/v1/resources/__tests__/webhooks.test.ts` → `28 tests`,
+  all passed. Coverage per the AC: happy-path replay (original `idempotency_key` preserved on both the
+  response AND the real outbound HTTP request the deliverer dispatched — asserted via a stubbed
+  `fetch`, not just the DB row; new row created; original row's `status`/`response_status`/
+  `response_excerpt`/`latency_ms`/`attempt_number`/`idempotency_key` all unchanged afterward); 404 for
+  an unknown id, a malformed non-UUID id, and a cross-workspace id; and the DLQ-replay case (original
+  `status='dead'`, `attempt_number=6` — replay still reaches the subscriber, succeeds, and the
+  original DLQ row stays `'dead'` and unchanged). More cases added across three local CodeRabbit-CLI
+  review rounds (below) plus the deactivated-subscription guard bring the file to **32/32** as of this
+  PR's final state, re-confirmed by re-running the file directly.
+- **Observed:** `deliverer.test.ts` still 13/13 after adding `attemptNow()` to `IWebhookDeliverer` (two
+  hand-built fake-deliverer test doubles in that file needed a same-shape `attemptNow` field to keep
+  compiling — not a behavior change, confirmed by re-running the file).
+- **Observed:** `pnpm --filter @ship/api type-check` and `pnpm --filter @ship/sdk type-check` both
+  clean. No non-null `!`, `as any`, or `as unknown as` added anywhere in this PR.
+- **Observed:** `cd sdk && npx vitest run` (with `DATABASE_URL` from `.factory-env`) → 186/186,
+  including `parity.test.ts`'s full suite — confirms `POST /webhooks/deliveries/{id}/replay` is
+  covered by `SDK_TO_OPERATION`, not left in `SDK_EXEMPTIONS` pointing at a route that now really
+  exists (which would have failed the "operation has a corresponding typed SDK method" check).
+- **Derived, not directly re-verified this ticket:** whether a replay's own scheduled retry-sibling
+  row (the disclosed limitation above) is actually picked up by a real running `index.ts` process at
+  its next restart — `deliverer.test.ts`'s existing `rehydrate()` coverage proves the general
+  mechanism works for any `'pending'` row, and this replay path writes the identical row shape, but
+  this ticket did not spin up a real second process to observe it end to end.
+
+**Local CodeRabbit-CLI review (`scripts/factory/gate.sh`'s G9 step) — 5 findings, 3 applied, 2
+declined with reasons:**
+1. **Major, applied.** `attemptNow()` can genuinely throw (a transient DB error while persisting the
+   outcome, or a non-deterministic decrypt/sign failure — `attempt()`'s own doc comment on
+   `MalformedCiphertextError`), and the route was letting that propagate as an opaque 500 while the
+   NEW delivery row it exists to create had already been durably inserted. Wrapped in try/catch: on
+   failure, log and re-read the row's actual current state (still `'pending'`), and return 201 with
+   that state rather than crashing — the row genuinely was created, so a 500 would misrepresent what
+   happened. New regression test: a ciphertext that's the right length (so it's not the deterministic
+   `MalformedCiphertextError` case) but has one flipped byte, causing a real GCM auth-tag mismatch —
+   same technique `deliverer.test.ts`'s own "GCM auth-tag mismatch ... treated as TRANSIENT" case
+   uses — asserts 201, `status: 'pending'`, `fetch` never called, and the state is durable (re-queried
+   fresh).
+2. **Major, applied (doc + test).** Replaying an already-dead-lettered delivery continues its
+   `attempt_number` past `MAX_ATTEMPTS` (6) — a replay of a delivery already dead at attempt 6 gets
+   `attempt_number: 7`. If THAT replay also gets a retryable outcome (5xx/timeout), `attempt()`'s
+   pre-existing exhaustion rule applies and it goes straight back to `'dead'`, no further retry
+   scheduled — correct (an already-exhausted delivery that fails again is still exhausted), but
+   undocumented and untested. Documented in this route's file header and in `attemptNow()`'s own doc
+   comment (`deliverer.ts`). New regression test: a dead-at-6 original, replayed with a stubbed 503 —
+   asserts the new row is `attempt_number: 7`, `status: 'dead'`, and that exactly two rows exist for
+   the event (no phantom third row).
+3. **Minor, applied (docs only).** The `POST /replay` OpenAPI description and its 201 response
+   description didn't say plainly that 201 means "the row was created / an attempt ran," not "the
+   subscriber accepted it" — a caller has to read `status` for the real outcome. Clarified both
+   descriptions in `platform/openapi/schemas/webhooks.ts`; `docs/openapi.json` regenerated
+   (`pnpm --filter @ship/api openapi:generate:v1`).
+4. **Minor, declined.** Suggested changing the SDK's `WebhookDelivery.status` literal from
+   `'dead_letter'` to `'dead'`. Correct that it's wrong, but it is the SAME pre-existing drift this
+   PR's own header/CHANGES.md text already extensively discloses (TRO-599, `lessons.md` rule 28) —
+   this ticket's own brief explicitly says to disclose that class, not fix it ("don't go fix unrelated
+   pre-existing SDK types, that's TRO-599's job"). Declined for scope discipline, not disagreement;
+   TRO-599 owns the actual fix.
+5. **Trivial, declined — verified technically incorrect for this codebase, not just out of scope.**
+   Suggested `CREATE INDEX CONCURRENTLY` for migration 050's `idx_webhook_deliveries_replayed_from_id`.
+   Checked `api/src/db/migrationRunner.ts:234-237` before applying anything: every migration file runs
+   as `BEGIN` / the full file's SQL / `COMMIT` on one connection, and `CREATE INDEX CONCURRENTLY`
+   cannot execute inside a transaction block (PostgreSQL rejects it outright) — applying this
+   suggestion would have broken the migration, not just been unnecessary. Left as the original
+   non-concurrent `CREATE INDEX IF NOT EXISTS`.
+
+**Second local CodeRabbit-CLI review (after the fixes above) — 4 more findings, 1 applied, 3
+declined with reasons:**
+1. **Trivial, applied (docs only).** `attemptNow()`'s own doc comment didn't state its precondition
+   explicitly: `item.deliveryRowId` must be a row currently `'pending'`, not an already-terminal one —
+   the replay route satisfies this by construction (always inserts a fresh `'pending'` row immediately
+   before calling it), but the contract wasn't written down. Added to `deliverer.ts`'s doc comment.
+2. **Major, declined.** Suggested adding `replayed_from_id` to the SDK's `WebhookDelivery` interface —
+   purely additive, leaving the disputed `dead_letter`/`dead` mismatch alone. Defensible on its own,
+   but declined for the same scope-discipline reason as finding #4 above and for consistency with this
+   exact sprint's own precedent: PF-305 (TRO-442) added new response fields to this same real endpoint
+   shape and chose disclosure over a partial fix, for the identical reason this ticket's own brief
+   states explicitly for "the field you're adding." Fixing one field now while five others (from
+   PF-305) and the wrong enum value stay broken would leave the interface in a worse, partially-patched
+   state than either "fully wrong" or "fully right" — TRO-599 owns doing this once, completely.
+3. **Minor, declined — verified against this codebase's own convention, not just judgment.** Suggested
+   adding a 500 (`server_error`) OpenAPI response to the replay operation. Checked first: `grep -rn
+   "500:" api/src/platform/openapi/schemas/*.ts` returns zero matches — no route in this file, or
+   anywhere else in the `/api/v1` registry, documents a 500 response, even though every route can reach
+   `serverError()` via the same `resolveWorkspaceOrThrow`/`resolveWorkspaceOrNull` defensive guards this
+   route also uses. Adding one only here would be a one-route deviation from a consistent,
+   codebase-wide, evidently deliberate convention, not a genuine gap unique to this endpoint.
+4. **Trivial, declined — the concern is already satisfied, verified rather than assumed.** Suggested an
+   explicit timeout on the replay's `attemptNow()` call, shorter than the API's proxy/gateway budget.
+   The route already gets `InMemoryWebhookDeliverer`'s default per-attempt timeout (`DEFAULT_ATTEMPT_
+   TIMEOUT_MS`, 10s — module-private, not currently exported) automatically, since no `options.timeoutMs`
+   override is passed; this is the identical bound every automatic delivery attempt already uses, and
+   it applies to exactly ONE HTTP attempt here (not the automatic pipeline's compounding multi-attempt
+   backoff schedule rule 27 in `lessons.md` warns about), so the total request time is bounded at
+   roughly 10s plus a few single-digit-ms DB round trips — comfortably under any typical gateway/proxy
+   timeout (ALB/CloudFront defaults are 30-60s). Passing an explicit `{ timeoutMs: 10_000 }` would
+   duplicate the existing default with no behavior change.
+
+**Hosted GitHub CodeRabbit review (landed after the two local-CLI rounds above and the PR's manual
+self-review comment — the orchestrator's own triage, not the building agent's) — 3 findings, all
+Major, 2 fixed for real, 1 partially fixed:**
+1. **Major, fixed.** The migration-DDL finding covered by round-1 finding #5 above only addressed
+   half the picture (declined `CONCURRENTLY` on the index, correctly — see #5). The hosted review
+   additionally, and correctly, flagged the FK add itself: `ADD COLUMN ... REFERENCES ... ON DELETE
+   SET NULL` with no `NOT VALID` takes a validated-add's `SHARE ROW EXCLUSIVE` lock and scans the
+   table. Fixed by splitting into `ADD COLUMN` (no FK) + `ADD CONSTRAINT ... FOREIGN KEY ... NOT
+   VALID` in migration 050, plus a new `051_webhook_deliveries_replay_validate_fk.sql` running
+   `VALIDATE CONSTRAINT` (`SHARE UPDATE EXCLUSIVE`, compatible with concurrent writes) — the standard
+   two-step pattern. Verified by hand: reset this worktree's test database's migration state for 050 (originally numbered 049, before the renumbering above),
+   re-ran `pnpm --filter @ship/api db:migrate` with the edited 050 + new 051 (first attempt hit a real
+   syntax error — Postgres does not accept `NOT VALID` on the inline column-level `REFERENCES`
+   shorthand, only on an explicit `ADD CONSTRAINT`; fixed and re-verified clean), then confirmed via
+   `\d webhook_deliveries` and `SELECT convalidated FROM pg_constraint` that the resulting schema is
+   identical to before (same FK, same behavior) and the constraint ends up validated (`convalidated =
+   t`). The index itself stays non-concurrent — confirmed by source read of `migrationRunner.ts` that
+   `CREATE INDEX CONCURRENTLY` cannot run inside its per-migration `BEGIN`/`COMMIT` transaction at all
+   (a runner-level change, out of scope); accepted because `webhook_deliveries` has zero rows in every
+   real environment right now, so the write-blocking window is currently negligible.
+2. **Major, fixed (comment correction + test, not the underlying architecture — filed as TRO-603).**
+   The agent's own reasoning in the code comment above `deliverer.attemptNow()` ("a singleton would
+   not change" the retry-sibling limitation) was independently re-verified against `deliverer.ts`'s
+   source and found to be **wrong**: `InMemoryWebhookDeliverer` owns a PRIVATE per-instance `queue`
+   array — a retry sibling scheduled on this route's throwaway instance genuinely never reaches the
+   production singleton's (`index.ts`) live-polling `processDue()` loop, which only drains its OWN
+   instance's queue. A real shared instance injected into this route WOULD close the gap. Corrected
+   the code comment to state this precisely (not the retracted claim). Added a regression test
+   (`webhooks.test.ts`, "a retryable replay ... schedules a retry sibling that stays un-polled until a
+   process restart") that reproduces the orphaned sibling row under test — proof this is documented,
+   known behavior, not an unverified claim in a comment. The actual fix (inject `index.ts`'s real
+   running deliverer into the router instead of constructing a throwaway one) touches `app.ts`,
+   route-mounting, and every test that calls `createApp()` directly — an architecture change bigger
+   than this ticket's scope under this sprint's deadline. Filed as **TRO-603**. Confirmed narrow: does
+   NOT affect the primary DLQ-replay path (`attempt_number >= MAX_ATTEMPTS` never schedules a sibling
+   at all — proven by the existing DLQ-exhaustion test above).
+3. **Major, partially fixed.** Re-raised round-2 finding #2's suggestion (add `replayed_from_id` to
+   the SDK's `WebhookDelivery` interface) with the hosted review's own severity read (Major, not the
+   local CLI's judgment call). Re-triaged rather than assumed still-declined: added JUST
+   `replayed_from_id` (the one field this ticket's own route introduces) to the interface, leaving the
+   REST of the pre-existing gap (`'dead_letter'`/`'dead'`, four other missing fields — TRO-599's) where
+   it was. This splits the difference between the local round's "decline entirely, TRO-599 owns it
+   all" and the hosted review's "fix the one field this PR is responsible for" — the field this PR
+   itself introduces is this PR's to declare correctly; the pre-existing four-field gap PF-305 already
+   disclosed is still TRO-599's to fix once, completely, not piecemeal.
+
+**Third local CodeRabbit-CLI review (after the migration renumbering + merge-forward from
+TRO-432/PF-501) — 5 findings, 2 fixed for real, 1 doc cleanup, 1 bookkeeping cleanup, 1 declined:**
+1. **Major, real bug, fixed.** The replay lookup query joined `webhook_subscriptions` but never
+   checked `active` — replaying a delivery whose subscription had since been deactivated
+   (`DELETE /:id`, a soft `active = false`, not a hard delete — this file's own header) would still
+   fire a real HTTP POST to `target_url`, exactly what the owner turned the subscription off to stop.
+   Fixed: the lookup now requires `ws.active`, 404ing the same as an unknown delivery id (this route's
+   existing fail-closed convention — replay history isn't distinguishable from "not found" here).
+   `GET /deliveries` (the history view) intentionally still shows these rows regardless of `active` —
+   only replay (an active re-send) needed the guard. New regression test: deactivate a subscription via
+   the real `DELETE /:id` route, then attempt replay — asserts 404, and that `fetch` was never called
+   (the strongest possible proof nothing was sent), plus confirms the row still shows up in
+   `GET /deliveries` (deactivation doesn't hide history).
+2. **Major, declined — same TRO-599 class, already triaged, re-raised by a fresh CLI run seeing the
+   post-renumbering diff.** Suggested the full `WebhookDelivery` SDK-type repair again (status enum,
+   4 missing fields). Already addressed in the "Hosted GitHub CodeRabbit review" section above —
+   `replayed_from_id` added, the rest is TRO-599's. No new information this round.
+3. **Trivial, applied (docs only).** Migration 050's comment about declining `CREATE INDEX
+   CONCURRENTLY` had a garbled trailing sentence fragment ("Filed as TRO-599's sibling class isn't
+   right...") left over from an earlier edit pass — cleaned up to read as one coherent sentence, no
+   content change.
+4. **Minor, applied (bookkeeping).** `scorecard.jsonl`'s two TRO-446 rows written before the migration
+   renumbering (below) still said "migration 049"/"050" — updated to cross-reference the renumbering
+   rather than read as contradicting the CHANGES.md entry above them.
+5. **Minor, declined — verified against this codebase's actual convention, not just judgment.**
+   Suggested guarding migration 050's `ADD CONSTRAINT` with a `pg_constraint` existence check (the
+   pattern `025_prevent_circular_parent.sql` uses). Checked that file's own comment first: its guard
+   exists because `schema.sql` **also** declares the identical constraint inline, so a database built
+   fresh from `schema.sql` genuinely already has it before that migration runs — a real dual-code-path
+   scenario. `webhook_deliveries_replayed_from_id_fkey` has no such second code path; it is only ever
+   created by this one migration, tracked exactly once in `schema_migrations`. Guarding it would mask
+   a genuine operator error (the migration re-run by mistake) rather than handle a legitimate
+   pre-existence case. Declined as inapplicable to this migration's actual situation, not a blanket
+   rejection of the pattern.
+
+**Fourth local CodeRabbit-CLI review (after the round-3 fixes above) — 3 findings, 2 applied
+(bookkeeping/test), 1 declined:**
+1. **Major, declined — same TRO-599 class, 3rd re-raise, no new information.** Full `WebhookDelivery`
+   SDK-type repair suggested again; already addressed above.
+2. **Minor, applied.** This entry's own test-count claim (30/30) was stale — re-ran the file fresh:
+   **32/32** (round 3 added one more case). Fixed here; the migrate-command snippet's stale "applies
+   migration 050" (pre-renumbering wording) corrected to "applies migrations 050 and 051."
+3. **Trivial, applied.** Added a `GET /deliveries` list-serializer assertion to the happy-path replay
+   test, confirming `replayed_from_id` is exposed there too, not just on the `POST /replay` response —
+   a genuinely separate code path (the list route's own serializer) that the existing tests hadn't
+   independently covered.
+
+**Migration renumbering (orchestrator, at merge-forward time — see the note at the top of this
+entry).** Originally `049_webhook_deliveries_replay.sql` + `050_webhook_deliveries_replay_
+validate_fk.sql`; renumbered to `050_`/`051_` after discovering PF-501/TRO-432 (a sibling factory
+lane, built concurrently) had independently claimed 049 and merged first. `git mv` preserves file
+history; every in-repo reference updated (this entry, the route/SDK doc comments,
+`migrations-042-043.test.ts`'s exclusion list, the two scorecard rows above). Verified by resetting
+this worktree's database migration state and re-running `pnpm --filter @ship/api db:migrate` clean in
+the resulting 049 (public_api_audit) → 050 (replay) → 051 (validate) order.
+
+**Not verified / explicit gaps.** No live end-to-end proof against a real subscriber process (this
+PR's tests stub `fetch`, same test-double boundary `deliverer.test.ts` itself already accepts — see
+that file's own header). PF-801 (named in this ticket's own brief) is the future e2e proof that a real
+subscriber recognizes the replayed `Idempotency-Key` as a duplicate of the original delivery; nothing
+in this PR can substitute for that. The SDK `WebhookDelivery` interface's pre-existing drift
+(TRO-599) is not repaired here — `replayed_from_id` was added (see the hosted-review triage above),
+the other four fields and the `'dead_letter'`/`'dead'` mismatch remain TRO-599's to fix. TRO-603
+(retry-sibling orphaning on replay) is real, documented, and tested, but not fixed in this PR.
+
+**Roll back.** Revert the merge of `feat/pf-306-replay-endpoint`. Runtime implementation is confined
+to: `api/src/db/migrations/050_webhook_deliveries_replay.sql` + `051_webhook_deliveries_replay_
+validate_fk.sql` (both new, additive — `ADD COLUMN`/`ADD CONSTRAINT ... NOT VALID`/`VALIDATE
+CONSTRAINT`/`CREATE INDEX IF NOT EXISTS`, safe to leave applied even if the route is reverted, since
+`replayed_from_id` merely goes unused), `api/src/platform/webhooks/deliverer.ts` (added
+`ReplayAttemptInput` type + `attemptNow()` on the interface and class — additive, no existing method
+changed), `api/src/platform/api/v1/resources/webhooks.ts` (one added `webhooksRouter.post
+('/deliveries/:id/replay', ...)` block, plus `replayed_from_id` added to the existing delivery
+row/serializer), and `api/src/platform/openapi/schemas/webhooks.ts` (one added field on
+`WebhookDeliveryResponseSchema` + one added `registerPath`). Reverting the merge also restores the
+regression tests, `sdk/src/__tests__/parity.test.ts`'s mapping (reverts `webhooks.replayDelivery` back
+to an `SDK_EXEMPTIONS` entry — correct once the route is gone again), `sdk/src/resources/webhooks.ts`'s
+doc comments and its `replayed_from_id` field, and this `CHANGES.md` entry. To roll back the database
+independently of a code revert: `ALTER TABLE webhook_deliveries DROP COLUMN IF EXISTS
+replayed_from_id;` (the FK and partial index drop automatically with the column) — safe because the
+column is additive and nullable, so no other code path depends on it existing.
+
+---
+
+## TRO-432 — PF-501: Public API audit trail
+
+**Migration number correction.** PLUGFORGE.MD §2.2 lists this table under "migration 046", but that
+number was already consumed by `046_oauth_device_codes_polling.sql` (PF-105/PF-106) by the time this
+ticket started. Verified fresh via `ls api/src/db/migrations/ | sort -V | tail -5` before writing
+anything (044/045/046/047/048 all taken) — used `049_public_api_audit.sql`. Same renumbering
+situation 046/047/048 already document in their own headers for PF-105/106/302/304.
+
+**What changed.** `public_api_audit` (migration 049): `id`, `request_id`, `app_client_id`,
+`user_id`, `method`, `route`, `scope_used`, `status`, `latency_ms`, `created_at` — the exact §2.7
+column list. No foreign keys on `app_client_id`/`user_id` — an audit trail must survive the
+app/user it describes being deleted, unchanged.
+
+`auditLogMiddleware` (`api/src/platform/audit/middleware.ts`) is mounted globally on `v1Router`,
+immediately after `rateLimitDefaults` and before `v1Routes` — the same "run before routing"
+position `rateLimitDefaults` already uses to guarantee its own header on 100% of responses, applied
+here so a `public_api_audit` row is written for literally every `/api/v1` response: `GET /health`,
+`GET /openapi.json`, a 401 from `bearerAuth` before any route matched, a 404 from the catch-all, and
+every real route. The write happens inside `res.on('finish')` — strictly after the response is
+already sent, so it can never add latency to a caller's request — and is itself awaited internally
+with its failure logged, so it is never silently dropped even though it never blocks the response.
+`scope_used` is populated by a one-line addition to the existing `requireScope(scope)` middleware
+(`platform/scopes/requireScope.ts`): it now sets `req.auditScopeUsed = scope` unconditionally,
+before the pass/fail branch, so the value reflects what was actually checked for that request
+(including a 403), not what the route would check on a successful path.
+
+`GET /api/v1/audit` (`api/src/platform/api/v1/resources/audit.ts`) is the read side — cursor-paginated
+(`{ data, next_cursor }`), gated by `requireScope('audit:read')` (new scope, registered in
+`platform/scopes/registry.ts`, bringing the registry from seven scopes to eight) plus an
+**admin/owner** role check the scope alone cannot express — `api-tokens.ts` lets any user self-mint
+a personal token requesting any registered scope, so holding `audit:read` proves nothing about the
+caller's role. This schema has no distinct `owner` role (`workspace_memberships.role` is `CHECK
+(role IN ('admin', 'member'))`), so this ticket maps the PRD's two words onto the two elevated-access
+concepts that already exist in the codebase — a binding design decision, documented at length in
+`resources/audit.ts`'s own header:
+
+- **"owner"** → `users.is_super_admin` — sees every workspace's rows, unscoped.
+- **"admin"** → `workspace_memberships.role = 'admin'` for the caller's own resolved workspace, or a
+  **first-party** app credential (Client Credentials, no acting user — no human to check a role
+  against) — both scoped to exactly that one workspace. A third-party app credential is rejected
+  regardless of which scopes its token holds.
+
+Row visibility for a non-owner caller is scoped to their own workspace: every row whose
+`app_client_id` belongs to one of that workspace's `oauth_apps`, plus every NULL-`app_client_id`
+(personal-token) row whose `user_id` is a member of that workspace. Optional `?app_client_id=`
+filter is the AC's literal "queryable per app" — this is Epic 7's proof surface (PF-704 greps this
+table for a specific agent's `client_id`), so `app_client_id` is a plain queryable TEXT column, not
+buried in a JSON blob.
+
+OpenAPI registration: `api/src/platform/openapi/schemas/audit.ts`, wired into `schemas/index.ts` —
+PF-203's route-fitness test walks the live router and fails on any unregistered route.
+
+**A real, pre-existing bug found while writing this ticket's own tests — fixed LOCALLY for this
+route, filed as a follow-up for the rest.** `platform/api/v1/pagination.ts`'s `encodeCursor`
+serializes a cursor via `row.created_at.toISOString()`, which is **millisecond** precision.
+Postgres's own `timestamptz` column retains **microsecond** precision. Two rows landing in the same
+millisecond — reliably reproducible against this ticket's local Docker Postgres with ordinary
+sequential awaited inserts, not a rare race — can put a not-yet-fetched row on the wrong side of a
+millisecond-truncated cursor boundary and drop it from pagination **silently and permanently**.
+Confirmed directly: a temp-table repro showed a row's own real timestamp (`...532037`) failing its
+own truncated-to-`...532000` cursor comparison. This is shared infrastructure used by every
+`/api/v1` list route — documents, issues, sprints, webhooks, webhooks/deliveries, and audit.
+
+CodeRabbit's review independently found the same defect (major severity) and pointed at a fix
+scoped to this route alone, without touching the shared `pagination.ts` module: `resources/audit.ts`
+now selects `created_at::text AS created_at_precise` alongside the ordinary `created_at` column.
+`::text` casts server-side, before the value ever reaches `pg`'s lossy `timestamptz`-to-`Date`
+parser, so the wire type becomes plain `text` and `pg` returns it verbatim — Postgres's own
+canonical output format, which Postgres parses back losslessly when bound as the cursor's `WHERE
+(created_at, id) < ($1, $2)` parameter. The public response shape is unchanged (`created_at` in the
+JSON body is still the ordinary millisecond ISO string); only the internal cursor uses the precise
+value. `documents`/`issues`/`sprints`/`webhooks`/`webhooks/deliveries` still carry the shared bug —
+filed as **TRO-602** (linked from this ticket), since fixing those needs its own regression tests
+per consuming resource, out of scope for PF-501 itself. This ticket's own pagination test also
+still seeds rows with explicit, second-spaced `created_at` values (belt-and-braces, not load-bearing
+now that the precision fix is in) so it proves `audit.ts`'s WHERE/ORDER BY/cursor wiring
+deterministically either way.
+
+**Proof (AC, verbatim: "rows carry request_id/app/user/route/scope/status/latency; queryable per
+app").**
+- `api/src/platform/audit/__tests__/middleware.test.ts` — `writeAuditRow` unit tests (every column,
+  nullable fields tolerated), plus two HTTP round-trip proofs that the middleware is actually wired
+  in: a genuinely public route (`GET /health`, no principal/scope) and a 401 rejected before any
+  scope check runs (`scope_used` stays null — proves it reflects what was *checked*, not what the
+  route *would* check).
+- `api/src/platform/api/v1/resources/__tests__/audit.test.ts` — the full admin/owner authorization
+  matrix: 401 no token, 403 missing scope, 403 a token that *holds* `audit:read` but belongs to a
+  plain member (not admin/owner), 403 a third-party app credential despite holding the scope;
+  workspace isolation (an admin never sees another workspace's rows; a super-admin sees every
+  workspace; a first-party app is scoped to its own workspace); the `?app_client_id=` filter; cursor
+  pagination (round-trips a full multi-page walk); an invalid-cursor 400; and a proof that the audit
+  endpoint's own call is itself recorded with `scope_used = audit:read`.
+- `document.test.ts`/`endpoint.test.ts` — `/audit` added to the hand-maintained OpenAPI path lists
+  PF-203/PF-302 already established this pattern for.
+- `api/src/test/setup.ts` — `public_api_audit` added to the per-file `TRUNCATE` list. It carries no
+  foreign keys (by design — see above), so `TRUNCATE ... CASCADE` on `workspaces`/`users` never
+  reaches it the way it reaches `oauth_apps`/`api_tokens`/`webhook_subscriptions`; without this fix
+  it would accumulate rows across every file in one `pnpm test` run.
+
+**`@ship/sdk` follow-through (found by `gate.sh`, not this ticket's own AC).** PF-405's parity
+fitness test (`sdk/src/__tests__/parity.test.ts`) fails any registered `/api/v1` operation with no
+typed SDK method and no documented exemption — `GET /audit` is a substantive domain resource, not an
+infra/meta endpoint, so it earns a real method rather than an `OPENAPI_EXEMPTIONS` entry (that table
+is reserved for the `/health`/`/openapi.json` case, per its own header). Added `AuditClient` (one
+method, `list()` — the server registers only `GET /audit`), wired into `ShipClient` as `.audit`, and
+added to `parity.test.ts`'s discovery groups + `SDK_TO_OPERATION` table. Tested two ways:
+`sdk/src/resources/__tests__/audit.test.ts` (mocked-`fetch` request shape, `webhooks.test.ts`'s
+established pattern) and `sdk/src/__tests__/audit.liveServer.test.ts` (a real TCP round trip against
+`createApp()` — an owner/super-admin success and a plain-member 403; the full admin/owner/first-party
+matrix is already exhaustive server-side, not re-duplicated here).
+
+**`docs/openapi.json` regenerated (found by forward-merging main, not this ticket's own AC).**
+PF-204's drift-check test (`generate-v1-openapi.test.ts`) failed for real, standalone, after
+merging PF-205 (Linear TRO-414, landed on `main` mid-PR): the committed `docs/openapi.json`
+snapshot predates this ticket's `/audit` route, so the in-process registry and the committed file
+disagreed. Regenerated via `pnpm generate:openapi`; `pnpm --filter @ship/api openapi:check:v1`
+confirms no drift.
+
+**CodeRabbit triage (10 findings, all real reviewer output once the sprint's capacity limit
+cleared — not self-review; earlier `gate.sh` runs this same session hit `rc=1`/rate-limited,
+recorded in `audit/factory/scorecard.jsonl`).** Fixed (6):
+1. **[major]** Cursor precision loss (`resources/audit.ts`) — the same defect this entry's
+   pagination paragraph above already discloses; CodeRabbit found it independently and the fix
+   above is exactly its suggestion. Filed **TRO-602** for the four other routes.
+2. **[minor]** `routeOf()` (`platform/audit/middleware.ts`) had no length bound on an
+   attacker-reachable, unauthenticated value (`req.originalUrl`, read before `bearerAuth` can
+   reject anything) written into an unbounded `TEXT` column. No "established maximum route
+   length" constant actually existed elsewhere in this codebase (checked, none found — the
+   finding's own phrasing assumed one); added `MAX_ROUTE_LENGTH = 2048` as a new, documented
+   constant and truncate to it.
+3. **[minor]** Aborted requests (client disconnects before the server finishes) never fired
+   `res.on('finish')` and were silently absent from the audit trail — a real gap against "records
+   EVERY v1 call." Added a `res.on('close', ...)` handler sharing the same write path, guarded by
+   a `written` flag so a normal completion (which fires both `finish` and `close`) is never
+   recorded twice. Documented that `status` for an aborted request reflects the server's last
+   intended status, not proof of delivery.
+4. **[minor]** `sdk/resources/audit.ts`'s doc comment claimed a 403 throws `ShipSdkError` with
+   `kind: 'auth'` — wrong; the server's `forbidden` `ApiErrorCode` maps to `kind: 'forbidden'`
+   (`errors.ts#CODE_TO_KIND`), which is what this PR's own tests already asserted correctly. Fixed
+   the comment to match the code and tests, and to state the actual 401-vs-403 split.
+5. **[major]** `sdk/src/__tests__/audit.liveServer.test.ts`'s setup assigned `app.listen(0)`
+   directly to the outer, nullable `server` variable before use. Changed to the same
+   "local `const liveServer` first, assign to `server` for teardown after" shape the file's own
+   `afterAll` already uses.
+6. **[trivial]** `resources/__tests__/audit.test.ts` had no test proving the `?app_client_id=`
+   filter can't be used to escape workspace scoping (i.e., an admin passing another workspace's
+   `app_client_id` gets an empty page, not a leak) — the implementation was already correct, only
+   the proof was missing. Added.
+
+Also applied without a numbered finding: `platform/audit/__tests__/middleware.test.ts`'s raw
+`pool.query('SELECT * ...')` rows were an implicit `any` (this project's largest recurring
+type-safety class per `lessons.md`) — added an `AuditDbRow` interface and `pool.query<AuditDbRow>`,
+plus a `requireRow()` throw-on-missing helper for the `noUncheckedIndexedAccess` errors that typing
+correctly surfaced.
+
+Dismissed (2), both trivial, both premature optimization with no evidence of a real problem yet:
+1. Merge `resolveAuditAccess`'s two sequential queries (`users.is_super_admin`, then
+   `workspace_memberships.role`) into one `LEFT JOIN`. The current shape is a deliberate fast-path:
+   the common super-admin case returns after ONE indexed lookup; a join would run both lookups
+   unconditionally on every request, including that fast path. Two cheap indexed reads over one
+   unconditional join is not a shown regression to fix.
+2. Add a composite `(app_client_id, created_at DESC, id DESC)` index. The migration already has
+   the two indexes this route's queries actually use (`idx_public_api_audit_app_client_id`,
+   `idx_public_api_audit_created_at_id`); the suggestion's own text asks for `EXPLAIN ANALYZE`
+   validation "against a realistic dataset" before committing to it, which this ticket has none of
+   yet — premature indexing on an empty table is YAGNI, not correctness.
+
+**Not verified.** Production-scale row volume/retention — this ticket writes and reads correctness,
+not the storage-growth question PF-905 (AI cost analysis, retention windows) is scoped to answer.
+
+**How to run it.**
+
+```bash
+pnpm --filter @ship/api exec vitest run \
+  src/platform/audit/__tests__/middleware.test.ts \
+  src/platform/api/v1/resources/__tests__/audit.test.ts \
+  src/platform/scopes/__tests__/registry.test.ts \
+  src/platform/api/v1/__tests__/route-fitness.test.ts \
+  src/platform/openapi/__tests__/document.test.ts \
+  src/platform/openapi/__tests__/endpoint.test.ts
+
+pnpm --filter @ship/sdk exec vitest run \
+  src/__tests__/parity.test.ts \
+  src/resources/__tests__/audit.test.ts \
+  src/__tests__/audit.liveServer.test.ts
+```
+
+**Rollback.** Revert this PR's commit(s). The migration is additive-only (`CREATE TABLE IF NOT
+EXISTS`, no altered/dropped columns on any existing table) — dropping `public_api_audit` by hand
+(`DROP TABLE IF EXISTS public_api_audit;`) is safe on any database, since nothing references it via
+foreign key by design. Unmount `/api/v1/audit` by removing its line in `platform/api/v1/router.ts`
+(and the `auditLogMiddleware` mount immediately above it, if disabling audit logging entirely) and
+its `schemas/audit.js` export in `platform/openapi/schemas/index.ts`. Removing the
+`req.auditScopeUsed = scope;` line from `requireScope.ts` is safe independently — it only affects
+what `scope_used` records, never authorization behavior. On the SDK side, removing `.audit` from
+`ShipClient` requires also removing the `audit.list` entry from `parity.test.ts`'s
+`SDK_TO_OPERATION` table and the `audit.` group from `discoverSdkMethods()` — otherwise that suite
+fails on a stale key rather than cleanly reverting.
+
+---
+
 ## TRO-503 (PF-103 follow-up) — CloudFront had no `ordered_cache_behavior` for `/oauth/*`, so the OAuth authorize flow was unreachable on the AWS/CloudFront deploy path
 
 **What changed.** Added an `ordered_cache_behavior` block to `terraform/s3-cloudfront.tf` for
