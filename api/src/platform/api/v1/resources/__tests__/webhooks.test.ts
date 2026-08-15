@@ -1016,6 +1016,46 @@ describe('PF-302: /api/v1/webhooks (Linear TRO-431)', () => {
       expect(res.body.code).toBe('not_found');
     });
 
+    it('404s for a delivery whose subscription was since deactivated — replay must not re-send to a webhook the owner turned off (CodeRabbit, this PR review)', async () => {
+      const deactivatedSub = await insertSubscriptionWithRealSecret(
+        appId,
+        'document.created',
+        'https://example.com/deactivated-replay-hook'
+      );
+      const original = await insertDelivery({
+        subscriptionId: deactivatedSub.id,
+        status: 'success',
+      });
+
+      // DELETE /:id deactivates (active = false) rather than a hard delete —
+      // this file's own header. The delivery row survives (history stays
+      // queryable via GET /deliveries), but replay must stop working the
+      // moment the owner turns the subscription off.
+      const deleteRes = await request(app)
+        .delete(`/api/v1/webhooks/${deactivatedSub.id}`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(deleteRes.status).toBe(204);
+
+      const fetchMock = fetchMockAlways(() => new Response('should never be called', { status: 200 }));
+      vi.stubGlobal('fetch', fetchMock);
+
+      const res = await request(app)
+        .post(`/api/v1/webhooks/deliveries/${original.id}/replay`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(res.status).toBe(404);
+      expect(res.body.code).toBe('not_found');
+      // The strongest proof: no HTTP call was ever attempted.
+      expect(fetchMock).not.toHaveBeenCalled();
+
+      // Confirmed via the log route too: the original row is still visible
+      // there (deactivation doesn't hide history), just not replayable.
+      const listRes = await request(app)
+        .get(`/api/v1/webhooks/deliveries?subscription_id=${deactivatedSub.id}`)
+        .set('Authorization', `Bearer ${manageToken}`);
+      expect(listRes.status).toBe(200);
+      expect((listRes.body as { data: Array<{ id: string }> }).data.map((d) => d.id)).toContain(original.id);
+    });
+
     it('replays a successful delivery: reaches the subscriber with the ORIGINAL Idempotency-Key, records a NEW row, and leaves the original untouched', async () => {
       const originalPayload = { hello: 'replay-me' };
       const original = await insertDelivery({

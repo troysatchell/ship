@@ -59,9 +59,8 @@ ALTER TABLE webhook_deliveries
 -- a one-line fix, and is out of this ticket's scope. Accepted for now because
 -- `webhook_deliveries` has zero rows in every real environment (same
 -- reasoning as the FK above) — the write-blocking window this avoids is
--- currently negligible. Filed as TRO-599's sibling class isn't right (that's
--- SDK type drift); if a future migration needs CONCURRENTLY against a table
--- that actually has rows, the runner itself needs a non-transactional
--- migration mode first.
+-- currently negligible. If a future migration needs CONCURRENTLY against a
+-- table that actually has rows, the runner itself needs a non-transactional
+-- migration mode first — no ticket tracks that yet.
 CREATE INDEX IF NOT EXISTS idx_webhook_deliveries_replayed_from_id
   ON webhook_deliveries (replayed_from_id) WHERE replayed_from_id IS NOT NULL;

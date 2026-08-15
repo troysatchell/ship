@@ -281,6 +281,50 @@ Major, 2 fixed for real, 1 partially fixed:**
    itself introduces is this PR's to declare correctly; the pre-existing four-field gap PF-305 already
    disclosed is still TRO-599's to fix once, completely, not piecemeal.
 
+**Third local CodeRabbit-CLI review (after the migration renumbering + merge-forward from
+TRO-432/PF-501) — 5 findings, 2 fixed for real, 1 doc cleanup, 1 bookkeeping cleanup, 1 declined:**
+1. **Major, real bug, fixed.** The replay lookup query joined `webhook_subscriptions` but never
+   checked `active` — replaying a delivery whose subscription had since been deactivated
+   (`DELETE /:id`, a soft `active = false`, not a hard delete — this file's own header) would still
+   fire a real HTTP POST to `target_url`, exactly what the owner turned the subscription off to stop.
+   Fixed: the lookup now requires `ws.active`, 404ing the same as an unknown delivery id (this route's
+   existing fail-closed convention — replay history isn't distinguishable from "not found" here).
+   `GET /deliveries` (the history view) intentionally still shows these rows regardless of `active` —
+   only replay (an active re-send) needed the guard. New regression test: deactivate a subscription via
+   the real `DELETE /:id` route, then attempt replay — asserts 404, and that `fetch` was never called
+   (the strongest possible proof nothing was sent), plus confirms the row still shows up in
+   `GET /deliveries` (deactivation doesn't hide history).
+2. **Major, declined — same TRO-599 class, already triaged, re-raised by a fresh CLI run seeing the
+   post-renumbering diff.** Suggested the full `WebhookDelivery` SDK-type repair again (status enum,
+   4 missing fields). Already addressed in the "Hosted GitHub CodeRabbit review" section above —
+   `replayed_from_id` added, the rest is TRO-599's. No new information this round.
+3. **Trivial, applied (docs only).** Migration 050's comment about declining `CREATE INDEX
+   CONCURRENTLY` had a garbled trailing sentence fragment ("Filed as TRO-599's sibling class isn't
+   right...") left over from an earlier edit pass — cleaned up to read as one coherent sentence, no
+   content change.
+4. **Minor, applied (bookkeeping).** `scorecard.jsonl`'s two TRO-446 rows written before the migration
+   renumbering (below) still said "migration 049"/"050" — updated to cross-reference the renumbering
+   rather than read as contradicting the CHANGES.md entry above them.
+5. **Minor, declined — verified against this codebase's actual convention, not just judgment.**
+   Suggested guarding migration 050's `ADD CONSTRAINT` with a `pg_constraint` existence check (the
+   pattern `025_prevent_circular_parent.sql` uses). Checked that file's own comment first: its guard
+   exists because `schema.sql` **also** declares the identical constraint inline, so a database built
+   fresh from `schema.sql` genuinely already has it before that migration runs — a real dual-code-path
+   scenario. `webhook_deliveries_replayed_from_id_fkey` has no such second code path; it is only ever
+   created by this one migration, tracked exactly once in `schema_migrations`. Guarding it would mask
+   a genuine operator error (the migration re-run by mistake) rather than handle a legitimate
+   pre-existence case. Declined as inapplicable to this migration's actual situation, not a blanket
+   rejection of the pattern.
+
+**Migration renumbering (orchestrator, at merge-forward time — see the note at the top of this
+entry).** Originally `049_webhook_deliveries_replay.sql` + `050_webhook_deliveries_replay_
+validate_fk.sql`; renumbered to `050_`/`051_` after discovering PF-501/TRO-432 (a sibling factory
+lane, built concurrently) had independently claimed 049 and merged first. `git mv` preserves file
+history; every in-repo reference updated (this entry, the route/SDK doc comments,
+`migrations-042-043.test.ts`'s exclusion list, the two scorecard rows above). Verified by resetting
+this worktree's database migration state and re-running `pnpm --filter @ship/api db:migrate` clean in
+the resulting 049 (public_api_audit) → 050 (replay) → 051 (validate) order.
+
 **Not verified / explicit gaps.** No live end-to-end proof against a real subscriber process (this
 PR's tests stub `fetch`, same test-double boundary `deliverer.test.ts` itself already accepts — see
 that file's own header). PF-801 (named in this ticket's own brief) is the future e2e proof that a real

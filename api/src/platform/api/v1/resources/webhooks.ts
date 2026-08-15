@@ -599,13 +599,24 @@ webhooksRouter.post(
 
     const workspaceId = await resolveWorkspaceOrThrow(req, requestId);
 
+    // ws.active required (CodeRabbit, PR #229's review): without this,
+    // replaying a delivery whose subscription was later deactivated
+    // (`DELETE /webhooks/:id`, this file's own header — a soft
+    // active=false, not a hard delete, so history stays queryable) would
+    // still fire a real HTTP POST to `target_url` — exactly what the owner
+    // turned the subscription off to stop. `GET /deliveries` (the history
+    // view) intentionally still shows these rows regardless of `active`;
+    // only REPLAY (an active re-send) needs this guard. A deactivated
+    // subscription's deliveries 404 the same as a truly unknown id — replay
+    // history isn't distinguishable from "not found" at this endpoint
+    // (matches this route's existing fail-closed convention).
     const lookup = await pool.query<ReplayLookupRow>(
       `SELECT wd.id, wd.subscription_id, wd.event_id, wd.event_type, wd.payload, wd.idempotency_key,
               ws.target_url, ws.signing_secret_ciphertext
        FROM webhook_deliveries wd
        JOIN webhook_subscriptions ws ON ws.id = wd.subscription_id
        JOIN oauth_apps a ON a.id = ws.app_id
-       WHERE wd.id = $1 AND a.workspace_id = $2`,
+       WHERE wd.id = $1 AND a.workspace_id = $2 AND ws.active`,
       [id, workspaceId]
     );
 
