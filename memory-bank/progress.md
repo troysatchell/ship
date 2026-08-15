@@ -79,6 +79,22 @@ Dispatched per Troy's explicit "work autonomously overnight, no check-ins expect
 
 ## Log
 
+### 2026-08-15 (~03:30Z–04:50Z) — TRO-451/PF-803 (Slack integration) closed, Epic E8's 5th and last committed reference integration
+
+Continued unattended (a peer session nudged to proceed rather than wait idle for a fresh-session start, matching this factory's own "never ask to continue" standing rule) after the 03:30Z rollover point below. **TRO-451/PF-803 closed** — PR #237 @ `7faeaeec387b91f65788da2b85b0a71fefd6f890`, independently verified (both-remote SHA match, not self-report).
+
+`integrations/slack/` — Express receiver, `verifyWebhook` (from `@ship/sdk/node`, PF-802's Node-only subpath) on every delivery, posts `document.created`/`issue.assigned` to a Slack channel via `@slack/web-api`. Matches `scripts/check-integration-deps.mjs`'s enforced boundary (only `@ship/sdk` as a runtime dependency) by bundling `express`/`@slack/web-api`/`zod`/`express-rate-limit` at build time via esbuild into one self-contained `dist/server.js` — verified the actual bundle runs post-build, not just that the build step exits 0. The event envelope + `document.created`/`issue.assigned` payload schemas were read directly from `api/src/platform/webhooks/events.ts`'s real registry and re-declared locally (an `integrations/*` package cannot depend on `api/src` even at the type level).
+
+**Real finding, not just built-to-spec:** GitHub's non-required `CodeQL` check flagged `js/missing-rate-limiting` on the webhook route. Checked whether it was genuinely scoped to this PR (via the check-run's own "New alerts in code changed by this pull request" annotation) rather than defaulting to either "probably noise" or "fix blindly" — this repo has documented precedent for that same non-required check flagging unrelated pre-existing findings elsewhere, so the scope check mattered. It was real and new. Fixed with `express-rate-limit`, matching `api/src/middleware/rate-limit.ts`'s established convention (incl. its IPv6-safe `ipKeyGenerator`); a regression test proves the limiter actually rejects (`429`) at a deliberately-low configured limit, not just that the middleware is wired.
+
+**Real test-tooling gotcha found writing the mocked-Slack e2e proof (PF-803's own AC):** `@slack/web-api`'s `WebClient` retries transient 5xx failures internally by default, which silently masked the first version of a Slack-outage test (200 instead of the expected 502, because the SDK's own retry succeeded against the mock on its second attempt before the receiver's error path ever ran). Fixed by disabling retries in the test client only (`retryConfig: { retries: 0 }`).
+
+**Honest, disclosed gap:** PF-803's AC also asks for live-demo screenshot evidence — needs a real Slack workspace and a live Ship deployment, neither of which exists in this sandbox. The setup doc is complete and accurate; the screenshot itself is explicitly named as a step for whoever runs the demo live, same class of disclosed gap as TRO-503's `terraform plan`.
+
+**Post-merge:** synced GitHub→GitLab cleanly (`git pull --ff-only` + `git push origin main`, no divergence this round), both remotes verified at `7faeaee`.
+
+**All 5 of PLUGFORGE.MD's committed E8 reference integrations are now accounted for.** Only PF-804 (GitHub App) remains in that epic, and it's explicitly STRETCH/time-boxed — optional given the ~08-16 AM deadline.
+
 ### 2026-08-14 (~21:00Z) – 2026-08-15 (~03:30Z) — 4-lane run, this lane (infra fix + browser demo + E7 checkpoint prep): 3/3 closed, a real @ship/sdk bug found+fixed, a GitHub/GitLab divergence reconciled
 
 **Lane assignment:** TRO-417/PF-700 (🔔 E7 human-checkpoint prep, code out of scope), TRO-503 (`/oauth/*` CloudFront terraform fix, plan-only), TRO-449/PF-802 (browser SDK demo). All three closed, independently verified (PR `mergedAt` + both-remote SHA match, not agent self-report).
