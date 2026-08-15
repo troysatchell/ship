@@ -394,7 +394,7 @@ Don't script around these — they're gaps, not demo material, as of 2026-08-14:
 |---|---|---|
 | PF-600 `ship login` | PR #227 open, **failing** `typecheck · build · unit tests` | The literal CLI entry point the PRD's five-line story assumes |
 | PF-601 `ship docs ls/get/create` | Worktree exists, no commands written yet | CLI resource commands |
-| PF-602 `ship webhooks tail` | **Not started** — no branch/worktree found | The PRD calls this "the demo-video money shot" (§4, E6). `demo-webhook-listener.mjs` above is a stand-in, not a substitute — it doesn't register/clean up its own subscription the way PF-602's AC requires |
+| PF-602 `ship webhooks tail` | **Landed** (Linear TRO-452, PR opened 2026-08-15) — `integrations/cli/src/commands/webhooksTail.ts`, wired as `ship webhooks tail` | The PRD calls this "the demo-video money shot" (§4, E6). Registers and cleans up its own subscription (this row used to note that `demo-webhook-listener.mjs` above didn't — that gap is now closed); ran end-to-end locally with a real `✓ verified document.created` line, see `CHANGES.md`'s TRO-452 entry for the transcript. Not yet re-verified against `main` as of this specific table row edit — re-run the pre-flight checks above before recording |
 | PF-603 TTFE drill in CI | **Not started** | The literal graded metric ("the grade is the Time-to-First-Event drill, not endpoint count," PRD header). Nothing here proves the <60s CI / <30min clean-machine numbers — that requires this ticket to exist |
 | PF-306 replay endpoint | Built on `feat/pf-306-replay-endpoint`, not on `main` | DLQ→replay is a graded scenario (§5 of the PRD) |
 | PF-501 portal audit trail | PR #225 open, checks incomplete | `GET /api/v1/audit` for the portal |
