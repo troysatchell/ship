@@ -25,12 +25,9 @@ async function main() {
   const PORT = process.env.PORT || 3000;
   const CORS_ORIGIN = process.env.CORS_ORIGIN || 'http://localhost:5173';
 
-  const app = createApp(CORS_ORIGIN);
-  const server = createServer(app);
-
   // PF-304 (TRO-438) — webhook deliverer: subscribe to the domain event bus
-  // and start the retry-schedule polling loop. Deliberately wired HERE, in
-  // the real process entrypoint, and NOT inside `createApp()`/`app.ts` —
+  // and start the retry-schedule polling loop. Deliberately constructed HERE,
+  // in the real process entrypoint, and NOT inside `createApp()`/`app.ts` —
   // every test file in this repo calls `createApp()` directly, and a
   // background `setInterval` (or an eager DB query per test-file's
   // `documentService` writes) started from there would run during every
@@ -39,6 +36,17 @@ async function main() {
   // (`platform/webhooks/eventBus.ts`) shared with `documentService.ts`
   // regardless of where the subscription happens, so wiring it here reaches
   // the exact same bus `documentService.publish()` calls in production.
+  //
+  // TRO-603: moved earlier in this file (used to sit after `createApp()`/
+  // `createServer()` below) so the already-constructed, already-`.start()`'d
+  // instance can be PASSED INTO `createApp()` a few lines down, instead of
+  // each `POST /webhooks/deliveries/:id/replay` request building its own
+  // throwaway `InMemoryWebhookDeliverer` whose retry-sibling rows this
+  // process's own polling loop could never see (see
+  // `app.ts`'s `CreateAppOptions` and `platform/api/v1/resources/webhooks.ts`'s
+  // `createWebhooksRouter()` for the full mechanism). Nothing in this block
+  // depends on `app`/`server`, so reordering it ahead of them changes nothing
+  // else about when it runs.
   const { getEventBus } = await import('./platform/webhooks/eventBus.js');
   const { InMemoryWebhookDeliverer, wireDelivererToEventBus } = await import('./platform/webhooks/deliverer.js');
   const { systemClock } = await import('./platform/webhooks/clock.js');
@@ -125,6 +133,13 @@ async function main() {
   }
   wireDelivererToEventBus(webhookDeliverer, getEventBus());
   webhookDeliverer.start();
+
+  // TRO-603: pass the real, already-`.start()`'d singleton into `createApp()`
+  // — see the long comment on the deliverer construction above for why this
+  // whole block now runs before `createApp()`/`createServer()` rather than
+  // after them.
+  const app = createApp(CORS_ORIGIN, { webhookDeliverer });
+  const server = createServer(app);
 
   // Stop the deliverer's polling loop on shutdown (CodeRabbit, this PR
   // review) — without this, `webhookDeliverer.start()`'s `setInterval` could
