@@ -28,6 +28,7 @@ import { ChangesClient } from './resources/changes.js';
 import type { ITokenStore } from './tokenStore.js';
 import { runDeviceLoginFlow, type DeviceLoginFlowOptions } from './deviceLogin.js';
 import { runAuthorizationCodeFlow, type AuthorizationCodeFlowOptions as PkceFlowOptions } from './authorizationCodeFlow.js';
+import { runClientCredentialsFlow, type ClientCredentialsFlowOptions } from './clientCredentials.js';
 
 /**
  * Established in `agent/src/config.ts` (`SHIP_API_BASE_URL`,
@@ -240,6 +241,34 @@ export class ShipClient {
       tokenStore: opts.tokenStore,
     });
     client.request.setRefreshToken(result.tokens.refreshToken);
+    return client;
+  }
+
+  /**
+   * RFC 6749 §4.4 Client Credentials Grant (PF-702, TRO-428) — an app
+   * authenticating as ITSELF, no user, no PKCE, no refresh token. See
+   * `clientCredentials.ts`'s own header for why this did not already exist
+   * despite PF-702's architect notes assuming it did (a verified, corrected
+   * claim — CLAUDE.md's provenance rule).
+   *
+   * Unlike `deviceLogin`/`authorizationCodeFlow`, there is no refresh token
+   * to hand `setRefreshToken`. Re-authentication on a 401 instead re-runs
+   * THIS SAME request (`runClientCredentialsFlow` again, same stored
+   * `clientId`/`clientSecret`/`scope`) via `RequestClient.setReauthenticator`
+   * — wired here, once, so every caller of the returned `ShipClient` gets
+   * transparent re-auth without knowing which grant is behind it.
+   */
+  static async clientCredentials(
+    opts: Omit<ClientCredentialsFlowOptions, 'baseUrl'> & { baseUrl?: string }
+  ): Promise<ShipClient> {
+    const baseUrl = stripTrailingSlashes(opts.baseUrl ?? resolveDefaultBaseUrl());
+    const flowOpts: ClientCredentialsFlowOptions = { ...opts, baseUrl };
+    const tokens = await runClientCredentialsFlow(flowOpts);
+
+    const client = new ShipClient({ token: tokens.accessToken, baseUrl });
+    client.request.setReauthenticator(() =>
+      runClientCredentialsFlow(flowOpts).then((t) => ({ accessToken: t.accessToken, expiresIn: t.expiresIn }))
+    );
     return client;
   }
 }

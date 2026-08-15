@@ -29,6 +29,21 @@ api/src/platform/
   per-identity `express-rate-limit` limiters mounted on `/api/`, which still
   match `/api/v1` by prefix today; exempting `/api/v1` from those is PF-004's
   job (see `ratelimit/README.md`), not done by this ticket.
+- **`agent/` is a permitted `@ship/sdk` consumer (PF-702, TRO-428)** —
+  integrations-equivalent status, per PLUGFORGE.MD's own framing: "the agent
+  is a platform client." `scripts/check-integration-deps.mjs`'s "one runtime
+  dependency, `@ship/sdk` only" rule scans `integrations/*` exclusively and
+  deliberately does NOT scan `agent/` — that script's own header states why
+  (`agent/` keeps its existing, non-`@ship/sdk` runtime deps, e.g. Express,
+  LangGraph). This is the one place `agent/` reaches across the
+  `platform/api/v1/**` boundary above, and it does so the same way any other
+  `@ship/sdk` consumer would: through the published `/api/v1/*` surface, not
+  by importing `api/src/platform/**` directly — the one-way import ban above
+  is unaffected. `AGENT_PLATFORM_MODE=sdk` (default `internal`) gates whether
+  the agent's `ShipClient` (`agent/src/shipClient.ts`) actually delegates its
+  10 reads through `@ship/sdk` at runtime; see that file's module docstring
+  and CHANGES.md (TRO-428) for the mapping and the fields that could not
+  carry over from the internal surface.
 
 ## Public CORS
 
