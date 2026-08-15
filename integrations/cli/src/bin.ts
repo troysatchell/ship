@@ -12,6 +12,7 @@ import { Command } from 'commander';
 import { runLogin } from './commands/login.js';
 import { runWhoami } from './commands/whoami.js';
 import { runDocsCreate, runDocsGet, runDocsLs } from './commands/docs.js';
+import { runWebhooksTail } from './commands/webhooksTail.js';
 import { realIo } from './io.js';
 
 const program = new Command();
@@ -100,6 +101,56 @@ docsCommand
       title: options.title,
     });
   });
+
+// PF-602 (Linear TRO-452) — `ship webhooks tail`: local listener, live
+// signature check, subscription cleanup on exit. See `commands/
+// webhooksTail.ts`'s own header for the full design (why one subscription,
+// why the secret is set after listen(), the --target-url tunnel path for a
+// remote instance).
+const webhooksCommand = program.command('webhooks').description('Work with webhook subscriptions via the public API');
+
+webhooksCommand
+  .command('tail')
+  .description(
+    'Start a local listener, register a webhook subscription targeting it, and stream deliveries to stdout ' +
+      'with a live signature check (verified/rejected) until Ctrl+C, then deactivate the subscription. Works ' +
+      'against a local or containerized Ship instance (the server must be able to reach this listener over ' +
+      '127.0.0.1). For a remote/deployed instance, start a tunnel (e.g. `ngrok http <port>`) forwarding to ' +
+      'this listener\'s local port, then pass --target-url <tunnel-https-url> and the same --port.'
+  )
+  .option(
+    '--app-id <id>',
+    "OAuth app_id to own the subscription (defaults to the current token's own app, i.e. what `ship whoami` reports)"
+  )
+  .option('--event-type <type>', 'webhook event type to subscribe to (default: document.created)')
+  .option('--port <port>', 'local port to listen on (default: an OS-assigned free port)')
+  .option(
+    '--target-url <url>',
+    'override the registered target_url (default: http://127.0.0.1:<port>/) — set to a tunnel URL for a remote instance'
+  )
+  .option('--client-id <id>', `OAuth client_id, used only for refresh-on-401 (overrides ${'SHIP_CLI_CLIENT_ID'})`)
+  .option('--base-url <url>', 'Ship API base URL (overrides SHIP_API_BASE_URL)')
+  .action(
+    async (options: {
+      appId?: string;
+      eventType?: string;
+      port?: string;
+      targetUrl?: string;
+      clientId?: string;
+      baseUrl?: string;
+    }) => {
+      process.exitCode = await runWebhooksTail({
+        io: realIo,
+        env: process.env,
+        clientId: options.clientId,
+        baseUrl: options.baseUrl,
+        appId: options.appId,
+        eventType: options.eventType,
+        port: options.port !== undefined ? Number(options.port) : undefined,
+        targetUrl: options.targetUrl,
+      });
+    }
+  );
 
 program.parseAsync(process.argv).catch((err: unknown) => {
   realIo.stderr(`Unexpected error: ${err instanceof Error ? err.message : String(err)}`);
