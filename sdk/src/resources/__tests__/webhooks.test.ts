@@ -95,8 +95,12 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     // Request body now matches the real server schema: app_id/singular
     // event_type/target_url (TRO-607). This mocked test proves the SDK
     // builds the correct HTTP request and parses the response correctly.
+    // A real UUID, not a placeholder like 'app_1' — the real request schema
+    // requires app_id to be a valid UUID (CodeRabbit, TRO-607 review), and
+    // this mock should stay representative of what actually validates.
+    const appId = '11111111-1111-4111-8111-111111111111';
     const created = await client.webhooks.createSubscription({
-      app_id: 'app_1',
+      app_id: appId,
       event_type: 'document.created',
       target_url: 'https://example.com/hook',
     });
@@ -106,7 +110,7 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     expect(init?.method).toBe('POST');
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer t', 'content-type': 'application/json' });
     expect(JSON.parse(String(init?.body))).toEqual({
-      app_id: 'app_1',
+      app_id: appId,
       event_type: 'document.created',
       target_url: 'https://example.com/hook',
     });

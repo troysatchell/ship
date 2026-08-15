@@ -317,29 +317,32 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
       target_url: targetUrl,
     });
 
-    // Verify the response shape (same as rotateSecret's return type)
-    expect(actualKeys(created)).toEqual(CREATED_WEBHOOK_SUBSCRIPTION_KEYS);
-    expect(created.app_id).toBe(oauthAppId);
-    expect(created.event_type).toBe('issue.created');
-    expect(created.target_url).toBe(targetUrl);
-    expect(created.active).toBe(true);
-    expect(created.secret.startsWith('whsec_')).toBe(true);
-    expect(typeof created.warning).toBe('string');
-    expect(created.warning.length).toBeGreaterThan(0);
+    try {
+      // Verify the response shape (same as rotateSecret's return type)
+      expect(actualKeys(created)).toEqual(CREATED_WEBHOOK_SUBSCRIPTION_KEYS);
+      expect(created.app_id).toBe(oauthAppId);
+      expect(created.event_type).toBe('issue.created');
+      expect(created.target_url).toBe(targetUrl);
+      expect(created.active).toBe(true);
+      expect(created.secret.startsWith('whsec_')).toBe(true);
+      expect(typeof created.warning).toBe('string');
+      expect(created.warning.length).toBeGreaterThan(0);
 
-    // Verify the row was actually created in the database by fetching it
-    const retrieved = await client.webhooks.getSubscription(created.id);
-    expect(actualKeys(retrieved)).toEqual(WEBHOOK_SUBSCRIPTION_KEYS);
-    expect(retrieved).toMatchObject({
-      id: created.id,
-      app_id: oauthAppId,
-      event_type: 'issue.created',
-      target_url: targetUrl,
-      active: true,
-    });
-
-    // Cleanup: delete the subscription we just created
-    await pool.query('DELETE FROM webhook_subscriptions WHERE id = $1', [created.id]);
+      // Verify the row was actually created in the database by fetching it
+      const retrieved = await client.webhooks.getSubscription(created.id);
+      expect(actualKeys(retrieved)).toEqual(WEBHOOK_SUBSCRIPTION_KEYS);
+      expect(retrieved).toMatchObject({
+        id: created.id,
+        app_id: oauthAppId,
+        event_type: 'issue.created',
+        target_url: targetUrl,
+        active: true,
+      });
+    } finally {
+      // Cleanup runs even if an assertion above throws, so this row never
+      // leaks into a later test in this suite (CodeRabbit, TRO-607 review).
+      await pool.query('DELETE FROM webhook_subscriptions WHERE id = $1', [created.id]);
+    }
   });
 
   it("listDeliveries() returns EXACTLY WebhookDelivery's real fields, and the real 'dead' status literal (not the old guessed 'dead_letter')", async () => {
