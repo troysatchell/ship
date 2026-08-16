@@ -9222,3 +9222,68 @@ paths:
             text/html:
               schema:
                 type: string
+  /oauth/app-info:
+    get:
+      tags:
+        - OAuth
+      summary: Look up a registered OAuth app's display name by client_id
+      description: "Server-verified app-name lookup for the consent screen (TRO-550). Returns the registered oauth_apps.name for a known, non-revoked client_id. This is the ONLY source of truth for the name the consent screen shows — the query string is never trusted for it (see OAuthConsent.tsx). Unknown and revoked client_ids both produce the same 404 — an attacker probing client_ids should not learn which case applied, matching GET /oauth/authorize's own getOAuthAppByClientId behavior. No auth required to reach: client_id is already a public, URL-visible identifier, and the name returned is exactly what is about to be shown to this same user before they decide anything. Mounted outside /api — see the servers override on this operation."
+      security:
+[]
+      servers:
+        - url: /
+                    description: Mounted at the application root — outside the /api prefix.
+      parameters:
+        - schema:
+                      type: string
+                      description: Public client identifier of a registered OAuth app.
+                      example: ship_app_3f9c2b1a7e6d4508
+                    required: true
+                    name: client_id
+                    in: query
+      responses:
+        200:
+          description: The app's registered display name.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  name:
+                    type: string
+                    description: The registered OAuth app's display name, exactly as stored in oauth_apps.name.
+                    example: Acme Reporting
+                required:
+                  - name
+        400:
+          description: client_id is missing.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: RFC 6749 §5.2-style error code.
+                  error_description:
+                    type: string
+                    description: Human-readable detail.
+                required:
+                  - error
+                  - error_description
+        404:
+          description: client_id is unknown, or the app has been revoked.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error:
+                    type: string
+                    description: RFC 6749 §5.2-style error code.
+                  error_description:
+                    type: string
+                    description: Human-readable detail.
+                required:
+                  - error
+                  - error_description
