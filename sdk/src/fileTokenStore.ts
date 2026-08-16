@@ -12,7 +12,8 @@
  *
  * `~/.ship/credentials.json` (PF-600's `ship login`) is this class's one
  * named consumer — deliberately Node-only, never imported by
- * `integrations/browser-demo` (PF-802), which uses `localStorage` directly.
+ * `integrations/browser-demo` (PF-802), which uses the SDK's own
+ * `LocalStorageTokenStore` (TRO-617) from the main barrel instead.
  */
 import { promises as fs } from 'fs';
 import path from 'path';

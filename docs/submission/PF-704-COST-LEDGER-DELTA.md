@@ -71,7 +71,8 @@ Epic 7 work. What this *does* honestly establish: the rewire has not been exerci
 path with real traffic yet (consistent with `AGENT_PLATFORM_MODE` defaulting to `internal` in
 production — see `agent/src/config.ts:343`). It does **not**, on its own, establish that a real
 `sdk`-mode run would produce the identical token count as an `internal`-mode run of the same
-workload, given the traced `content`-field data-flow difference above.
+workload, given the traced `content`-field data-flow difference above — that is what the
+TRO-620 measurement below establishes directly.
 
 ## What this doc does not claim (revised)
 
@@ -84,13 +85,78 @@ token-equivalent. What is actually established:
 2. **One real, traced exception:** the `on_demand`/expansion path's prompt text depends on
    `getDocument()`'s `content` field, which is not carried over in `sdk` mode — so token volume
    for that trigger specifically can differ between modes, and this doc does not know by how much.
-3. **Not yet measured:** a live, matched-workload run of both modes through the same trigger paths,
-   which would give a real number instead of a structural argument either way.
+3. **Measured (TRO-620, 2026-08-16) — see "Measured: matched workload, both modes" below:** a live,
+   matched-workload run of the `on_demand` trigger through both modes, before and after the
+   `getDocument` passthrough fix. Before the fix, `sdk` mode reached the model with **~85% fewer
+   input tokens** (0 documents in context — every candidate failed the visibility check on the
+   synthesized `visibility`); after it, input tokens are **identical** to `internal` mode.
 
 **Recommended for PF-905:** run the same question-answering workload through both modes and diff
 the resulting ledger entries for the `on_demand` trigger specifically — that is the one path this
 session traced as genuinely exposed. The other four triggers' prompt builders were not individually
 traced and may or may not need the same treatment.
+
+## Measured: matched workload, both modes (TRO-620, 2026-08-16)
+
+**What changed first:** TRO-605 widened `GET /api/v1/documents/:id` to return
+`content`/`visibility`/`created_by`/`completed_at`, and TRO-620 made `agent/src/shipClient.ts`'s
+`getDocumentViaSdk` pass all four through instead of returning `content: null` / a synthesized
+`visibility` / `created_by: null` / `completed_at: undefined`. So the "traced exception" above is
+closed at the source — and this section measures it rather than asserting it.
+
+**Setup (OBSERVED, all from the TRO-620 worktree):** local Ship API (`api/src/index.ts` under
+`tsx`) against the worktree's own freshly `db:seed`-ed database; one personal `api_tokens` row for
+`dev@ship.local` (`documents:read`/`issues:read`/`sprints:read`); model
+`claude-haiku-4-5-20251001`, `maxTokens: 512`, `temperature: 0`; seed document = the seeded project
+`25c15212-31dd-462c-a96f-7e615b107d2b` ("API Platform - Core Features"); three fixed questions
+(hard-coded in `agent/src/scripts/measure-token-volume.ts`, the script that produced these ledgers,
+which mirrors `index.ts`'s on-demand `shipClientFactory` construction — `sdk` mode uses
+`@ship/sdk` authenticated with the same personal token; `askingUserId` is passed so
+`expansion.ts`'s `passesAskerVisibility` runs for real). Every row below is a real
+`FileCostTracker` record (`usage_metadata` off the real `ChatAnthropic` response). Ledgers are
+committed verbatim as `docs/submission/cost-ledger/tro-620-{internal,sdk,sdk-before-fix}.jsonl`.
+The "before" run used `agent/src/shipClient.ts` as of `b68da413` (GitHub `main` at branch time),
+everything else identical.
+
+| Turn | Mode | Docs pulled | Input tokens | Output tokens | Input Δ vs internal |
+|---|---|---:|---:|---:|---:|
+| Q1 | internal | 12 | 424 | 237 | — |
+| Q1 | sdk (after TRO-620) | 12 | 424 | 237 | 0.0% |
+| Q1 | sdk (before TRO-620) | 0 | 65 | 93 | −84.7% |
+| Q2 | internal | 12 | 425 | 279 | — |
+| Q2 | sdk (after TRO-620) | 12 | 425 | 261 | 0.0% |
+| Q2 | sdk (before TRO-620) | 0 | 66 | 153 | −84.5% |
+| Q3 | internal | 12 | 425 | 121 | — |
+| Q3 | sdk (after TRO-620) | 12 | 425 | 121 | 0.0% |
+| Q3 | sdk (before TRO-620) | 0 | 66 | 77 | −84.5% |
+| **Total** | internal | — | **1274** | **637** | — |
+| **Total** | sdk (after) | — | **1274** | **619** | **0.0% input / −2.8% output** |
+| **Total** | sdk (before) | — | **197** | **323** | **−84.5% input / −49.3% output** |
+
+Reading it: **input tokens — the part of the turn the rewire could change — are identical per turn
+between `internal` and post-fix `sdk` mode** (same 12 documents, same snippets, same prompt). The
+single output-token difference (Q2: 279 vs 261) is model non-determinism on an identically-sized
+prompt (both runs cited the same 12 sources; Q1/Q3 outputs matched exactly), not a mode effect. The
+pre-fix `sdk` rows are the real cost of the old "fail closed" synthesis: `passesAskerVisibility`
+rejected every fetched candidate, `documentsPulled: 0`, and the model answered from the question
+alone — cheaper, and useless.
+
+**One thing this run also OBSERVED that is not about tokens:** on the first `sdk`-mode attempt the
+expansion walk died with `ShipSdkError: Too many requests` (HTTP 429, `kind: 'rate_limit'`) from
+`/api/v1`'s per-token bucket (`RATE_LIMIT_TOKEN_RPM`, default 60 —
+`api/src/platform/ratelimit/config.ts`). `sdk` mode's association reads page through the v1
+sub-resources per document (`collectAllPages`), so a 12-document walk issues well over 60 v1
+requests in a few seconds. The runs above were made with `RATE_LIMIT_TOKEN_RPM=10000` on the local
+API. `internal` mode is not subject to that limiter. That is a real, separate `sdk`-mode operability
+finding for the on-demand path, out of TRO-620's scope, and it is disclosed here rather than
+absorbed.
+
+**Cap on LLM spend for this measurement:** 9 real calls total (3 per configuration), all
+`claude-haiku-4-5-20251001`, ≈ $0.0074 at the rate card in `costTracking.ts`.
+
+**Not measured:** the other four triggers (`composeStandupDraft`, `composeBlockerEscalation`,
+`composeRetroDraft`, `composePlanChangeDraft`) — same boundary as the section above; the traced
+exposure was `on_demand` only, and only `on_demand` was run.
 
 ## Feeds PF-905 (TRO-434)
 
@@ -98,4 +164,6 @@ PF-905's own AC needs: (1) this delta — the honest version above, not the disc
 inert" claim; (2) TTFE CI minutes; (3) Playwright OAuth compute; (4) spec-gen overhead; (5)
 delivery-log storage growth; (6) production cost projections at 100/1k/10k/100k users. Items 2–6 are
 out of this ticket's scope (PF-704 owns only item 1) and remain for PF-905 to produce — and per the
-correction above, item 1 itself is now "here's the exact real gap to measure," not "already closed."
+correction above, item 1 was "here's the exact real gap to measure" — and as of TRO-620 (section
+above) it is measured: input token volume is identical between modes for the `on_demand` trigger
+once `getDocument` passes `content`/`visibility`/`created_by`/`completed_at` through.
