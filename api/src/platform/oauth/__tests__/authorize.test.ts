@@ -6,6 +6,11 @@
  * (`e2e/oauth-authorize.spec.ts`) is NOT the proof — see CHANGES.md
  * (TRO-412) for what it covers and its execution status.
  *
+ * Also covers `GET /oauth/app-info` (TRO-550, own describe block near the
+ * bottom) — added alongside these because it shares this file's app/
+ * workspace/user fixtures directly rather than duplicating that setup in a
+ * new file.
+ *
  * Per the test-design comment on this ticket (2026-08-10):
  *   AC-1 — records code_challenge (+method), rejects anything but S256.
  *   AC-2 — validates redirect_uri by EXACT match (open-redirect guard).
@@ -542,6 +547,66 @@ describe('/oauth/authorize + /oauth/authorize/decision (PF-103)', () => {
         expect(location.pathname).toBe('/login');
       } finally {
         await pool.query('DELETE FROM sessions WHERE id = $1', [idleSessionId]);
+      }
+    });
+  });
+
+  describe('GET /oauth/app-info (TRO-550 — server-verified app-name lookup)', () => {
+    it('returns the registered app name for a known client_id — no auth required', async () => {
+      // Deliberately no `.set('Cookie', ...)` — this endpoint needs no
+      // session (see oauth-app-info.ts's OpenAPI registration for why).
+      const res = await request(app).get('/oauth/app-info').query({ client_id: testClientId });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ name: 'PF-103 Test Client' });
+    });
+
+    it('the exact security property TRO-550 exists to prove: a spoofed app_name query param has no effect', async () => {
+      const res = await request(app)
+        .get('/oauth/app-info')
+        .query({ client_id: testClientId, app_name: 'Totally Legit Corp' });
+
+      expect(res.status).toBe(200);
+      expect(res.body).toEqual({ name: 'PF-103 Test Client' });
+      expect(res.body.name).not.toBe('Totally Legit Corp');
+    });
+
+    it('400s on a missing client_id — a proper 4xx, not a 500', async () => {
+      const res = await request(app).get('/oauth/app-info');
+
+      expect(res.status).toBe(400);
+      expect(res.body).toMatchObject({ error: 'invalid_request' });
+    });
+
+    it('404s on an unknown client_id — a proper 4xx, not a 500', async () => {
+      const res = await request(app)
+        .get('/oauth/app-info')
+        .query({ client_id: 'ship_app_does_not_exist' });
+
+      expect(res.status).toBe(404);
+      expect(res.body).toMatchObject({ error: 'invalid_client' });
+    });
+
+    it('404s on a revoked client_id, indistinguishable from an unknown one', async () => {
+      // A separate app fixture, revoked at insert time — deliberately not
+      // testAppId (which every other case in this file depends on staying
+      // live) — cleaned up in its own finally block.
+      const revokedClientId = `ship_app_test_revoked_${testRunId}`;
+      const revokedAppResult = await pool.query(
+        `INSERT INTO oauth_apps (workspace_id, name, client_id, client_type, redirect_uris, requested_scopes, owner_user_id, revoked_at)
+         VALUES ($1, 'Revoked Test Client', $2, 'public', $3, $4, $5, now())
+         RETURNING id`,
+        [testWorkspaceId, revokedClientId, [REGISTERED_REDIRECT_URI], ['documents:read'], testUserId]
+      );
+      const revokedAppId = revokedAppResult.rows[0].id;
+
+      try {
+        const res = await request(app).get('/oauth/app-info').query({ client_id: revokedClientId });
+
+        expect(res.status).toBe(404);
+        expect(res.body).toMatchObject({ error: 'invalid_client' });
+      } finally {
+        await pool.query('DELETE FROM oauth_apps WHERE id = $1', [revokedAppId]);
       }
     });
   });
