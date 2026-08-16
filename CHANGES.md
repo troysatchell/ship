@@ -48,6 +48,96 @@ correct but timing-fragile under GitHub Actions specifically (not observed to fa
 
 ---
 
+## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
+
+**The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
+that were supposed to disagree about whether `priority: 'none'` is legal: the route's inline
+`createIssueSchema`/`updateIssueSchema` (`api/src/routes/issues.ts`), `shared/src/types/document.ts`'s
+`IssuePriority` union, and the OpenAPI `IssuePrioritySchema`
+(`api/src/openapi/schemas/issues.ts:24-34`). Verified by reading the actual file, not by trusting the
+ticket text: the OpenAPI schema already includes `'none'`, and `git blame` shows it has since the
+very first commit that added OpenAPI docs (`adf72f9d`) — it was never absent. Only
+`shared/src/types/document.ts`'s `IssuePriority` (`'low' | 'medium' | 'high' | 'urgent'`, no `'none'`)
+was actually out of step. Two of the three named sources already agreed.
+
+**Direction decided by real evidence, per the ticket's own instructions.** This worktree's database
+(`ship_wt_tro_501`, freshly migrated) has 0 issue-type documents, so it proved nothing either way.
+Grepping `web/src` and `api/src` did: `'none'` is a real, first-class "No Priority" state, not
+leftover cruft.
+- `web/src/components/sidebars/IssueSidebar.tsx`'s Properties Panel priority `<select>` explicitly
+  offers `{ value: 'none', label: 'No Priority' }` alongside urgent/high/medium/low — a live,
+  user-facing feature, not a filter sentinel.
+- `web/src/hooks/useIssuesQuery.ts`'s optimistic issue-creation update sets `priority: 'none'` as the
+  new issue's default before the server responds.
+- `web/src/components/KanbanBoard.tsx` and `web/src/components/IssuesList.tsx` both define a
+  dedicated `none` entry in their `PRIORITY_COLORS`/label maps (rendered, not just a fallback), and
+  `web/src/components/WeekReconciliation.tsx` explicitly branches on `issue.priority !== 'none'`.
+- The route's own `createIssueSchema`/`updateIssueSchema` already accepted it on both create and
+  update.
+
+Widening beat narrowing on the evidence: narrowing the route would have broken the Properties Panel's
+existing "No Priority" option (a real PATCH with `priority: 'none'` would 400) and contradicted a
+UI feature already shipped. Interesting side-evidence of the same gap: `web/src/lib/contextMenuActions.ts`'s
+right-click context menu (`ISSUE_PRIORITY_OPTIONS`, strictly typed as `IssuePriority[]`) omits "No
+Priority" entirely — the narrow type had already caused one UI surface to silently drop an option the
+other surface offers. Left that array's contents unchanged (adding a menu entry is a product decision
+beyond this ticket's ask), but it's a visible symptom of the exact type gap being fixed here.
+
+**What changed.**
+- `shared/src/types/document.ts`: widened `IssuePriority` to `'low' | 'medium' | 'high' | 'urgent' |
+  'none'`. `api/src/routes/issues.ts` and `api/src/openapi/schemas/issues.ts` needed no change —
+  both already allowed `'none'`.
+- **A fourth source of truth, not named in the ticket, found live-broken during investigation:**
+  `api/src/platform/webhooks/events.ts`'s local `IssuePrioritySchema` mirror (used by the
+  `issue.created` webhook event payload schema) also excluded `'none'`, and its own header comment
+  (written 2026-08-10 for TRO-419) repeated the same wrong claim about the OpenAPI schema, explicitly
+  deferring the fix "for a future ticket." Confirmed live, red-before-fix, with
+  `api/src/routes/issues.test.ts`'s new TRO-501 test: creating an issue via `POST /api/issues` with
+  `priority: 'none'` committed successfully (**201**, row written) but the derived `issue.created`
+  webhook event was **silently dropped** — `InProcessEventBus.publish()` throws on the schema
+  mismatch, and `documentService.ts`'s `safeDispatch` catches and `console.error`s a dispatch throw
+  rather than failing the request (by design, per its own header comment), so nothing surfaced to the
+  API caller. Fixed by widening this file's `IssuePrioritySchema` to include `'none'` and correcting
+  the stale comment.
+- `api/src/platform/openapi/schemas/issues.ts` (the `/api/v1/issues` public API's response-only
+  schema, a *different* file from the internal `api/src/openapi/schemas/issues.ts`): widened its own
+  local `IssuePrioritySchema` mirror to include `'none'` so the documented `GET /api/v1/issues`
+  response shape matches what `serializeIssue()` can actually return. No runtime validation depended
+  on this one (response-doc only), but left undocumented it would have been a fifth source of
+  disagreement.
+- Regenerated `docs/openapi.json` (the v1 public spec) via `pnpm --filter @ship/api
+  openapi:generate:v1` — the only spec that changed (added `"none"` to the `priority` enum). The
+  legacy internal spec (`api/openapi.json`/`api/openapi.yaml`, from `openapi:generate`) was
+  regenerated too and came out byte-identical, confirming its enum already had `'none'`.
+
+**Regression tests.**
+- `api/src/routes/issues.test.ts`, new test `'creates an issue with priority "none" and still
+  publishes issue.created'` inside `POST /api/issues`: hits the real route and the real
+  process-wide `IEventBus` singleton (not a substituted double), asserts `201` + `priority: 'none'`
+  in the response, and asserts the `issue.created` event fired with `priority: 'none'` — the specific
+  case that used to be silently dropped. Verified red before the fix (ran standalone against the
+  pre-fix code: `expected undefined to be defined` on the event lookup, with
+  `documentService: an event dispatch threw after its write already committed` visible on stderr).
+- `api/src/platform/webhooks/__tests__/events.test.ts`, new test `"accepts an issue.created payload
+  with priority: 'none' (TRO-501)"` inside the `schemas` block: unit-level proof that the registry's
+  `issue.created` schema itself now accepts `'none'`, independent of the route.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/routes/issues.test.ts src/platform/webhooks/__tests__/events.test.ts
+```
+Both files pass in full (29 + 24 tests) after the fix.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit: `shared/src/types/document.ts`,
+`api/src/platform/webhooks/events.ts`, `api/src/platform/openapi/schemas/issues.ts`, the two test
+files, `docs/openapi.json`, and this entry). No migration, no schema change, no data backfilled —
+`priority` lives in the `properties` JSONB column with no DB-level CHECK constraint, so nothing else
+needs undoing. Reverting restores the pre-fix drift (route already permissive, shared type and the
+two webhook/v1 mirrors narrower) rather than fixing anything new.
+
+---
+
 ## TRO-488 — PF-900 follow-up: terraform input hardening — secret/number validation blocks + verify-script block-scoped greps
 
 **CodeRabbit finding on PR #174/TRO-411, triaged real, none merge-blocking — non-code / artifact-based
