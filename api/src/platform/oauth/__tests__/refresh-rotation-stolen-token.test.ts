@@ -35,20 +35,20 @@
  *   3. An explicit answer to the "distinct error code" clause of the AC.
  *      RFC 6749's `error` enum for `/oauth/token` is closed
  *      (`invalid_request` / `invalid_client` / `invalid_grant` / ...) and
- *      this codebase deliberately does not extend it — `rotateRefreshToken`
- *      returns the SAME top-level `error: 'invalid_grant'` for an unknown
- *      token, an expired token, AND a reused/stolen token. The mechanism
- *      this codebase actually uses to distinguish WHY is `error_description`
- *      (three different strings for those three cases — see `token.ts`'s
- *      `invalidGrant(...)` call sites). "Distinct error code" is proven
- *      below as "a distinguishable, reuse-specific `error_description`",
- *      matching this repo's own convention (`bearerAuth.ts`'s header records
- *      the opposite, deliberate choice for `/api/v1` 401s — TRO-430 — so
- *      inventing a NEW `error` enum value here would be a genuine
- *      externally-visible token-contract change, exactly the kind of thing
- *      this ticket's own rules say to stop and report rather than
- *      improvise. Not needed: the description-text signal already exists
- *      and is asserted on below).
+ *      this codebase deliberately does not extend the RFC-defined field —
+ *      `rotateRefreshToken` still returns the SAME top-level
+ *      `error: 'invalid_grant'` for an unknown token, an expired token, and
+ *      a reused/stolen token. What CAN and DOES distinguish them, as of
+ *      TRO-598 (PF-800 follow-up), is TWO signals rather than one:
+ *      `error_description` (the original, human-readable, spec-sanctioned
+ *      string — three different values for those three cases) AND the new
+ *      additive `error_details.reason` (`'token_unknown' | 'token_expired'
+ *      | 'token_reused'`, `token.ts`'s `RefreshTokenErrorReason`) — a real
+ *      machine-readable field, not just text-matching. Both are asserted on
+ *      below. This does not touch the closed `error` enum at all
+ *      (`bearerAuth.ts`'s header records the same "don't invent a new
+ *      top-level value" convention for `/api/v1` 401s, TRO-430) — the fix
+ *      is additive, alongside the RFC shape, never a replacement of it.
  *
  * ── Verification (this ticket's own claim-provenance evidence) ──
  *
@@ -306,6 +306,12 @@ describe('the stolen-token story (TRO-445 / PF-800)', () => {
     expect(reuseError.error_description).toBe('Refresh token has already been used.');
     expect(reuseError.error_description).not.toBe('Refresh token is unknown or invalid.');
     expect(reuseError.error_description).not.toBe('Refresh token has expired.');
+    // TRO-598 (PF-800 follow-up): the machine-readable discriminator this
+    // file's own header used to say didn't exist — see that comment's own
+    // "AC: distinct error code" note, now superseded. Additive: the RFC
+    // 6749 `error`/`error_description` fields above are asserted unchanged;
+    // this is a NEW field alongside them, not a replacement.
+    expect((reuseRes.body as { error_details?: { reason?: string } }).error_details?.reason).toBe('token_reused');
     // RFC 6749 §5.2: an error response carries no token material.
     expect('access_token' in (reuseRes.body as Record<string, unknown>)).toBe(false);
 

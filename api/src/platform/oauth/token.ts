@@ -253,6 +253,20 @@ export type TokenErrorCode =
   | 'access_denied'
   | 'expired_token';
 
+/** TRO-598 (PF-800 follow-up) — an additive, non-RFC discriminator for the
+ *  refresh-token rejection reasons that all share the same top-level
+ *  `error: 'invalid_grant'` (RFC 6749's `error` enum is closed, so this
+ *  can't be a new top-level value without diverging from spec). Lives
+ *  alongside `error`/`error_description`, never replacing either — an
+ *  integrator that only reads RFC 6749's own fields sees no change.
+ *  `error_description` remains the human-readable, spec-sanctioned string;
+ *  this is the machine-readable one RFC 6749 §5.2 explicitly says
+ *  `error_description` is not meant to be. Populated only by
+ *  `rotateRefreshToken`'s three refresh-token-specific rejection branches
+ *  below — never by the authorization-code grant's own `invalidGrant`
+ *  calls, which are out of this ticket's scope. */
+export type RefreshTokenErrorReason = 'token_reused' | 'token_expired' | 'token_unknown';
+
 export type TokenGrantResult =
   | {
       ok: true;
@@ -266,10 +280,11 @@ export type TokenGrantResult =
       status: number;
       error: TokenErrorCode;
       errorDescription: string;
+      errorDetails?: { reason: RefreshTokenErrorReason };
     };
 
-function invalidGrant(description: string): TokenGrantResult {
-  return { ok: false, status: 400, error: 'invalid_grant', errorDescription: description };
+function invalidGrant(description: string, errorDetails?: { reason: RefreshTokenErrorReason }): TokenGrantResult {
+  return { ok: false, status: 400, error: 'invalid_grant', errorDescription: description, errorDetails };
 }
 
 function invalidClient(description: string): TokenGrantResult {
@@ -652,16 +667,16 @@ export async function rotateRefreshToken(params: RotateRefreshTokenParams): Prom
   const tokenRow = await lookupTokenByRefreshHash(refreshTokenHash);
 
   if (!tokenRow) {
-    return invalidGrant('Refresh token is unknown or invalid.');
+    return invalidGrant('Refresh token is unknown or invalid.', { reason: 'token_unknown' });
   }
 
   if (tokenRow.revoked_at) {
     await revokeTokenFamily(tokenRow.family_id);
-    return invalidGrant('Refresh token has already been used.');
+    return invalidGrant('Refresh token has already been used.', { reason: 'token_reused' });
   }
 
   if (!tokenRow.refresh_token_expires_at || tokenRow.refresh_token_expires_at.getTime() < Date.now()) {
-    return invalidGrant('Refresh token has expired.');
+    return invalidGrant('Refresh token has expired.', { reason: 'token_expired' });
   }
 
   const authResult = await authenticateClient({
@@ -710,7 +725,7 @@ export async function rotateRefreshToken(params: RotateRefreshTokenParams): Prom
       // race" as safer than a sequential replay.
       await client.query('ROLLBACK');
       await revokeTokenFamily(tokenRow.family_id);
-      return invalidGrant('Refresh token has already been used.');
+      return invalidGrant('Refresh token has already been used.', { reason: 'token_reused' });
     }
 
     const accessToken = generateAccessToken();
