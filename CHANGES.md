@@ -167,6 +167,38 @@ findings fixed, 1 deferred, 2 repeats of the already-dismissed OpenAPI item:**
 
 ---
 
+## TRO-622 — Demo run-through: three `pnpm dev` / demo-environment breakers fixed
+
+**What was wrong (all three observed 2026-08-16 by executing `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`
+end-to-end on a fresh checkout of `main`, exactly as the PF-908 recording will).**
+1. `pnpm dev` also started `@ship/browser-demo`'s bare `vite` (plus the sdk/cli/slack `dev` watchers)
+   because `scripts/dev.sh` ran `--recursive --filter '!@ship/agent' run dev`; browser-demo and
+   `@ship/web` raced for `:5173` and web died with `EADDRINUSE` (`web dev: Failed`).
+2. The developer portal hung on "Setting up developer session..." under React dev mode
+   (`DeveloperPortalContext.tsx`'s mint-once ref + `cancelled` flag discarded the only in-flight
+   mint on StrictMode's effect re-run); and re-entering the portal within the same minute 409'd
+   because the minted token's name was minute-granular and `POST /api/api-tokens` rejects duplicate
+   active names.
+3. `docs/submission/demo-webhook-listener.mjs` (the standalone reference subscriber the demo's
+   Replay shot uses) imported `verifyWebhook` from `sdk/dist/index.js`, which no longer exports it
+   since TRO-449's browser/node split → `undefined` → every correctly-signed delivery was reported
+   `✗ rejected` and the portal Replay landed as *Dead*.
+
+**What changed.** `scripts/dev.sh` excludes the four W6 packages from the app process group;
+`web/src/contexts/DeveloperPortalContext.tsx` mints once and lets the result land in state, with a
+ms+random token name; the listener imports from `../../sdk/dist/node.js` with a loud guard.
+Regression tests: `web/src/contexts/DeveloperPortalContext.test.tsx` (StrictMode render resolves;
+two mounts mint different names — red before), `sdk/src/__tests__/referenceListenerImport.test.ts`.
+
+**How to run it.** `pnpm dev` → web prints `➜ Local: http://localhost:5173/`; open
+`/developer/webhooks` (loads past the spinner, reload it within a minute — still loads); run
+`SECRET=whsec_… PORT=8787 node docs/submission/demo-webhook-listener.mjs` and replay a delivery
+from the portal → `✓ verified … idempotency-key=…`.
+
+**Rollback.** Revert the PR (three independent commits; each can be reverted alone).
+
+---
+
 ## TRO-549 — E2E login-flow assertions accept any non-/login URL as proof of sign-in
 
 **What changed.** Five sites across `e2e/auth.spec.ts` (lines 53, 67, 94) and
