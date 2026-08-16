@@ -1,0 +1,22 @@
+
+> ship@0.0.0 type-check /Users/troy/repos/GAUNTLET/Ship
+> pnpm --recursive run type-check
+
+Scope: 8 of 9 workspace projects
+sdk type-check$ tsc --noEmit
+shared type-check$ tsc --noEmit
+shared type-check: Done
+sdk type-check: Done
+agent type-check$ tsc --noEmit
+api type-check$ tsc --noEmit
+integrations/browser-demo type-check$ tsc --noEmit
+integrations/cli type-check$ tsc --noEmit
+integrations/browser-demo type-check: src/localStorageTokenStore.ts(1,44): error TS2307: Cannot find module '@ship/sdk' or its corresponding type declarations.
+integrations/browser-demo type-check: src/main.ts(1,43): error TS2307: Cannot find module '@ship/sdk' or its corresponding type declarations.
+integrations/browser-demo type-check: Failed
+/Users/troy/repos/GAUNTLET/Ship/integrations/browser-demo:
+ ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL  @ship/browser-demo@0.0.0 type-check: `tsc --noEmit`
+Exit status 2
+ WARN   Local package.json exists, but node_modules missing, did you mean to install?
+integrations/slack type-check$ tsc --noEmit
+ ELIFECYCLE  Command failed with exit code 2.
