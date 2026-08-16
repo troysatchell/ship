@@ -77,7 +77,8 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     // serializeSubscription() + the routes' own `{ ...serialized, secret,
     // warning }` construction) — app_id/singular event_type/target_url/no
     // updated_at, plus the `warning` field. Request body (TRO-607) now also
-    // matches the real server schema exactly.
+    // matches the real server schema exactly — the same shape TRO-455/PF-603's
+    // TTFE drill needed (see webhooks.ts's header).
     const responseBody = {
       id: 'sub_1',
       app_id: 'app_1',
@@ -93,11 +94,13 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
 
     // Request body now matches the real server schema: app_id/singular
-    // event_type/target_url (TRO-607). This mocked test proves the SDK
-    // builds the correct HTTP request and parses the response correctly.
-    // A real UUID, not a placeholder like 'app_1' — the real request schema
-    // requires app_id to be a valid UUID (CodeRabbit, TRO-607 review), and
-    // this mock should stay representative of what actually validates.
+    // event_type/target_url (TRO-607) — the same shape TRO-455/PF-603's
+    // TTFE drill needed (see scripts/drill/ttfe.ts's live use of this exact
+    // method). This mocked test proves the SDK builds the correct HTTP
+    // request and parses the response correctly. A real UUID, not a
+    // placeholder like 'app_1' — the real request schema requires app_id to
+    // be a valid UUID (CodeRabbit, TRO-607 review), and this mock should
+    // stay representative of what actually validates.
     const appId = '11111111-1111-4111-8111-111111111111';
     const created = await client.webhooks.createSubscription({
       app_id: appId,
