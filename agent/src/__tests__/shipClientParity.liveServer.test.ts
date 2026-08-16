@@ -20,13 +20,15 @@
  * already established) — never a mock — so this is a genuine two-surface
  * comparison, not two hand-written fixtures asserted against each other.
  *
- * `getDocument()` is NOT asserted as fully field-identical between modes —
- * see `shipClient.ts`'s module docstring ("Fields that CANNOT carry over")
- * for the verified, disclosed reason (`content`/`completed_at` absent from
- * v1; `visibility`/`created_by` synthesized to fail `isDocumentVisibleTo`
- * closed). This file's own `getDocument` case asserts parity on exactly the
- * fields that CAN match (id/document_type/title/properties) and asserts the
- * documented divergence explicitly, rather than silently skipping it.
+ * `getDocument()` IS asserted as fully field-identical between modes as of
+ * TRO-620 — TRO-605 widened `GET /api/v1/documents/:id` to carry
+ * `content`/`visibility`/`created_by`/`completed_at`, and `shipClient.ts`'s
+ * `getDocumentViaSdk` now passes them through (see its module docstring,
+ * "Fields that CANNOT carry over"). Before TRO-620 this file's `getDocument`
+ * case asserted parity on id/document_type/title/properties only and
+ * asserted the (then-real) divergence explicitly; it now asserts equality
+ * on every `ShipDocument` field, and sanity-checks the internal side's real
+ * values so the equalities cannot pass vacuously on null === null.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import crypto from 'crypto';
