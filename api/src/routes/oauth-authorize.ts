@@ -7,6 +7,13 @@
  * params), never the `ApiError` shape — that contract governs `/api/v1`
  * only.
  *
+ * Also in this router: `GET /oauth/app-info` (TRO-550), a small addition
+ * that is the one deliberate exception to the "navigation/form only, never
+ * fetch()" rule below — see its own inline comment for why: it returns JSON
+ * always, needs no session, and exists specifically so the consent screen
+ * (a `fetch()` call) never has to trust a client-supplied app name again.
+ *
+
  * Deliberately thin: every DB read/write and the actual validation
  * predicates live in `../platform/oauth/authorize.js` (same split as
  * PF-102's `oauth-apps.ts` / `appRegistration.ts`). This file only shapes
@@ -129,6 +136,17 @@ function redirectWithOAuthError(
   res.redirect(status, target.toString());
 }
 
+/** JSON error responder for `GET /oauth/app-info` — RFC 6749 §5.2's
+ * `{ error, error_description }` shape, same convention `oauth-token.ts`'s
+ * `sendTokenError` follows for its own JSON (non-redirect) errors, and NOT
+ * the `/api/v1` `ApiError` class (see this file's TRO-550 route comment, and
+ * `api/src/platform/api/v1/errors.ts`'s own header, for why). There is no
+ * redirect_uri in play here — this endpoint returns JSON always, success or
+ * failure, so there is no open-redirect concern to route around. */
+function sendAppInfoError(res: Response, status: number, error: string, description: string): void {
+  res.status(status).json({ error, error_description: description });
+}
+
 /** Shared validation for both endpoints below: resolve the app, verify
  * `redirect_uri` is exactly registered, `response_type=code`,
  * `code_challenge`/method, and that every requested scope is one the app
@@ -230,6 +248,40 @@ export function createOAuthAuthorizeRouter(webOrigin: string): RouterType {
     if (validation.state) params.set('state', validation.state);
     return `/oauth-consent?${params.toString()}`;
   }
+
+  // GET /oauth/app-info — TRO-550. Server-verified app-name lookup for the
+  // consent screen (`web/src/pages/OAuthConsent.tsx`), which fetches this
+  // BEFORE the user sees anything and renders ONLY what it returns — never
+  // a query-string `app_name`. See oauth-app-info.ts's OpenAPI registration
+  // for the full security reasoning (this endpoint has no `name` input
+  // anywhere; the response can only ever be the real oauth_apps.name row).
+  router.get('/app-info', async (req: Request, res: Response): Promise<void> => {
+    try {
+      const clientId = asString(req.query.client_id);
+      if (!clientId) {
+        sendAppInfoError(res, 400, 'invalid_request', 'client_id is required.');
+        return;
+      }
+
+      const app = await getOAuthAppByClientId(clientId);
+      if (!app) {
+        // Unknown OR revoked — deliberately indistinguishable to the
+        // caller, same non-disclosure behavior as getOAuthAppByClientId's
+        // own doc comment (an attacker probing client_ids should not learn
+        // which case applied).
+        sendAppInfoError(res, 404, 'invalid_client', 'Unknown or revoked client_id.');
+        return;
+      }
+
+      res.status(200).json({ name: app.name });
+    } catch (error) {
+      // Same catch convention as every other handler in this file: a
+      // transient DB error becomes one failed request (a proper 4xx/5xx
+      // JSON body), never an unhandled rejection.
+      console.error('GET /oauth/app-info error:', error instanceof Error ? error.message : error);
+      sendAppInfoError(res, 500, 'server_error', 'Something went wrong. Please try again.');
+    }
+  });
 
   // GET /oauth/authorize — the RFC 6749 authorization endpoint. A
   // third-party OAuth client (or, per the graded scenario, the browser
