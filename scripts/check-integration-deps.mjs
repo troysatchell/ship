@@ -16,8 +16,14 @@
  * violations once a real package lands there and declares one.
  *
  * Scope, deliberately:
- * - Only `dependencies` (runtime) is checked — never `devDependencies` or
- *   `peerDependencies`. The brief mandates `strict: true` tsconfigs for every
+ * - `dependencies`, `optionalDependencies`, AND `peerDependencies` are all
+ *   checked (TRO-496 / CodeRabbit on PR #175): a package can smuggle a
+ *   runtime dep past a `dependencies`-only check via `optionalDependencies`
+ *   (npm still installs these by default unless `--omit=optional` is passed)
+ *   or via `peerDependencies` combined with an auto-install flag/newer npm
+ *   default behavior — either way the dep lands in the runtime graph the
+ *   same as a plain `dependencies` entry would. `devDependencies` remains
+ *   exempt: the brief mandates `strict: true` tsconfigs for every
  *   integrations/* package, and each one needs its own dev tooling
  *   (typescript, a bundler, a test runner, ...); the constraint this ticket
  *   enforces is about what ships in the runtime dependency graph, not what
@@ -49,12 +55,18 @@ export const ALLOWED_RUNTIME_DEP = '@ship/sdk'
  * Never throws on a malformed/partial object — a missing `dependencies` field
  * is "no runtime deps", not an error.
  */
+const RUNTIME_DEP_FIELDS = ['dependencies', 'optionalDependencies', 'peerDependencies']
+
 export function checkPackageDeps(pkgJson) {
   const name = pkgJson && typeof pkgJson.name === 'string' ? pkgJson.name : '(unnamed package)'
-  const deps = (pkgJson && typeof pkgJson.dependencies === 'object' && pkgJson.dependencies) || {}
-  const violations = Object.entries(deps)
-    .filter(([depName]) => depName !== ALLOWED_RUNTIME_DEP)
-    .map(([depName, version]) => ({ package: name, dependency: depName, version: String(version) }))
+  const violations = []
+  for (const field of RUNTIME_DEP_FIELDS) {
+    const deps = (pkgJson && typeof pkgJson[field] === 'object' && pkgJson[field]) || {}
+    for (const [depName, version] of Object.entries(deps)) {
+      if (depName === ALLOWED_RUNTIME_DEP) continue
+      violations.push({ package: name, dependency: depName, version: String(version), field })
+    }
+  }
   return { violations }
 }
 
