@@ -17,11 +17,10 @@ carries a `file:line` citation. Per `.claude/CLAUDE.md`'s provenance rule, each 
   inference from an observed fact; the citation says which.
 - **not-run** — something this draft did not execute; the reason is stated.
 
-Anything only Troy can answer is left as a visible block:
-
-> **[TROY — needs your answer]** *one-line prompt of what to write*
-
-Search the file for `[TROY` to find them all — there are eleven. Everything else is done.
+Anything only Troy can answer is left as a visible blockquote that opens with the marker
+`[TROY — needs your answer]` followed by a one-line prompt of what to write. There are nine such
+blocks; `grep -c '^> \*\*\[TROY' docs/submission/PLUGFORGE-PRESEARCH.md` counts exactly them.
+Everything else is done.
 
 ---
 
@@ -34,14 +33,17 @@ Search the file for `[TROY` to find them all — there are eleven. Everything el
 **derived** — no production traffic exists to measure; the demo is the only "load." The demo path
 is the five-line story (`ship login` → subscribe → create → verified event) plus a portal replay and
 one CI drill run (`PLUGFORGE.MD:300`, `:304`). The cost analysis' assumption for a full narrated
-demo is **~30 event-publishing actions** at an assumed 1.5 matching subscriptions per event → ~45–90
-delivery-attempt rows per session (`docs/submission/PF-905-AI-COST-ANALYSIS.md:215-219`). Fanout is
-bounded by construction: one app can hold at most 8 distinct active subscriptions because the
-`EVENT_TYPES` enum has 8 entries and migration 047's unique index is per
-`(app_id, event_type, target_url)` (`PF-905-AI-COST-ANALYSIS.md:241-244`; `api/src/platform/webhooks/events.ts:111`).
-Request-rate ceiling on the public side is set by the per-app/per-token token buckets — 120 and 60
-req/min by default (`api/src/platform/ratelimit/config.ts:41-42`, `PLUGFORGE.MD:155`) — so a demo
-that stays under one request per second per credential never touches a limiter.
+demo is **~30 event-publishing actions** at an assumed 1.5 matching subscriptions per event → ~45
+first-attempt deliveries, and up to ~90 delivery-attempt rows once retries against a deliberately
+failing demo target (the DLQ/replay shot) are counted (`docs/submission/PF-905-AI-COST-ANALYSIS.md:215-219`
+gives the 45–90 range). Fanout is **not capped per app**: no code-enforced limit on subscriptions
+per app was found (`PF-905-AI-COST-ANALYSIS.md:240-244`); migration 047's unique index is per
+`(app_id, event_type, target_url)`, so the only structural bound is 8 event types per *target URL*
+(`EVENT_TYPES` has 8 entries, `api/src/platform/webhooks/events.ts:111`), and N target URLs give N
+deliveries per event. Request-rate ceiling on the public side is set by the per-app/per-token token
+buckets — 120 and 60 req/min by default (`api/src/platform/ratelimit/config.ts:41-42`,
+`PLUGFORGE.MD:155`) — one request per second per token *is* the token limit, so a demo needs to
+stay well under that (a few requests a minute per credential is what the five-line story does).
 
 #### How many OAuth apps and subscriptions seeded for the grader; at what fanout does the in-memory deliverer miss the < 2 s P95
 
@@ -112,9 +114,11 @@ Decision recorded at `PLUGFORGE.MD:179`.
 **observed** — `MAX_ATTEMPTS = 6` (`api/src/platform/webhooks/deliverer.ts:112`); after the sixth
 failed attempt the delivery is dead-lettered and nothing further is sent. Retry schedule
 1s/4s/16s/1m/5m/30m + jitter (`:109`); the 30 m entry is defined for spec fidelity but unreachable
-at six attempts (`:41-49`). So the worst case per event per broken subscriber is exactly six HTTP
-attempts and six log rows — bounded per event, not per subscriber. There is no per-subscriber
-circuit breaker that stops *new* events to a dead endpoint; that would be a follow-up.
+at six attempts (`:41-49`). So the worst case is six HTTP attempts and six log rows **per
+subscription per event** — with N broken subscriptions matching an event, up to 6N attempts and 6N
+rows for that event, and there is no global fanout cap (1.1 above). The bound is per event, not per
+subscriber over time: there is no per-subscriber circuit breaker that stops *new* events to a dead
+endpoint; that would be a follow-up.
 
 > **[TROY — needs your answer]** *A dollar/row ceiling you'd actually act on for the delivery log,
 > or "none — bounded by MAX_ATTEMPTS is enough for this deployment."*
@@ -223,9 +227,12 @@ Week 6 (`api/src/openapi/registry.ts`, `PLUGFORGE.MD:51`), so the pattern was kn
 registry reuses it (`api/src/platform/openapi/registry.ts`). **Fallback:** the spec is *also*
 committed as a static file, `docs/openapi.json` (PF-204), with `pnpm openapi:check` diffing it
 against the in-process generator in both CI pipelines (`.gitlab-ci.yml:83`, `.github/workflows/ci.yml:98`;
-~1.2 s, `PF-905-AI-COST-ANALYSIS.md:164-178`). If the generator broke late, the committed file is
-still a valid, servable spec. The generator's boot-throw policy (fail boot rather than serve a
-stale spec) is written up at `docs/architecture.md:339-348`.
+~1.2 s, `PF-905-AI-COST-ANALYSIS.md:164-178`). That is a *repository/CI* fallback, not a runtime one:
+if the generator broke late, the committed file would still be a valid spec for the docs and for the
+SDK parity test, but the deployed API would not serve `GET /api/v1/openapi.json` at all — the
+generator runs at boot and a failure **fails the boot** rather than serving a stale spec
+(`docs/architecture.md:339-348`). So the real late-week fallback is "revert the route that broke
+generation," caught by PF-203's fitness walk in CI before it reaches a boot.
 
 > **[TROY — needs your answer]** *Your own comfort level with Zod / zod-to-openapi in one line.*
 
@@ -588,12 +595,14 @@ guaranteed identical to the live one by the drift check.
 
 #### One-command CLI setup for a grader
 
-**observed** — the SDK/CLI are workspace packages, not npm-published (`PLUGFORGE.MD:347`), so the
-one command is the repo's cold start (`./start.sh`, `README.md:37-56`) followed by
-`pnpm --filter @ship/cli build` and `ship login` against `SHIP_API_URL`; `integrations/cli/package.json`
-exposes the `ship` bin. The token-only path that needs no CLI at all — mint a Client Credentials
-token and `curl` `/api/v1/me` — is the block at `README.md:351-374`. **not-run** — this draft did
-not execute the clean-machine run; PF-907's AC is that someone does.
+**observed** — it is not one command today; it is a short sequence. The SDK/CLI are workspace
+packages, not npm-published (`PLUGFORGE.MD:347`), so a grader runs the repo's cold start
+(`./start.sh`, `README.md:37-56`), then `pnpm --filter @ship/cli build`, then `ship login` against
+the deployed `SHIP_API_URL`; `integrations/cli/package.json` exposes the `ship` bin. The genuinely
+one-block path that needs no CLI at all — mint a Client Credentials token and `curl` `/api/v1/me` —
+is `README.md:351-374`, and that is what the README leads with. **not-run** — this draft did not
+execute the clean-machine run; PF-907's AC is that someone does, and this answer should be tightened
+to a single tested command if one lands.
 
 ---
 
@@ -641,9 +650,11 @@ produced *this* document is a valid supplementary one.
    resulting `conversations.json`).
 3. Save it in this directory as
    `docs/submission/presearch-conversation-<YYYY-MM-DD>.md` (or `.txt` / `.json` for the raw
-   forms). Before committing, skim it for anything that must not land in a public repo — API keys,
-   the Render API key, personal data — and redact in place; the grader credential in `README.md` is
-   already deliberately published, so it is fine.
+   forms). Before committing, redact **every** secret in place — API keys, the Render API key,
+   any `client_secret`/`whsec_` value, session cookies, personal data — including the grader
+   credential even though `README.md` publishes it deliberately (redacting it costs nothing and
+   keeps the artifact policy simple). If any credential that is *not* deliberately public shows up
+   in the export, rotate it before the artifact is committed, not after.
 4. Replace the placeholder link below and commit on this branch (or a follow-up docs branch).
 
 **Attached conversation:** `docs/submission/presearch-conversation-<date>.md` — *placeholder;

@@ -19,7 +19,7 @@ conversation attached as a reference artifact.
   §8 out-of-scope), `docs/architecture.md`, `docs/IAM-ADAPTATION-RENDER.md`,
   `docs/submission/PF-905-AI-COST-ANALYSIS.md`, and the code (`api/src/platform/**`, `sdk/`,
   `integrations/`, CI files, README) — each answer tagged **observed** / **derived** / **not-run** per
-  `.claude/CLAUDE.md`'s provenance rule and cited `file:line`. The eleven questions only Troy can
+  `.claude/CLAUDE.md`'s provenance rule and cited `file:line`. The nine questions only Troy can
   answer (hours/day, honest skill inventory, budget ceilings, personal preferences, the conversation
   export) are left as visible `> **[TROY — needs your answer]**` blocks with a one-line prompt each.
   Structure and voice follow Week 5's `PRESEARCH.MD`; no W5 answers are reused. A final "Reference
@@ -38,7 +38,8 @@ permitted; (2) the deliverer dead-letters every non-2xx/non-5xx including 429 an
 (`deliverer.ts:707`, `:852`) — a documented simplification, replay is the recovery. Neither is
 changed by this ticket; both are named in the doc's answers.
 
-**How to verify.** `grep -c '\[TROY' docs/submission/PLUGFORGE-PRESEARCH.md` → 11. Spot-check any
+**How to verify.** `grep -c '^> \*\*\[TROY' docs/submission/PLUGFORGE-PRESEARCH.md` → 9 (the
+answer blocks only; the legend names the marker in inline code and does not match). Spot-check any
 `file:line` citation against the tree. `git diff --stat` shows only the two docs files plus this
 entry — no code, no tests, no schema.
 
