@@ -6,6 +6,70 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-434 — PF-905: AI cost analysis (figures traceable to ledger/CI data, not vibes)
+
+**What was built.** `docs/submission/PF-905-AI-COST-ANALYSIS.md` — the PRD-mandated AI/infra
+cost-analysis doc (PLUGFORGE.MD §4 PF-905), distinct from the earlier W4-scoped
+`docs/submission/AI-COST-ANALYSIS.md` (that one covers the audit sprint's Claude Code tooling
+spend; this one covers the shipped platform's LLM footprint and production infra projections).
+Every figure is tagged OBSERVED / DERIVED / ASSUMED / TODO so a reader can tell measurement from
+extrapolation apart at a glance.
+
+**Corrected the PRD's own premise.** PLUGFORGE.MD's PF-905 entry states "Platform is LLM-free... the
+only LLM path remains user-initiated agent turns." Reading the actual code turned up a second,
+unrelated LLM call path: `api/src/services/ai-analysis.ts` calls AWS Bedrock directly from
+`POST /api/ai/analyze-plan`/`analyze-retro` (wired to `PlanQualityBanner.tsx` /
+`QualityAssistant.tsx`), auto-triggered on content change — not a FleetGraph agent turn, and not
+part of Epic 7. It predates the Week 6 epics entirely (first commit `8c0de05`, 2026-02-11). The doc
+states both paths with file:line citations rather than repeating the PRD's summary as fact.
+
+**Real measurements taken this session**, not estimated: TTFE drill CI-job wall-clock from 5 real
+`gh run view` samples (~62.8s/run avg) plus 5 real `.factory/drill-ttfe.log` stage-timing samples
+from sibling worktrees; a real local Playwright run of all 4 OAuth e2e spec files (8 tests) —
+5 passed with real per-test durations (378ms-5442ms), 3 failed twice on `testcontainers` Postgres
+setup timing out under this session's genuine Docker contention (18 concurrent containers observed,
+`ship-postgres-1` briefly hit crash-recovery) — reported honestly rather than silently retried away
+or replaced with a guess; `pnpm openapi:check` timed directly (1.196s). `webhook_deliveries` row
+size is derived from the real migration 048 column list plus measured literal byte lengths (the
+table itself has zero rows in every real environment — migrations 048/050 say so in their own
+headers).
+
+**Production projections (100/1k/10k/100k users)** use explicit, individually-labeled assumptions
+for webhook fanout ratio, agent active rate, and a 30-day retention-window recommendation grounded
+in two existing precedents already in this codebase (OAuth refresh tokens' 30-day TTL, migration
+043; Aurora's own CloudWatch log `retention_in_days = 30`, `terraform/database.tf`) — retention
+itself is NOT currently implemented for `webhook_deliveries`/`public_api_audit`, which the doc
+flags as a real, cited gap rather than assuming it away. No dollar figures are invented: Ship has no
+production AWS bill yet, so $ conversion is explicitly left as a post-deploy follow-up rather than
+backfilled from remembered list prices.
+
+**Left as a placeholder, per this ticket's scope constraint — not guessed at.** The "LLM spend
+during Epic 7" sub-section is a `TODO(TRO-434)` pointing at
+`docs/submission/PF-704-COST-LEDGER-DELTA.md`, which does not exist yet: PR #263 (TRO-440/PF-704,
+the branch that produces it) was confirmed OPEN and unmerged (`gh pr view 263`) before writing this
+doc. No E7 before/after token-volume numbers are estimated or fabricated.
+
+**How to run it.** This is a doc ticket; "running" it means re-gathering the same evidence to check
+it hasn't drifted:
+- TTFE CI timing: `gh run list --workflow=ci.yml --limit 20 --json databaseId,headBranch` then
+  `gh run view <id> --json jobs` and read the `drill · TTFE (PF-603)` job's `startedAt`/`completedAt`;
+  or re-run `pnpm drill ttfe` locally and read its own stage breakdown.
+- Playwright OAuth compute: `pnpm exec playwright test e2e/oauth-pkce-chain.spec.ts
+  e2e/browser-demo-pkce.spec.ts e2e/oauth-authorize.spec.ts
+  e2e/oauth-refresh-rotation-stolen-token.spec.ts --workers=1` (use the `/e2e-test-runner` skill,
+  not the foreground form) and read `test-results/progress.jsonl` for real per-test durations.
+- Spec-gen overhead: `time pnpm openapi:check` from the repo root.
+- Delivery-log row size: re-read `api/src/db/migrations/048_webhook_deliveries.sql`'s column list;
+  re-check row count is still zero via `SELECT count(*) FROM webhook_deliveries` before trusting the
+  derived (not measured) size holds.
+- Once PR #263 merges: fill in §2.1 from the real `docs/submission/PF-704-COST-LEDGER-DELTA.md`,
+  replacing the TODO.
+
+**Rollback.** Delete `docs/submission/PF-905-AI-COST-ANALYSIS.md` and revert this CHANGES.md entry.
+No code changes, no migrations, no schema touched.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
