@@ -18,7 +18,7 @@ import request from 'supertest'
 import crypto from 'crypto'
 import { createApp } from '../../../app.js'
 import { pool } from '../../../db/client.js'
-import { verifyAppCredentials } from '../appRegistration.js'
+import { verifyAppCredentials, rotateOAuthAppSecret } from '../appRegistration.js'
 
 describe('OAuth app registration (PF-102)', () => {
   const app = createApp()
@@ -176,6 +176,61 @@ describe('OAuth app registration (PF-102)', () => {
     }
   })
 
+  // TRO-492 (c): the AC-2 log-spy grep above only ever exercised the CREATE
+  // path — a rotate handler that logged the new plaintext secret (or the
+  // route's own error-path `console.error`, which logs `error.message`
+  // rather than the secret, but should still be proven clean) would not
+  // have failed it. Same spy/serialize/grep shape, aimed at
+  // `POST /:id/rotate` instead.
+  it('AC-2 (rotation): raw secret never appears in a logged line on rotation', async () => {
+    const createRes = await createAppRequest({
+      name: `AC-2 Rotate App ${testRunId}`,
+      client_type: 'confidential',
+    })
+    expect(createRes.status).toBe(201)
+    const appId: string = createRes.body.data.id
+    const oldSecret: string = createRes.body.data.client_secret
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    try {
+      const rotateRes = await request(app)
+        .post(`/api/oauth-apps/${appId}/rotate`)
+        .set('Cookie', sessionCookie)
+        .set('x-csrf-token', csrfToken)
+      expect(rotateRes.status).toBe(200)
+      const newSecret: string = rotateRes.body.data.client_secret
+      expect(typeof newSecret).toBe('string')
+      expect(newSecret).not.toBe(oldSecret)
+
+      const serializeArg = (arg: unknown): string => {
+        if (typeof arg === 'string') return arg
+        if (arg instanceof Error) return `${arg.message}\n${arg.stack ?? ''}`
+        try {
+          return JSON.stringify(arg)
+        } catch {
+          return String(arg)
+        }
+      }
+
+      const allCalls = [...logSpy.mock.calls, ...errorSpy.mock.calls, ...warnSpy.mock.calls]
+      const leakedNew = allCalls.some((callArgs) =>
+        callArgs.some((arg) => serializeArg(arg).includes(newSecret))
+      )
+      const leakedOld = allCalls.some((callArgs) =>
+        callArgs.some((arg) => serializeArg(arg).includes(oldSecret))
+      )
+      expect(leakedNew).toBe(false)
+      expect(leakedOld).toBe(false)
+    } finally {
+      logSpy.mockRestore()
+      errorSpy.mockRestore()
+      warnSpy.mockRestore()
+    }
+  })
+
   // ============== AC-3 ==============
   // "raw secret absent from any subsequent response" (shown-once)
   it('AC-3: raw secret is absent from any later response for the same app', async () => {
@@ -198,6 +253,46 @@ describe('OAuth app registration (PF-102)', () => {
       .set('Cookie', sessionCookie)
     expect(listRes.status).toBe(200)
     expect(JSON.stringify(listRes.body)).not.toContain(rawSecret)
+  })
+
+  // TRO-492 (d): independent of AC-4's own rotation test below, which
+  // already checks `verifyAppCredentials` behavior — this specifically
+  // proves the OLD secret is absent from subsequent GET/list responses
+  // (the same AC-3 guarantee, exercised across a rotation instead of only
+  // at creation), and separately confirms the NEW secret is likewise never
+  // returned via GET/list — only from the rotate response itself, exactly
+  // once.
+  it('AC-3 (rotation): the old secret AND the newly-rotated secret are both absent from subsequent GET/list responses', async () => {
+    const createRes = await createAppRequest({
+      name: `AC-3 Rotate App ${testRunId}`,
+      client_type: 'confidential',
+    })
+    expect(createRes.status).toBe(201)
+    const oldSecret: string = createRes.body.data.client_secret
+    const appId: string = createRes.body.data.id
+
+    const rotateRes = await request(app)
+      .post(`/api/oauth-apps/${appId}/rotate`)
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+    expect(rotateRes.status).toBe(200)
+    const newSecret: string = rotateRes.body.data.client_secret
+    expect(typeof newSecret).toBe('string')
+    expect(newSecret).not.toBe(oldSecret)
+
+    const getRes = await request(app)
+      .get(`/api/oauth-apps/${appId}`)
+      .set('Cookie', sessionCookie)
+    expect(getRes.status).toBe(200)
+    expect(JSON.stringify(getRes.body)).not.toContain(oldSecret)
+    expect(JSON.stringify(getRes.body)).not.toContain(newSecret)
+
+    const listRes = await request(app)
+      .get('/api/oauth-apps')
+      .set('Cookie', sessionCookie)
+    expect(listRes.status).toBe(200)
+    expect(JSON.stringify(listRes.body)).not.toContain(oldSecret)
+    expect(JSON.stringify(listRes.body)).not.toContain(newSecret)
   })
 
   // ============== AC-4 ==============
@@ -252,6 +347,162 @@ describe('OAuth app registration (PF-102)', () => {
     expect(rotateRes.body.success).toBe(false)
     expect(typeof rotateRes.body.error.message).toBe('string')
     expect(rotateRes.body.error.message.length).toBeGreaterThan(0)
+  })
+
+  // ============== TRO-492 ==============
+  // PF-102 follow-up (CodeRabbit on PR #177): the rotation UPDATE's
+  // `revoked_at IS NULL` guard closes the revoke-vs-rotate race but not
+  // rotate-vs-rotate — two simultaneous /rotate calls on the same app could
+  // both return 200, with only the last-committed hash actually persisted
+  // and the other caller's just-returned secret already dead. Fixed in
+  // appRegistration.ts's `rotateOAuthAppSecret` with an optimistic
+  // `client_secret_hash IS NOT DISTINCT FROM $4` guard in the UPDATE's WHERE
+  // clause (see that function's own comment for the full argument).
+  //
+  // Deliberately NO naive "fire two HTTP calls via Promise.all and assert
+  // [200, 409]" smoke test here, unlike token.test.ts's equivalent
+  // redemption/refresh-rotation suites. Those endpoints gate on single-use
+  // consumption, so even a fully SEQUENTIAL pair of calls (no real overlap
+  // at all) produces a genuine winner/loser — the smoke assertion is
+  // reliable regardless of actual interleaving. Rotation is not single-use:
+  // two calls that happen not to overlap (one full SELECT-through-UPDATE
+  // round trip finishing before the other's first read even runs — the
+  // documented, common outcome of Promise.all in this codebase's own
+  // measurements) are both legitimate, independent rotations that SHOULD
+  // both succeed, exactly like two rotations a caller fires minutes apart.
+  // Asserting "[200, 409]" on that shape would be asserting a bug that
+  // doesn't exist, and would flake between demonstrating nothing and
+  // demonstrating a false positive depending on scheduling. Only genuine,
+  // forced overlap — both calls' UPDATEs actually contending for the same
+  // row before either commits — exercises the race this ticket closes, so
+  // that is the only shape tested below, with the same deterministic
+  // lock-and-release technique `token.test.ts` already uses.
+  describe('genuine concurrent rotation of the same app (forced, deterministic race)', () => {
+    /** Same polling pattern as `token.test.ts`'s forced-race tests: waits on
+     * a real, observable database fact (backends genuinely blocked on this
+     * row's write lock) with a bounded deadline, not a fixed sleep
+     * (lessons.md rule 17). Scoped to `current_database()` and excludes this
+     * poller's own backend — the factory runs many ticket worktrees against
+     * the same Postgres cluster, each with its own database but a shared,
+     * cluster-wide `pg_stat_activity`; an unscoped match could count a
+     * sibling worktree's own concurrent test run as one of THIS run's two
+     * expected blocked backends (a gap token.test.ts's own equivalent
+     * helpers flag explicitly; applied here from the start). */
+    async function waitForBlockedRotations(target: number, timeoutMs = 5000): Promise<void> {
+      const deadline = Date.now() + timeoutMs
+      for (;;) {
+        const result = await pool.query<{ blocked: string }>(
+          `SELECT count(*)::text AS blocked FROM pg_stat_activity
+           WHERE wait_event_type = 'Lock'
+             AND datname = current_database()
+             AND pid <> pg_backend_pid()
+             AND query ILIKE '%oauth_apps%client_secret_hash%'`
+        )
+        const blocked = Number(result.rows[0]?.blocked ?? '0')
+        if (blocked >= target) return
+        if (Date.now() >= deadline) {
+          throw new Error(
+            `timed out waiting for ${target} blocked rotation(s) on pg_stat_activity; last saw ${blocked}`
+          )
+        }
+        await new Promise((resolve) => setTimeout(resolve, 20))
+      }
+    }
+
+    it('calls the REAL rotateOAuthAppSecret twice, forced to genuinely race: exactly one wins, the loser gets a defined "conflict" error, and the persisted hash matches only the winner', async () => {
+      // Forces the race instead of hoping for it, WITHOUT adding any
+      // test-only hook to production code — identical technique to
+      // token.test.ts's forced concurrent-redemption/-rotation tests: a
+      // third connection takes an exclusive row lock on the app before
+      // either real rotation call starts. A plain SELECT never blocks on a
+      // row lock (so both calls' validation reads succeed immediately, both
+      // observing the same pre-rotation `client_secret_hash`), but each
+      // call's own atomic UPDATE — the actual guard this ticket adds —
+      // blocks on this lock. Once BOTH are observed genuinely queued for it,
+      // the lock is released and the two blocked UPDATEs contend for the row
+      // for real.
+      const createRes = await createAppRequest({
+        name: `TRO-492 Forced Concurrent Rotate App ${testRunId}`,
+        client_type: 'confidential',
+      })
+      expect(createRes.status).toBe(201)
+      const appId: string = createRes.body.data.id
+      const clientId: string = createRes.body.data.client_id
+
+      const params = { appId, workspaceId }
+
+      const lockClient = await pool.connect()
+      // Tracked explicitly, same CodeRabbit-flagged pattern token.test.ts's
+      // own forced-race test applies: a throw between BEGIN and COMMIT (e.g.
+      // waitForBlockedRotations timing out) must roll back and release the
+      // lock rather than returning a connection to the pool while still
+      // holding an open transaction and row lock.
+      let transactionOpen = false
+      // Hoisted outside the try (same reasoning as token.test.ts): if
+      // something throws before `racePromise` is even created, `settled`
+      // stays safely `undefined` rather than a TDZ ReferenceError, and if
+      // something throws AFTER it's created but before it's awaited on the
+      // success path, the finally block can still observe its eventual
+      // settlement instead of leaving it an unhandled rejection.
+      let settled: Promise<unknown> | undefined
+      try {
+        await lockClient.query('BEGIN')
+        transactionOpen = true
+        await lockClient.query('SELECT id FROM oauth_apps WHERE id = $1 FOR UPDATE', [appId])
+
+        const racePromise = Promise.all([rotateOAuthAppSecret(params), rotateOAuthAppSecret(params)])
+        settled = racePromise.catch(() => undefined)
+
+        await waitForBlockedRotations(2)
+
+        // Releasing here is what lets the race actually happen — both
+        // blocked UPDATEs are now free to contend for the row lock.
+        await lockClient.query('COMMIT')
+        transactionOpen = false
+
+        const [resultA, resultB] = await racePromise
+
+        // Never two 200s: exactly one ok:true.
+        const oks = [resultA.ok, resultB.ok]
+        expect(oks.filter(Boolean)).toHaveLength(1)
+
+        const winner = resultA.ok ? resultA : resultB
+        const loser = resultA.ok ? resultB : resultA
+        if (!winner.ok) throw new Error('expected exactly one winner in this race')
+        if (loser.ok) throw new Error('expected exactly one loser in this race')
+
+        // The loser gets a DEFINED, retry-able error — never a silently
+        // dropped write, and never the ambiguous shape a caller can't act on.
+        expect(loser.error).toBe('conflict')
+
+        // The winner's own returned secret is the one that actually
+        // authenticates.
+        const winnerAuth = await verifyAppCredentials({ clientId, clientSecret: winner.clientSecret })
+        expect(winnerAuth.ok).toBe(true)
+
+        // No lost update: the persisted hash matches the winner's secret
+        // exactly. Had the bug still been present, the SECOND UPDATE to
+        // actually commit (not necessarily the one whose promise settles
+        // second) would have silently overwritten whichever hash the
+        // "winner" here returned, while this test's `oks.filter(Boolean)`
+        // assertion above would already have caught both calls reporting
+        // ok:true.
+        const row = await pool.query<{ client_secret_hash: string }>(
+          `SELECT client_secret_hash FROM oauth_apps WHERE id = $1`,
+          [appId]
+        )
+        const expectedHash = crypto.createHash('sha256').update(winner.clientSecret).digest('hex')
+        expect(row.rows[0]?.client_secret_hash).toBe(expectedHash)
+      } finally {
+        if (transactionOpen) {
+          await lockClient.query('ROLLBACK').catch(() => {})
+        }
+        if (settled) {
+          await settled
+        }
+        lockClient.release()
+      }
+    })
   })
 
   // ============== AC-5 ==============
