@@ -48,15 +48,20 @@ function readDoc(path: string, relativeLabel: string): string {
 describe('PLUGFORGE-EPIC-WRITEUPS.md — per-epic before/fix/after/proof shape', () => {
   const doc = readDoc(EPIC_WRITEUPS_PATH, 'docs/submission/PLUGFORGE-EPIC-WRITEUPS.md')
 
-  // Only epics with genuine closing proof as of writing — see the doc's own
-  // intro for why E5 and E7 are excluded here (checked separately below).
+  // TRO-437 originally listed only the seven epics with closing proof as of
+  // 2026-08-16 (E5/E7 were deferred with an explicit note). TRO-619 added E5
+  // and E7 once PF-503 (PR #260) and PF-704 (TRO-440) had landed, so all nine
+  // epics are now required — E5/E7 are no longer "deferred", and the old
+  // "must NOT have an H2" guard below flipped into a presence check.
   const CLOSED_EPICS = [
     'Epic E0',
     'Epic E1',
     'Epic E2',
     'Epic E3',
     'Epic E4',
+    'Epic E5',
     'Epic E6',
+    'Epic E7',
     'Epic E8',
   ]
 
@@ -75,19 +80,34 @@ describe('PLUGFORGE-EPIC-WRITEUPS.md — per-epic before/fix/after/proof shape',
     expect(section, `${epicLabel} is missing "**Proof.**"`).toMatch(/\*\*Proof\.\*\*/)
   })
 
-  it('explicitly defers E5 and E7 rather than silently omitting them', () => {
-    // E5/E7 have no closing proof yet — PF-503 wasn't merged and PF-704 was
-    // still Backlog as of writing. Omitting them without saying why would
-    // read as "forgotten," not "deliberately not yet ready."
-    expect(doc).toMatch(/E5.*not closed|E5.{0,80}not closed/is)
-    expect(doc).toMatch(/E7.*(PF-704|Backlog|in-progress|not closed)/is)
-    // CodeRabbit (PR #261): the two checks above only prove deferral TEXT
-    // exists — they'd still pass if a half-written "## Epic E5" section were
-    // added alongside it. A real H2 heading for either must not exist while
-    // they're deferred; when one lands for real, this line (not the prose
-    // checks above) is what should be updated to reflect the new epic.
-    expect(doc).not.toMatch(/^## Epic E5\b/m)
-    expect(doc).not.toMatch(/^## Epic E7\b/m)
+  it('E5 and E7 are real H2 sections now, not deferral notes (TRO-619)', () => {
+    // TRO-437's original version of this `it()` asserted the OPPOSITE — that
+    // "## Epic E5"/"## Epic E7" must NOT exist while deferred — and its own
+    // comment said this is the line to flip when they land. TRO-619 landed
+    // them; the H2s must exist, and the intro must no longer describe either
+    // as absent/not closed.
+    expect(doc).toMatch(/^## Epic E5\b/m)
+    expect(doc).toMatch(/^## Epic E7\b/m)
+    expect(doc).not.toMatch(/Two epics are deliberately absent/)
+  })
+
+  it('E7 proof cites the audit-trail test, the cost-ledger delta, and names the unmeasured token-volume gap (TRO-619)', () => {
+    const headingIdx = doc.indexOf('## Epic E7')
+    const nextHeadingIdx = doc.indexOf('\n## ', headingIdx + 1)
+    const section = nextHeadingIdx === -1 ? doc.slice(headingIdx) : doc.slice(headingIdx, nextHeadingIdx)
+    expect(section).toMatch(/auditTrailProof\.liveServer\.test\.ts/)
+    expect(section).toMatch(/PF-704-COST-LEDGER-DELTA\.md/)
+    expect(section).toMatch(/TRO-620/)
+    expect(section).toMatch(/not yet measured/i)
+  })
+
+  it('E6 proof cites GitHub Actions run IDs for the "drill · TTFE (PF-603)" job on main (TRO-619)', () => {
+    const headingIdx = doc.indexOf('## Epic E6')
+    const nextHeadingIdx = doc.indexOf('\n## ', headingIdx + 1)
+    const section = doc.slice(headingIdx, nextHeadingIdx)
+    expect(section).toMatch(/31949732432/)
+    expect(section).toMatch(/31935025680/)
+    expect(section).toMatch(/drill · TTFE \(PF-603\)/)
   })
 
   it('cites real file:line evidence, not prose-only claims', () => {
