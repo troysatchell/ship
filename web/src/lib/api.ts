@@ -217,6 +217,60 @@ async function request<T>(
   return data;
 }
 
+// PF-502 (TRO-436): the public /api/v1 wire contract (PLUGFORGE.MD §2.5) is a
+// DIFFERENT shape from the internal `{success, data|error}` envelope `request()`
+// above speaks — v1 success responses are the raw resource body, and v1 errors
+// are `ApiErrorBody` directly with no wrapper. Bearer-token auth, never cookies
+// (the portal's own token, minted via apiTokens.create, is a v1-valid scoped
+// personal token — see DeveloperPortalContext.tsx). Kept distinct from
+// `request()` rather than unified, since forcing one shape onto the other
+// would misrepresent what either surface actually returns.
+export interface V1ErrorBody {
+  code: 'unauthorized' | 'forbidden' | 'not_found' | 'validation_failed' | 'rate_limited' | 'server_error';
+  message: string;
+  details?: Record<string, unknown>;
+  request_id: string;
+}
+
+export type V1Result<T> = { ok: true; data: T } | { ok: false; error: V1ErrorBody };
+
+export async function v1Request<T>(
+  token: string,
+  path: string,
+  options: RequestInit = {}
+): Promise<V1Result<T>> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Authorization: `Bearer ${token}`,
+    ...(options.headers as Record<string, string> | undefined),
+  };
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}/api/v1${path}`, { ...options, headers });
+  } catch (err) {
+    return {
+      ok: false,
+      error: {
+        code: 'server_error',
+        message: err instanceof Error ? err.message : 'Network request failed',
+        request_id: 'client-network-error',
+      },
+    };
+  }
+  const body = await response.json().catch(() => null);
+  if (!response.ok) {
+    return {
+      ok: false,
+      error: (body as V1ErrorBody | null) ?? {
+        code: 'server_error',
+        message: `Request failed with status ${response.status}`,
+        request_id: 'client-parse-error',
+      },
+    };
+  }
+  return { ok: true, data: body as T };
+}
+
 // Types for workspace management
 export interface Workspace {
   id: string;
@@ -271,10 +325,43 @@ export interface ApiToken {
   is_active: boolean;
   revoked_at: string | null;
   created_at: string;
+  // PF-107/TRO-430 added this column (`api/src/routes/api-tokens.ts`'s
+  // create/list handlers already return it); this type never picked it up
+  // until PF-502 (TRO-436) needed to mint a v1-valid scoped token and the
+  // gap surfaced as a compile error on a test mock. null = legacy unscoped
+  // token, never valid at /api/v1.
+  scopes: string[] | null;
 }
 
 export interface ApiTokenCreateResponse extends ApiToken {
   token: string; // Full token - only returned on creation
+  warning: string;
+}
+
+// PF-502 (TRO-436): mirrors api/src/routes/oauth-apps.ts's response shapes.
+// Deliberately an internal /api surface, not /api/v1 — app registration
+// needs workspace-admin permission, a concept the public scope model has no
+// equivalent for. See DeveloperApps.tsx's file header for the full rationale.
+export interface OAuthApp {
+  id: string;
+  client_id: string;
+  name: string;
+  client_type: 'confidential' | 'public';
+  redirect_uris: string[];
+  requested_scopes: string[];
+  is_first_party: boolean;
+  created_at: string;
+  revoked_at: string | null;
+  has_secret: boolean;
+}
+
+export interface OAuthAppCreateResponse extends OAuthApp {
+  client_secret: string | null; // shown exactly once — null for public clients
+  warning?: string;
+}
+
+export interface OAuthAppRotateResponse {
+  client_secret: string;
   warning: string;
 }
 
@@ -516,7 +603,7 @@ export const api = {
     list: () =>
       request<ApiToken[]>('/api/api-tokens'),
 
-    create: (data: { name: string; expires_in_days?: number }) =>
+    create: (data: { name: string; expires_in_days?: number; scopes?: string[] }) =>
       request<ApiTokenCreateResponse>('/api/api-tokens', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -524,6 +611,30 @@ export const api = {
 
     revoke: (tokenId: string) =>
       request('/api/api-tokens/' + tokenId, {
+        method: 'DELETE',
+      }),
+  },
+
+  oauthApps: {
+    list: () =>
+      request<OAuthApp[]>('/api/oauth-apps'),
+
+    get: (appId: string) =>
+      request<OAuthApp>('/api/oauth-apps/' + appId),
+
+    create: (data: { name: string; client_type: 'confidential' | 'public'; redirect_uris: string[]; requested_scopes: string[] }) =>
+      request<OAuthAppCreateResponse>('/api/oauth-apps', {
+        method: 'POST',
+        body: JSON.stringify(data),
+      }),
+
+    rotateSecret: (appId: string) =>
+      request<OAuthAppRotateResponse>('/api/oauth-apps/' + appId + '/rotate', {
+        method: 'POST',
+      }),
+
+    revoke: (appId: string) =>
+      request('/api/oauth-apps/' + appId, {
         method: 'DELETE',
       }),
   },
