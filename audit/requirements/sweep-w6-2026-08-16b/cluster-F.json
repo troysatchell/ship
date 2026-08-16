@@ -1,0 +1,1074 @@
+{
+  "cluster": "F — E9 infrastructure, docs, portal, submission & process",
+  "rows": [
+    {
+      "id": "W6-R1",
+      "verdict": "N/A",
+      "tickets": [],
+      "evidence": [],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "This is the sprint's four-deadline schedule (defense Monday, MVP Tuesday, early Thursday, final Sunday). Nothing in the code can satisfy or fail it; the only in-repo proxy is the merge history itself. It stays N/A.",
+      "notes": "Process/schedule fact. Proxy observed via `gh pr view` this sweep: the three most recent substantive merges landed 2026-08-16T06:50Z (#263), 07:10Z (#266), 07:37Z (#273), 07:53Z (#276) — i.e. before either reading of the Sunday final deadline (11:59 AM or PM CT). Not a verdict input.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same"
+    },
+    {
+      "id": "W6-R10",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-593",
+        "TRO-594",
+        "TRO-595",
+        "TRO-596",
+        "TRO-609",
+        "TRO-613",
+        "TRO-549",
+        "TRO-601",
+        "TRO-602"
+      ],
+      "evidence": [
+        {
+          "file": "CHANGES.md",
+          "line": 236,
+          "note": "TRO-609 entry: program-mode-week-ux.spec.ts sprint-filter cascade fixed (PR #266, merged 2026-08-16T07:10Z) — new since prior sweep"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 1627,
+          "note": "TRO-593 entry: session-timeout.spec.ts 29/58 browser-context crashes root-caused and fixed"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 1782,
+          "note": "TRO-596 entry: 8 e2e tests asserting never-built owner-selection UI deleted"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 2107,
+          "note": "TRO-595 entry: admin-workspace-members.spec.ts click timeout was a test deadlock, fixed"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 2162,
+          "note": "TRO-594 entry: accessibility-remediation.spec.ts tooltip hang was a Playwright mouse race, fixed"
+        },
+        {
+          "file": "audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md",
+          "line": 1,
+          "note": "line 1 = file title; whole-file artifact. P95 compare vs Part-1 baseline: verdict PASS (line 93-95), commit 397e3b7, dated 2026-08-14"
+        },
+        {
+          "file": "audit/db-query/compare-w6-r10-aug14/after-w6-r10-aug14.md",
+          "line": 1,
+          "note": "line 1 = file title; whole-file artifact. Per-route query counts all under baseline (line 39), commit 397e3b7, 2026-08-14"
+        },
+        {
+          "file": "audit/bundle/compare-w6-aug14/after-w6-aug14.md",
+          "line": 1,
+          "note": "line 1 = file title; whole-file artifact. Bundle gate verdict PASS, every delta a reduction (line 41), commit 397e3b7, 2026-08-14"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 328,
+          "note": "CI's only Playwright job `e2e-agent` runs just two agent specs (line 405) — the full regression suite is not gated in CI, so 'passes on main' rests on ad-hoc runs"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [
+        "e2e/session-timeout.spec.ts",
+        "e2e/accessibility-remediation.spec.ts",
+        "e2e/admin-workspace-members.spec.ts",
+        "e2e/program-mode-week-ux.spec.ts"
+      ],
+      "verification": null,
+      "plain_english": "The MVP gate says the old browser-test suite must still pass and speed/size/query numbers must stay within 10% of the Week-4 baseline. The three numeric compares (audit/api-perf, audit/db-query, audit/bundle) all PASS but were measured on 2026-08-14 (commit 397e3b7), two days and several merges ago. Five browser-test remediation tickets are Done (TRO-593/594/595/596/609), but TRO-613 (9 tests in program-mode-week-ux.spec.ts asserting text the component never renders) and TRO-549 are still In Progress, and no whole-suite Playwright run on today's main is recorded — so the suite is not demonstrably green.",
+      "notes": "Since the prior sweep: TRO-609 merged (PR #266) — the sprint-filter cascade that skipped 30 tests is fixed; that same PR filed TRO-613 (In Progress) for the next failure in file order, so program-mode-week-ux.spec.ts is still known-red on main. TRO-549 (In Progress) is an assertion-weakness ticket, not a failure. Observed (main session's targeted e2e run this sweep, 7 platform specs incl. the two portal specs): 12 passed / 2 flaky-then-passed — a subset, not the regression suite. `pnpm test` (vitest, this sweep) completed 124/125 files passed; the single failure is api/src/__tests__/activity.test.ts (unrelated to this row) — main session reconciles. Numeric compares are stale by 2 days but PLUGFORGE's own gate methodology treats them as point-in-time; no code merged since 08-14 touches bundle-heavy or hot-path routes per the CHANGES.md entries read (derived, not re-measured).",
+      "suggested_scope": "Close TRO-613, then capture one whole-suite Playwright run on current main (summary.json committed under audit/) and re-run the three compares against that commit.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same tier (PARTIAL); evidence updated — TRO-609 Done (CHANGES.md:236 added), TRO-613/TRO-549 now named as live open gaps; CHANGES.md lines re-pointed (95→1627, 630→2162, 575→2107, 250→1782)"
+    },
+    {
+      "id": "W6-R11",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-441",
+        "TRO-411",
+        "TRO-604",
+        "TRO-402"
+      ],
+      "evidence": [
+        {
+          "file": "README.md",
+          "line": 392,
+          "note": "'Working credentials for the deployed site' — grader OAuth app section for https://ship-rr6m.onrender.com"
+        },
+        {
+          "file": "README.md",
+          "line": 401,
+          "note": "client_id `ship_app_grader_9ea6a33b` printed in the credentials table (scopes documents:read issues:read sprints:read)"
+        },
+        {
+          "file": "api/src/platform/oauth/seedGraderApp.ts",
+          "line": 56,
+          "note": "GRADER_APP_SCOPES = documents:read, issues:read, sprints:read — read-only by construction"
+        },
+        {
+          "file": "api/src/platform/oauth/seedGraderApp.ts",
+          "line": 80,
+          "note": "seedGraderApp() — idempotent seed of the grader app, secret from GRADER_OAUTH_CLIENT_SECRET env"
+        },
+        {
+          "file": "api/src/db/seed.ts",
+          "line": 104,
+          "note": "db:seed calls seedGraderApp(pool, workspaceId)"
+        },
+        {
+          "file": "terraform/render/web_service.tf",
+          "line": 100,
+          "note": "GRADER_OAUTH_CLIENT_SECRET provisioned as a render_web_service.ship env var (Terraform, not console)"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 1889,
+          "note": "TRO-604: .dockerignore bug that silently broke every deploy on 2026-08-15 — fixed same day (deploy pipeline health context)"
+        }
+      ],
+      "test_files_bearing": [
+        "api/src/platform/oauth/__tests__/seedGraderApp.test.ts"
+      ],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "curl -s -o /dev/null -w '%{http_code} %{content_type}' https://ship-rr6m.onrender.com/{health,api/v1/openapi.json,developer/apps} (GET-only, this sweep, 2026-08-16 ~13:45Z); openapi body parsed with python3 json; test.log (main session pnpm test) grep",
+        "result_excerpt": "/health -> 200 application/json {\"status\":\"ok\"}; /api/v1/openapi.json -> 200 application/json, parses as JSON, openapi 3.1.0, info.title 'Ship Public API', info.version 1.0.0, 21 paths; /developer/apps -> 200 text/html (SPA shell). test.log: ✓ src/platform/oauth/__tests__/seedGraderApp.test.ts (6 tests) passed."
+      },
+      "plain_english": "The MVP gate needs Ship deployed publicly, its API spec published at a URL, and a read-only OAuth app pre-made for graders. The live site answers 200 on /health and serves a valid JSON OpenAPI 3.1 spec (21 routes); the grader app is seeded by api/src/platform/oauth/seedGraderApp.ts with only read scopes and its client_id/secret are printed in README.md (TRO-441). All three parts were probed live this sweep.",
+      "notes": "Live probes are GET-only; no token was minted this sweep (README.md:398 records a real mint on 2026-08-15, observed-from-doc not re-run). Existence of the seeded app on the live DB is therefore README-attested + seed-code + unit test, not re-observed. TRO-441 implements; TRO-411 provisions the env var; TRO-604 is the deploy-pipeline fix that made the 08-15 deploys land; TRO-402 provides the spec route.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same (VERIFIED); re-probed live this sweep; evidence re-pointed (README 314→392/401 for the credential table; added seed code + Terraform env var citations)"
+    },
+    {
+      "id": "W6-R12",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-411",
+        "TRO-488",
+        "TRO-420",
+        "TRO-415"
+      ],
+      "evidence": [
+        {
+          "file": "terraform/render/web_service.tf",
+          "line": 9,
+          "note": "resource render_web_service.ship — the app container (docker runtime) for the graded deploy"
+        },
+        {
+          "file": "terraform/render/postgres.tf",
+          "line": 9,
+          "note": "resource render_postgres.ship — the database"
+        },
+        {
+          "file": "terraform/render/agent_service.tf",
+          "line": 13,
+          "note": "resource render_web_service.agent — second service in the topology"
+        },
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 9,
+          "note": "provider render-oss/render pinned to exact version 1.9.1 (comment on line 7: exact pin, not ~>)"
+        },
+        {
+          "file": "terraform/render/.terraform.lock.hcl",
+          "line": 5,
+          "note": "lock file records version 1.9.1 / constraints 1.9.1 with hashes"
+        },
+        {
+          "file": "terraform/render/variables.tf",
+          "line": 372,
+          "note": "validation block on secret_encryption_key (TRO-488, PR #273 — new since prior sweep); sibling blocks at :407, :437, :466, :482, :502, :518, :538"
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 120,
+          "note": "'Live plan capture — terraform plan -var-file=terraform.tfvars' — the committed, credentialed plan artifact"
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 359,
+          "note": "'Plan: 3 to add, 0 to change, 0 to destroy.' — clean plan output; annotation table at :384-390"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 156,
+          "note": "TRO-488 entry: `terraform validate -no-color`: Success! re-run after the validation blocks were added (2026-08-16)"
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 10,
+          "note": "§1 AWS task/execution-role adaptation memo — the brief's IAM-role language mapped onto Render (TRO-420)"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 12,
+          "note": "destroy-redeploy proof explicitly scoped: 'not the pre-existing ship/ship-db resources, which stay on their Week-4 import (unchanged...)'"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 39,
+          "note": "`terraform apply ... # re-create, config alone, no import` — real destroy→apply, but for render_web_service.agent only"
+        },
+        {
+          "file": "terraform/render/README.md",
+          "line": 39,
+          "note": "'Known provider bug — render_web_service.agent cannot be updated by terraform apply' — an IaC-completeness caveat the README discloses"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The brief wants a terraform/ folder that fully describes the deployment, pinned provider versions, an annotated plan committed, and proof you can destroy and rebuild the whole environment from the config alone. terraform/render/ describes the app container, database and agent service with the provider pinned to 1.9.1 (TRO-411, hardened by TRO-488), and a real annotated plan is committed. The destroy-and-redeploy proof only exists for the agent service (a Week-5 ticket); the main ship service and its database have never been torn down and re-applied — TRO-415 (PF-901) is still Backlog behind a required human go-ahead.",
+      "notes": "TRO-411 implements; TRO-488 hardens (validation blocks; verified via `terraform validate` per CHANGES.md:156 and PR #273 evidence table — observed from PR body, not re-run here: no terraform binary in this environment); TRO-420 supplies the IAM adaptation memo; TRO-415 (destroy-redeploy of ship/ship-db) is Backlog. Ran scripts/factory/verify-terraform-artifact.sh against the committed plan this sweep: all 12 mechanical checks PASS (string-presence only; does not prove the plan is clean against live state — the script says so itself). AWS-root terraform/ (versions.tf:7 `~> 5.0`) is a separate, non-graded deployment; per I-01's precedent the exercise directory is what counts.",
+      "suggested_scope": "TRO-415: obtain the human go-ahead, then run terraform destroy + apply for render_web_service.ship and render_postgres.ship, committing the log under terraform/render/plan/.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same tier (PARTIAL); evidence strengthened — TRO-488 validation blocks + post-change `terraform validate` Success added; line-0 citations replaced with real lines"
+    },
+    {
+      "id": "W6-R37",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-436",
+        "TRO-439",
+        "TRO-443",
+        "TRO-603"
+      ],
+      "evidence": [
+        {
+          "file": "web/src/pages/DeveloperApps.tsx",
+          "line": 215,
+          "note": "'Register app' button — app registration + listing (TRO-436/PF-502)"
+        },
+        {
+          "file": "web/src/pages/DeveloperApps.tsx",
+          "line": 250,
+          "note": "<ShownOnceSecretModal — client_secret shown exactly once on registration"
+        },
+        {
+          "file": "web/src/pages/DeveloperAppDetail.tsx",
+          "line": 45,
+          "note": "handleRotate() — client_secret rotation, shown-once via the same modal (import at :4)"
+        },
+        {
+          "file": "web/src/pages/DeveloperPortal.tsx",
+          "line": 163,
+          "note": "'Deliveries & DLQ' tab — browsing the delivery log incl. dead-lettered rows (TRO-439/PF-503)"
+        },
+        {
+          "file": "web/src/pages/DeveloperPortal.tsx",
+          "line": 166,
+          "note": "'Subscriptions' tab — managing subscriptions"
+        },
+        {
+          "file": "web/src/pages/DeveloperPortal.tsx",
+          "line": 296,
+          "note": "handleReplay() — POST /webhooks/deliveries/:id/replay from the portal (replaying failed deliveries)"
+        },
+        {
+          "file": "web/src/components/sidebars/DeveloperSidebar.tsx",
+          "line": 21,
+          "note": "portal nav entries /developer/apps and /developer/webhooks (:23)"
+        },
+        {
+          "file": "web/src/pages/App.tsx",
+          "line": 269,
+          "note": "'developer' mode routes to /developer/apps inside the existing Ship web app"
+        },
+        {
+          "file": "e2e/developer-portal-apps.spec.ts",
+          "line": 31,
+          "note": "e2e: register, view shown-once secret, rotate, and revoke"
+        },
+        {
+          "file": "e2e/developer-portal-apps.spec.ts",
+          "line": 108,
+          "note": "e2e: portal calls hit the real /api/v1 surface (network-tab evidence)"
+        },
+        {
+          "file": "e2e/developer-portal-dlq-replay.spec.ts",
+          "line": 169,
+          "note": "e2e: dead-lettered delivery visible in DLQ view; replay succeeds and preserves Idempotency-Key"
+        },
+        {
+          "file": "e2e/developer-portal-dlq-replay.spec.ts",
+          "line": 254,
+          "note": "e2e: subscription CRUD from the portal UI"
+        }
+      ],
+      "test_files_bearing": [
+        "web/src/pages/DeveloperApps.test.tsx",
+        "web/src/pages/DeveloperAppDetail.test.tsx",
+        "web/src/pages/DeveloperPortal.test.tsx",
+        "web/src/contexts/DeveloperPortalContext.test.tsx"
+      ],
+      "e2e_specs_bearing": [
+        "e2e/developer-portal-apps.spec.ts",
+        "e2e/developer-portal-dlq-replay.spec.ts"
+      ],
+      "verification": {
+        "command": "main session's targeted Playwright run this sweep (e2e-targeted.log / e2e-progress.jsonl, 7 platform specs) + main session's `pnpm test` web package log (test-web.log); plus GET-only live probe of https://ship-rr6m.onrender.com/developer/apps and its JS bundle",
+        "result_excerpt": "e2e: developer-portal-apps.spec.ts 3/3 passed ('portal calls hit the real /api/v1 surface' flaky — failed once at 840ms, passed on retry), developer-portal-dlq-replay.spec.ts 2/2 passed ('subscription CRUD' flaky — failed once, passed on retry); overall '2 flaky, 12 passed (55.2s), e2e exit=0' under a low-memory host warning. test-web.log: 86 files / 606 tests passed incl. ✓ DeveloperApps.test.tsx (5), ✓ DeveloperAppDetail.test.tsx (5), ✓ DeveloperPortal.test.tsx (6), ✓ DeveloperPortalContext.test.tsx (3). Live: /developer/apps -> 200; served index bundle references chunks DeveloperApps-vGLDgZ1i.js, DeveloperAppDetail-BnxafH2s.js, DeveloperPortal-DCl7fHpG.js, each fetchable 200 — the deployed build includes the portal."
+      },
+      "plain_english": "The developer portal must let a developer list apps, register one, see/rotate the secret (shown once), manage webhook subscriptions, browse the delivery log, and replay failed deliveries — all inside Ship's normal web app. All six live in web/src/pages/DeveloperApps.tsx, DeveloperAppDetail.tsx and DeveloperPortal.tsx (TRO-436 and TRO-439), with browser tests that ran and passed this sweep, and the live site's JavaScript bundle contains the portal code.",
+      "notes": "Upgraded from IMPLEMENTED-UNVERIFIED: both portal e2e specs and all four portal unit test files ran green this sweep (two e2e tests were flaky-then-pass under a 0.2 GB-free memory warning — worth watching, not a failure). Live check is bundle-content-level, not a headless-browser render (portal requires a login session, so an unauthenticated render would show /login anyway). TRO-436/439 implement; TRO-443 is the PM go/cut decision (Done, portal kept); TRO-603 hardens the replay route the portal's Replay button calls.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded because both developer-portal e2e specs + portal unit tests ran and passed this sweep, and the live bundle was confirmed to contain the portal chunks; evidence re-pointed from line-1 to concrete function/tab lines"
+    },
+    {
+      "id": "W6-R38",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": [
+        "TRO-411",
+        "TRO-488",
+        "TRO-420"
+      ],
+      "evidence": [
+        {
+          "file": "terraform/render/web_service.tf",
+          "line": 9,
+          "note": "app container: resource render_web_service.ship"
+        },
+        {
+          "file": "terraform/render/postgres.tf",
+          "line": 9,
+          "note": "database: resource render_postgres.ship (private-network only per header comment lines 4-8 — Render's stand-in for SG/subnet posture)"
+        },
+        {
+          "file": "terraform/render/versions.tf",
+          "line": 9,
+          "note": "provider exact-pinned 1.9.1; required_version >= 1.9.0 at :2"
+        },
+        {
+          "file": "terraform/render/.terraform.lock.hcl",
+          "line": 6,
+          "note": "constraints = \"1.9.1\" — no ~>/>= range on the provider"
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 359,
+          "note": "committed plan ran cleanly: 'Plan: 3 to add, 0 to change, 0 to destroy.'"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 156,
+          "note": "TRO-488: `terraform validate` Success after adding validation blocks (2026-08-16) — the config still validates post-change"
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 48,
+          "note": "§2 'Render's equivalent' — defends why no VPC/subnet/SG primitives exist in this config (PF-902)"
+        },
+        {
+          "file": "terraform/render/README.md",
+          "line": 96,
+          "note": "'Local-provider deliverable' section distinguishing terraform/render/ (Render) from audit/terraform/drift-demo/ (local)"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The Terraform folder must describe the app container, database and network pieces, pin every provider version, and produce a clean plan. terraform/render/ describes the container and database with the Render provider pinned exactly to 1.9.1 (TRO-411, hardened by TRO-488); Render has no VPC/subnet/security-group objects, and docs/IAM-ADAPTATION-RENDER.md explains that trade. A clean plan is committed, but no terraform command could be run in this environment (no binary), so the row stays traced-but-not-run.",
+      "notes": "Ran `bash scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md` this sweep: PASS on all 12 mechanical checks (8 env vars in a real render_web_service env_vars block, 3 resource addresses, exact provider pin) — a string check over the committed artifact, not a plan run, hence not VERIFIED. `terraform validate` Success post-TRO-488 is observed from CHANGES.md:156 / PR #273's evidence table (their run, not mine). Caveat: the AWS-root terraform/versions.tf:7 uses `~> 5.0` (range) for the non-graded AWS deploy; the committed terraform/.terraform.lock.hcl resolves it, and the graded topology is Render — noted, not counted against this row.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same tier; evidence re-pointed from line-0 to real lines; TRO-488 hardening + verify-script run added"
+    },
+    {
+      "id": "W6-R39",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": [
+        "TRO-420"
+      ],
+      "evidence": [
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 10,
+          "note": "§1 AWS side: eb_instance role + the three custom least-privilege policies (ssm.tf:164-262) — the 'after' policy, observed"
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 48,
+          "note": "§2 Render's equivalent — API-key scoping, service isolation, env-var secret handling"
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 100,
+          "note": "§3 what this deployment's permission model cannot express (stated plainly)"
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 131,
+          "note": "§4 why the trade is acceptable — per-permission rationale in prose"
+        },
+        {
+          "file": "terraform/ssm.tf",
+          "line": 164,
+          "note": "aws_iam_role_policy eb_ssm_access — resource-scoped SSM read (one of the three least-privilege policies the memo cites)"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 8540,
+          "note": "TRO-420 — PF-902 IAM adaptation memo entry"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The brief asks you to start with an all-powerful AWS role, shrink it to the minimum, prove the service still works and that a forbidden action is denied, and submit before/after policies with reasons. Ship deploys to Render, which has no such roles, so docs/IAM-ADAPTATION-RENDER.md (TRO-420) maps the exercise onto Render's model and explains every permission decision. What does not exist anywhere is a literal AdministratorAccess 'before' policy or a recorded denied-action test — the memo is the defended adaptation the inventory accepts in its place.",
+      "notes": "grep for 'AdministratorAccess' across *.md/*.tf: zero hits — no before-state artifact, no verify-then-deny log. Acceptance evidence explicitly allows 'the defended Render adaptation memo in docs/', which exists and is provenance-marked (observed/derived) throughout. Line ranges the memo cites (elastic-beanstalk.tf:12-31, ssm.tf:164-262) re-confirmed to exist. Nothing runnable bears on this row.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same"
+    },
+    {
+      "id": "W6-R40",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-415"
+      ],
+      "evidence": [
+        {
+          "file": "audit/terraform/drift-demo/main.tf",
+          "line": 11,
+          "note": "hashicorp/local pinned 2.5.2; two local_file resources at :17 and :28 — the drift fixture (cloud-free)"
+        },
+        {
+          "file": "audit/terraform/raw/drift-2-clean-plan.txt",
+          "line": 4,
+          "note": "'No changes. Your infrastructure matches the configuration.' — clean plan before the manual edit"
+        },
+        {
+          "file": "audit/terraform/raw/drift-3-drift-plan.txt",
+          "line": 49,
+          "note": "'Plan: 2 to add, 0 to change, 0 to destroy.' — drift detected after the out-of-band edit"
+        },
+        {
+          "file": "audit/terraform/baseline.md",
+          "line": 63,
+          "note": "'Drift detection demonstration (cloud-free, hashicorp/local)' — the write-up of that run"
+        },
+        {
+          "file": "terraform/render/README.md",
+          "line": 100,
+          "note": "README confirms audit/terraform/drift-demo/main.tf is the local-provider drift deliverable, distinct from the Render config"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 37,
+          "note": "`curl .../health # 200 — ship/ship-db untouched by the targeted destroy` — the only real destroy→apply, scoped to the agent service"
+        },
+        {
+          "file": "terraform/render/plan/tro-316-destroy-redeploy-proof.md",
+          "line": 12,
+          "note": "explicit scope: ship/ship-db 'stay on their Week-4 import (unchanged, deliberately...)'"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The brief wants a demonstration that Terraform notices a manual change (drift), then a full destroy and rebuild with logs showing the service came back the same. A real drift demo exists but on two local files (audit/terraform/drift-demo), not the live Render service; the only destroy-and-rebuild log covers the agent service (Week 5, TRO-316) and it came back at a new URL. Nothing has been done against the ship service and its database — TRO-415 (PF-901) is Backlog pending a human go-ahead.",
+      "notes": "No new evidence since prior sweep. Drift demo: real terraform runs, committed raw logs, but local provider (W4 Category-8 fixture). Destroy-redeploy: real, cloud, observed health checks — but for render_web_service.agent only, and 'identically' does not hold (new service ID/URL, disclosed at proof line 23). TRO-415 Backlog with ⚠️ HUMAN GO-AHEAD.",
+      "suggested_scope": "TRO-415: manual drift on a live ship env var → `terraform plan` diff captured; then destroy + apply of ship/ship-db with before/after /health logs — committed under terraform/render/plan/.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same tier; evidence re-pointed from line-0 to the raw log lines"
+    },
+    {
+      "id": "W6-R41",
+      "verdict": "N/A",
+      "tickets": [
+        "TRO-420",
+        "TRO-411"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/PLUGFORGE-DEFENSE-DECK.html",
+          "line": 430,
+          "note": "defense deck slide 05 'Infrastructure & blast radius' — 'Terraform is the truth. Here's how I read it.'; worked example at :454 — proxy prep material"
+        },
+        {
+          "file": "terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+          "line": 384,
+          "note": "'Annotation — every new env var called out, one sentence per resource' with blast-radius column — proxy prep material"
+        },
+        {
+          "file": "terraform/render/plan/plan-annotated.md",
+          "line": 114,
+          "note": "'Annotation — one sentence per resource' table with Blast radius / Safe-or-risky columns"
+        },
+        {
+          "file": "audit/terraform/baseline.md",
+          "line": 36,
+          "note": "'Annotated inventory + blast radius' — AWS-root resource walkthrough ordered worst-first"
+        },
+        {
+          "file": "docs/IAM-ADAPTATION-RENDER.md",
+          "line": 1,
+          "note": "line 1 = title; whole-file proxy: resource-by-resource permission reasoning"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "Graders will hand Troy a modified Terraform plan and ask him to explain each change without AI help — a human skill, not something the repo can pass or fail. The repo does hold good rehearsal material: annotated plan tables with blast-radius columns and a defense-deck slide on reading a plan.",
+      "notes": "Human competency; N/A. Proxy artifacts listed. No ticket targets this directly; TRO-420/TRO-411 produced the material.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; proxy evidence now cited with real lines (prior had none)"
+    },
+    {
+      "id": "W6-R70",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-424",
+        "TRO-447"
+      ],
+      "evidence": [
+        {
+          "file": "docs/architecture.md",
+          "line": 23,
+          "note": "## Module Layout"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 46,
+          "note": "## SOLID Rationale"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 56,
+          "note": "## Composition Root"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 91,
+          "note": "## Public/Internal Boundary — Sequence Diagram"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 118,
+          "note": "## OAuth Flow Diagrams (PKCE :129, Device grant :153)"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 167,
+          "note": "## Webhook Pipeline"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 240,
+          "note": "## SDK Surface"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 270,
+          "note": "## Agent as Platform Citizen — Before / After"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 297,
+          "note": "## Failure Modes"
+        },
+        {
+          "file": "api/src/__tests__/architectureDocSections.test.ts",
+          "line": 78,
+          "note": "describe('docs/architecture.md — mandated sections present (PF-903 / TRO-424)') — one it() per mandated section"
+        },
+        {
+          "file": "CHANGES.md",
+          "line": 8595,
+          "note": "TRO-424 / PF-903 entry: skeleton with all nine mandated sections, gated by a section-presence test"
+        }
+      ],
+      "test_files_bearing": [
+        "api/src/__tests__/architectureDocSections.test.ts"
+      ],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "grep -n '^#' docs/architecture.md (this sweep); test.log from main session's `pnpm test` (complete: 'Test Files 1 failed | 124 passed (125)') grep for architectureDocSections",
+        "result_excerpt": "All nine mandated headings present at lines 23/46/56/91/118/167/240/270/297 (plus Documented Deviations :352, Cross-References :425; 445 lines total). test.log: ✓ src/__tests__/architectureDocSections.test.ts (15 tests) 297ms — passed."
+      },
+      "plain_english": "A short architecture document with nine named sections must live at docs/architecture.md. It does (TRO-424), every section heading is present with real content, and a unit test that checks for those sections ran and passed this sweep. It runs to 445 lines — longer than the '1–2 pages' phrasing, but that is extra substance, not a missing section.",
+      "notes": "Upgraded to VERIFIED on the strength of the section-presence test passing in a complete test.log this sweep (the tier rule's own criterion). The test's checks are heading/keyword regexes (e.g. /module\\s*layout/i, 'PKCE', 'Idempotency-Key'), so it proves presence, not quality — the nine headings were also read directly. TRO-424 implements; TRO-447 added the subscriber-dedupe subsection (:188) later.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded because api/src/__tests__/architectureDocSections.test.ts (15 tests) passed in this sweep's completed test.log; headings re-confirmed at unchanged lines"
+    },
+    {
+      "id": "W6-R71",
+      "verdict": "PARTIAL",
+      "tickets": [],
+      "evidence": [
+        {
+          "file": "README.md",
+          "line": 24,
+          "note": "README states this is the public GauntletAI-audited fork of Treasury's Ship (context only — the visibility fact itself is from `gh api`, see notes)"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh api repos/troysatchell/ship --jq '{private,visibility}'; gh api repos/troysatchell/ship/branches --paginate --jq 'length' (summed); gh pr view 276/273/266/263 --json body (read-only, this sweep)",
+        "result_excerpt": "{\"private\":false,\"visibility\":\"public\"}; 253 branches total, 203 with tro-/pf-/feat/fix prefixes incl. per-slice names feat/pf-001-platform-scaffold … docs/pf-906-epic-writeups-discoveries; PR bodies: #263 says 'Advances this ticket's own AC verbatim: …' and has a '## Fitness test confirmed passing' section (fully compliant); #276 has a Test plan with checkboxes and 'CHANGES.md entry fitness check, passes' but names no acceptance criterion; #273 has an Evidence table (validate/plan red-green) but no AC statement and no 'fitness test passed' sentence; #266 has Evidence sections, no AC or fitness statement. No .github/PULL_REQUEST_TEMPLATE exists."
+      },
+      "plain_english": "The repo must be public, keep every slice's branch, and each pull request must say which acceptance criterion it advances and that its fitness test passed. The repo is public and 253 branches (including per-PF-ticket names) are preserved. PR descriptions are uneven: PR #263 does exactly what the brief asks, but #266, #273 and #276 carry evidence sections without naming an acceptance criterion or stating the fitness test passed.",
+      "notes": "Public + branch-preservation halves observed live via gh this sweep. PR-description mandate: 1 of 4 sampled recent merged PRs is literally compliant. No PR template in the repo to enforce it. Side observation: `gh run list` showed a newer GitHub-main head (a3ef8ee7, run 31950529207 in progress at 13:41Z) than this checkout's 08505d2d — main session may want to re-sync; not a verdict input.",
+      "suggested_scope": "Add .github/PULL_REQUEST_TEMPLATE.md with 'Acceptance criterion advanced:' and 'Fitness test passed:' fields (retro-fit not required by the brief).",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same tier; fresh gh sample (#276/#273/#266/#263 instead of #254/#252/#251) — one fully compliant PR (#263) found this time"
+    },
+    {
+      "id": "W6-R72",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-444",
+        "TRO-429",
+        "TRO-452",
+        "TRO-448",
+        "TRO-450"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/PLUGFORGE-DEMO-SCRIPT.md",
+          "line": 1,
+          "note": "title: 'PlugForge Demo Script — DRAFT (rehearsal, not the final PF-904/PF-908 recording)'"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DEMO-SCRIPT.md",
+          "line": 8,
+          "note": "'This is not the PF-908 final video script.' — self-declared rehearsal draft"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DEMO-SCRIPT.md",
+          "line": 16,
+          "note": "5-minute core demo is curl-based ('No CLI (PF-600 is failing CI)') — does not follow the pnpm install @ship/sdk → ship login → ship docs create → ship webhooks tail narrative"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DEMO-SCRIPT.md",
+          "line": 389,
+          "note": "'What's NOT ready yet' table is stale (dated 2026-08-14: lists PF-600 failing, PF-603 not started, PF-306 off-main — all now Done)"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The demo video (3–5 min) must tell the five-line story: install the SDK, log in, create a doc, watch a signed webhook arrive in the terminal, then replay a delivery in the portal. No video exists (no .mp4/Loom/YouTube link anywhere in docs/ or README). A committed script exists (docs/submission/PLUGFORGE-DEMO-SCRIPT.md) but it calls itself a rehearsal draft, is grounded on 2026-08-14 state, and its core demo uses curl instead of the CLI five-line story. All the ingredients (ship login, ship docs create, ship webhooks tail, portal replay) are now merged; TRO-444/PF-908 and TRO-429/PF-904 remain Backlog.",
+      "notes": "Re-tiered MISSING→PARTIAL strictly by the tier rule (acceptance evidence = 'recorded video + committed script'; a committed script exists), not because new evidence appeared. Grep for .mp4/loom.com/youtu in docs/submission/*.md and README.md: zero hits. Dependencies all Done: TRO-448 (ship login), TRO-450 (ship docs), TRO-452 (ship webhooks tail), TRO-439 (portal replay). The recording and a script that actually follows the five-line story are the gap.",
+      "suggested_scope": "TRO-444/TRO-429: rewrite the script's core act around the literal five-line CLI story + portal replay, record the 3–5 min video, commit the script and link the video.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "re-tiered MISSING→PARTIAL by the tier rule (committed script exists) — same underlying facts; script's staleness and curl-based core demo newly called out"
+    },
+    {
+      "id": "W6-R73",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-429"
+      ],
+      "evidence": [
+        {
+          "file": "PRESEARCH.MD",
+          "line": 1,
+          "note": "'# PRESEARCH — FleetGraph' — the only pre-search doc in the repo is Week 5's (agent trigger model / graph architecture / deployment), not a W6 platform pre-search"
+        },
+        {
+          "file": "PLUGFORGE.MD",
+          "line": 300,
+          "note": "PF-904 AC: 'pre-search complete with Troy's real answers attached; the saved AI conversation exported and attached' — the PRD names the deliverable, nothing fulfils it yet"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The brief wants a Pre-Search document with all three phases answered and the AI conversation saved alongside it. The repo has no Week-6 pre-search document — PRESEARCH.MD is last week's FleetGraph one — and no saved-conversation artifact. TRO-429 (PF-904, a human checkpoint that needs Troy's answers) is still Backlog.",
+      "notes": "Searched: `grep -ril 'pre-search\\|presearch' docs PLUGFORGE.MD *.MD *.md` (hits only PRESEARCH.MD, PLUGFORGE.MD, the demo script's reference to it, and CHANGES.md's TRO-360 W5 entry) and `find . -iname '*conversation*' -o -iname '*presearch*'` (only PRESEARCH.MD). Nothing W6-specific.",
+      "suggested_scope": "TRO-429: create PRESEARCH-W6.MD (or docs/submission/PLUGFORGE-PRESEARCH.md) with the three phases answered by Troy, plus the exported AI conversation file.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same"
+    },
+    {
+      "id": "W6-R75",
+      "verdict": "PARTIAL",
+      "tickets": [
+        "TRO-437",
+        "TRO-455",
+        "TRO-440"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/PLUGFORGE-EPIC-WRITEUPS.md",
+          "line": 1,
+          "note": "title: per-epic write-ups, before→fix→after→proof (TRO-437/PF-906)"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-EPIC-WRITEUPS.md",
+          "line": 14,
+          "note": "'E7 (Agent as platform citizen)' listed as deliberately absent — waiting on PF-704 (which has since merged as PR #263, 06:50Z 2026-08-16)"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-EPIC-WRITEUPS.md",
+          "line": 195,
+          "note": "## Epic E6 — CLI + TTFE drill — section present"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-EPIC-WRITEUPS.md",
+          "line": 212,
+          "note": "E6 proof is a local `pnpm drill ttfe` run ('verdict: pass', 1998 ms) — not a link to the TTFE drill passing in CI"
+        },
+        {
+          "file": ".github/workflows/ci.yml",
+          "line": 418,
+          "note": "drill-ttfe job 'drill · TTFE (PF-603)' exists (runs `pnpm drill ttfe` at :471) — the CI proof the brief names exists, but the write-up does not cite a run"
+        },
+        {
+          "file": "docs/submission/PF-704-COST-LEDGER-DELTA.md",
+          "line": 1,
+          "note": "TRO-440/PF-704 artifact — the E7 proof material now exists as a separate doc, not folded into the epic write-up"
+        },
+        {
+          "file": "agent/src/__tests__/auditTrailProof.liveServer.test.ts",
+          "line": 1,
+          "note": "line 1 = file header; whole-file artifact: the audit-log-rows proof for E7 (TRO-440) — exists, uncited by the write-up"
+        }
+      ],
+      "test_files_bearing": [
+        "agent/src/__tests__/auditTrailProof.liveServer.test.ts"
+      ],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "Each epic needs a before → fix → after → proof write-up, and the brief names two proofs: Epic 6's is the TTFE drill passing in CI, Epic 7's is the agent's audit-log rows. docs/submission/PLUGFORGE-EPIC-WRITEUPS.md (TRO-437) covers E0–E4, E6 and E8 with the right structure, but its E6 proof is a local run rather than a CI run link, and the E7 section is deliberately absent because PF-704 had not landed when it was written — PF-704 (TRO-440) has since merged, so the write-up is now behind the evidence.",
+      "notes": "Downgraded from IMPLEMENTED-UNVERIFIED after reading the doc against the two named proofs: (1) E6 — observed via `gh run view` this sweep that the CI job 'drill · TTFE (PF-603)' concluded success on main runs 31935025680 (08:00Z) and 31949732432 (13:37Z, 2026-08-16), so the CI proof exists but the write-up cites only a local run; (2) E7 — section absent (:14) though TRO-440 is Done with PF-704-COST-LEDGER-DELTA.md + auditTrailProof.liveServer.test.ts. E5 is also absent (:10) but the brief names no E5 proof. TRO-437 implements; TRO-455/TRO-440 produced the two named proofs.",
+      "suggested_scope": "Update PLUGFORGE-EPIC-WRITEUPS.md: add the E7 section citing auditTrailProof.liveServer.test.ts's printed audit rows / PF-704-COST-LEDGER-DELTA.md, and cite a green CI run ID for the drill-ttfe job in E6 (e.g. run 31949732432).",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "downgraded because the doc's E6 proof is a local drill run (not the CI pass the brief names) and the E7 section is absent although its proof (TRO-440, PR #263) merged after the write-up"
+    },
+    {
+      "id": "W6-R76",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": [
+        "TRO-437"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/PLUGFORGE-DISCOVERIES.md",
+          "line": 3,
+          "note": "'Three technical write-ups drafted from the PRD's four candidate topics' (TRO-437/PF-906)"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DISCOVERIES.md",
+          "line": 16,
+          "note": "## Discovery: OAuth Device Authorization Grant in TypeScript"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DISCOVERIES.md",
+          "line": 57,
+          "note": "## Discovery: Zod-Driven OpenAPI with Bidirectional Fitness-Test Parity"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DISCOVERIES.md",
+          "line": 97,
+          "note": "## Discovery: Stripe-Style HMAC Signing and the Encrypt-Not-Hash Trade-off"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "Three short discovery write-ups are required, drawn from four suggested topics. docs/submission/PLUGFORGE-DISCOVERIES.md (TRO-437) has exactly three — device grant, zod→OpenAPI parity, HMAC anti-replay — each citing real files with observed/derived marking. Nothing runnable applies; the artifact is present and on-topic.",
+      "notes": "Read the three headings and the file's own provenance preface. Async-iterator pagination (the fourth candidate) is the one not chosen — allowed by the brief ('three ... drawn from these candidates').",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same tier; evidence re-pointed to the three section headings"
+    },
+    {
+      "id": "W6-R77",
+      "verdict": "VERIFIED",
+      "tickets": [
+        "TRO-441",
+        "TRO-436",
+        "TRO-439"
+      ],
+      "evidence": [
+        {
+          "file": "README.md",
+          "line": 311,
+          "note": "'### Grader Access — Public API (OAuth)' section"
+        },
+        {
+          "file": "README.md",
+          "line": 320,
+          "note": "'One-command setup' — GRADER_OAUTH_CLIENT_SECRET=... ./start.sh seeds the read-only grader app"
+        },
+        {
+          "file": "README.md",
+          "line": 392,
+          "note": "'Working credentials for the deployed site' — client_id/secret table for https://ship-rr6m.onrender.com (:399-403)"
+        },
+        {
+          "file": "README.md",
+          "line": 387,
+          "note": "STALE: 'Portal reachability ... depends on E5 (developer portal), which doesn't exist on this branch yet' — the portal has shipped (TRO-436/439); README not updated"
+        },
+        {
+          "file": "api/src/platform/oauth/seedGraderApp.ts",
+          "line": 56,
+          "note": "grader scopes documents:read/issues:read/sprints:read — read-only"
+        },
+        {
+          "file": "web/src/pages/App.tsx",
+          "line": 269,
+          "note": "'developer' mode navigates to /developer/apps — the portal route a grader reaches after login"
+        }
+      ],
+      "test_files_bearing": [
+        "api/src/platform/oauth/__tests__/seedGraderApp.test.ts"
+      ],
+      "e2e_specs_bearing": [
+        "e2e/developer-portal-apps.spec.ts"
+      ],
+      "verification": {
+        "command": "curl -s -o /dev/null -w '%{http_code} %{content_type}' https://ship-rr6m.onrender.com/{developer/apps,developer,api/v1/openapi.json} + fetch of the served index bundle and its portal chunks (GET-only, this sweep); test.log grep seedGraderApp",
+        "result_excerpt": "/developer/apps -> 200 text/html; /developer -> 200; /api/v1/openapi.json -> 200 application/json (valid JSON, 21 paths); served /assets/index-CXfdv-VQ.js references DeveloperApps-vGLDgZ1i.js / DeveloperPortal-DCl7fHpG.js / DeveloperAppDetail-BnxafH2s.js, each -> 200 (5.7 KB / 13.3 KB / 4.8 KB) — the deployed build includes the portal. test.log: ✓ seedGraderApp.test.ts (6 tests)."
+      },
+      "plain_english": "Graders need a public URL, a pre-made read-only OAuth app with its credentials in the README, a reachable developer portal, and a resolvable OpenAPI spec. README.md's 'Grader Access' section (TRO-441) gives the one-command seed and the live client_id/secret; the live site serves the portal route and its code, and the spec resolves as JSON — all probed this sweep. One wart: README.md line 387 still says the portal 'doesn't exist on this branch yet', which is no longer true.",
+      "notes": "Upgraded from PARTIAL: the prior gap ('confirm the deploy runs a commit that includes the portal') is closed by bundle-content observation (portal chunk names present and fetchable). Not done: headless-browser render (portal requires a login session; unauthenticated render would show /login) and a live token mint (README:398 records one on 2026-08-15; not re-run — no auth attempted per brief). Residual doc drift at README.md:387-390 should be fixed but does not block grader access.",
+      "suggested_scope": "Doc fix: replace README.md:387-390's 'depends on E5 ... doesn't exist yet' bullet with the live portal path (/developer/apps after logging in as alice.chen@ship.local).",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded because the live bundle was confirmed to contain and serve the portal chunks (prior sweep's named gap), spec/portal/health probes re-run 200 this sweep, seed test passed in test.log; stale README bullet newly flagged"
+    },
+    {
+      "id": "W6-R78",
+      "verdict": "MISSING",
+      "tickets": [
+        "TRO-444",
+        "TRO-452"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/SOCIAL-POST.md",
+          "line": 1,
+          "note": "'DRAFT — for Troy to personalize' — sourced from audit/AUDIT_REPORT.md: this is the Week-4 audit post, not a W6 post"
+        },
+        {
+          "file": "docs/submission/SOCIAL-POST.md",
+          "line": 14,
+          "note": "@GauntletAI tag present but the copy is '68 findings / 700+ untyped DB queries' — no webhooks-tail content"
+        },
+        {
+          "file": "docs/submission/SOCIAL-THREAD-W4-W5.md",
+          "line": 1,
+          "note": "'# X thread — FleetGraph (Week 5)' — the other social draft is W5's"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The social post must tag @GauntletAI and show a screenshot of `ship webhooks tail` receiving a verified signed event live. No Week-6 post draft or screenshot exists — the only social drafts in docs/submission/ are Week 4's and Week 5's, and docs/submission/social-assets/ holds only W4/W5 images. `ship webhooks tail` itself is merged (TRO-452), so nothing blocks the screenshot; TRO-444 (PF-908) is Backlog.",
+      "notes": "grep -i gauntletai across docs/submission and README: hits only in the W4/W5 drafts and their asset README. social-assets/ contains 5 W4 PNGs + w4-w5/ 12 PNGs; no terminal screenshot of webhooks tail.",
+      "suggested_scope": "TRO-444: run `ship webhooks tail` against the live deploy, capture the '✓ verified' terminal frame, and commit docs/submission/PLUGFORGE-SOCIAL-POST.md + the PNG.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same"
+    },
+    {
+      "id": "W6-R79",
+      "verdict": "N/A",
+      "tickets": [
+        "TRO-403",
+        "TRO-417",
+        "TRO-429"
+      ],
+      "evidence": [
+        {
+          "file": "docs/submission/PF-100-OAUTH-STUDY-BRIEF.md",
+          "line": 1,
+          "note": "PF-100 OAuth study brief (TRO-403, HUMAN CHECKPOINT, Done) — interview prep for the OAuth-flow defense"
+        },
+        {
+          "file": "docs/submission/PLUGFORGE-DEFENSE-DECK.html",
+          "line": 430,
+          "note": "defense deck — slide 05 infra/blast radius (other slides cover boundary, OAuth, agent-as-citizen)"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 91,
+          "note": "Public/Internal Boundary section — the boundary the interview asks Troy to defend"
+        },
+        {
+          "file": "docs/architecture.md",
+          "line": 270,
+          "note": "Agent as Platform Citizen — Before / After — the third named defense topic"
+        }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "Admission to Austin depends on finishing the project and defending it in an interview — a human gate, not something the repo can pass. The prep material exists: the OAuth study brief (TRO-403, acked), the agent-rewire checkpoint (TRO-417, acked), the architecture doc's boundary and agent sections, and the defense deck. The pre-search checkpoint (TRO-429) is still open.",
+      "notes": "Human competency; N/A. 2 of 3 HUMAN CHECKPOINT tickets Done (TRO-403, TRO-417); TRO-429 Backlog.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; proxy evidence now cited with real lines"
+    }
+  ],
+  "commands_run": [
+    {
+      "command": "for p in /health /api/v1/openapi.json /developer/apps /developer; do curl -s -o /dev/null -w '%{http_code} %{content_type}' https://ship-rr6m.onrender.com$p; done",
+      "result": "/health 200 application/json; /api/v1/openapi.json 200 application/json; /developer/apps 200 text/html; /developer 200 text/html",
+      "bears_on": [
+        "W6-R11",
+        "W6-R77",
+        "W6-R37"
+      ]
+    },
+    {
+      "command": "curl -s https://ship-rr6m.onrender.com/api/v1/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"openapi\"], d[\"info\"][\"version\"], d[\"info\"][\"title\"], len(d[\"paths\"]))'",
+      "result": "3.1.0 1.0.0 'Ship Public API' 21 paths (valid JSON)",
+      "bears_on": [
+        "W6-R11",
+        "W6-R77"
+      ]
+    },
+    {
+      "command": "curl -s https://ship-rr6m.onrender.com/health",
+      "result": "{\"status\":\"ok\"}",
+      "bears_on": [
+        "W6-R11"
+      ]
+    },
+    {
+      "command": "curl -s https://ship-rr6m.onrender.com/developer/apps -o shell.html; curl -s .../assets/index-CXfdv-VQ.js | grep -o 'Developer[A-Za-z]*-[A-Za-z0-9_-]*\\.js'; curl -w '%{http_code} %{size_download}' each chunk",
+      "result": "index bundle references DeveloperAppDetail-BnxafH2s.js, DeveloperApps-vGLDgZ1i.js, DeveloperPortal-DCl7fHpG.js; each fetch 200 (4786 / 5759 / 13334 bytes)",
+      "bears_on": [
+        "W6-R37",
+        "W6-R77"
+      ]
+    },
+    {
+      "command": "gh api repos/troysatchell/ship --jq '{private,visibility,default_branch}'",
+      "result": "{\"default_branch\":\"main\",\"private\":false,\"visibility\":\"public\"}",
+      "bears_on": [
+        "W6-R71"
+      ]
+    },
+    {
+      "command": "gh api repos/troysatchell/ship/branches --paginate --jq 'length' | paste -sd+ - | bc; ... | grep -c 'tro-\\|pf-\\|feat/\\|fix/'",
+      "result": "253 branches; 203 slice-named (per-PF branches like feat/pf-001-platform-scaffold … docs/pf-906-epic-writeups-discoveries present)",
+      "bears_on": [
+        "W6-R71"
+      ]
+    },
+    {
+      "command": "GH_REPO=troysatchell/ship gh pr view {276,273,266,263} --json title,headRefName,mergedAt,body",
+      "result": "#263 names AC verbatim + '## Fitness test confirmed passing'; #276 Test plan + 'fitness check, passes' (no AC named); #273 Evidence table (no AC / no fitness sentence); #266 Evidence sections (no AC / no fitness sentence). Merged 06:50Z/07:10Z/07:37Z/07:53Z 2026-08-16.",
+      "bears_on": [
+        "W6-R71",
+        "W6-R1",
+        "W6-R12",
+        "W6-R38"
+      ]
+    },
+    {
+      "command": "gh run list -R troysatchell/ship --workflow ci.yml --branch main -L 3; gh run view 31949732432 / 31935025680 --json jobs (filter TTFE)",
+      "result": "runs 31935025680 (07:53Z) and 31949732432 (13:24Z) success; job 'drill · TTFE (PF-603)' conclusion success in both; a newer run 31950529207 (headSha a3ef8ee7, 13:41Z) in progress — GitHub main is ahead of this checkout",
+      "bears_on": [
+        "W6-R75",
+        "W6-R10"
+      ]
+    },
+    {
+      "command": "bash scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+      "result": "PASS — all 12 mechanical checks (8 env vars in a real render_web_service env_vars block, 3 resource addresses, exact provider pin). Read-only grep script; git status unchanged afterwards.",
+      "bears_on": [
+        "W6-R12",
+        "W6-R38"
+      ]
+    },
+    {
+      "command": "which terraform tofu",
+      "result": "not found — no terraform validate/plan could be run this sweep",
+      "bears_on": [
+        "W6-R12",
+        "W6-R38",
+        "W6-R40"
+      ]
+    },
+    {
+      "command": "grep -n '^#' docs/architecture.md",
+      "result": "nine mandated headings at 23/46/56/91/118/167/240/270/297 (+ :352, :425)",
+      "bears_on": [
+        "W6-R70"
+      ]
+    },
+    {
+      "command": "grep -n 'architectureDocSections\\|seedGraderApp' audit/requirements/sweep-w6-2026-08-16b/test.log; grep -n 'Test Files' test.log | tail -1",
+      "result": "✓ architectureDocSections.test.ts (15 tests); ✓ seedGraderApp.test.ts (6 tests); summary 'Test Files 1 failed | 124 passed (125)' — log complete; the one failure is src/__tests__/activity.test.ts (not in this cluster)",
+      "bears_on": [
+        "W6-R70",
+        "W6-R11",
+        "W6-R77"
+      ]
+    },
+    {
+      "command": "grep developer-portal audit/requirements/sweep-w6-2026-08-16b/e2e-progress.jsonl; tail e2e-targeted.log; grep Developer web-file-results.txt",
+      "result": "5/5 portal e2e tests passed (2 flaky-then-pass); '2 flaky, 12 passed (55.2s) e2e exit=0'; web unit: DeveloperApps (5), DeveloperAppDetail (5), DeveloperPortal (6), DeveloperPortalContext (3) all ✓; test-web.log 86 files / 606 tests passed",
+      "bears_on": [
+        "W6-R37"
+      ]
+    },
+    {
+      "command": "grep -ril 'pre-search\\|presearch' docs PLUGFORGE.MD *.MD *.md; find . -iname '*conversation*' -o -iname '*presearch*'",
+      "result": "only PRESEARCH.MD (W5 FleetGraph), PLUGFORGE.MD, PLUGFORGE-DEMO-SCRIPT.md (reference), CHANGES.md (TRO-360 W5 entry); no W6 pre-search or conversation export",
+      "bears_on": [
+        "W6-R73"
+      ]
+    },
+    {
+      "command": "grep -rn -i '\\.mp4\\|loom.com\\|youtu' docs/submission/*.md README.md; grep -rn -i gauntletai docs/submission README.md",
+      "result": "no video links; @GauntletAI only in W4 SOCIAL-POST.md / W5 SOCIAL-THREAD-W4-W5.md / w4-w5 asset README",
+      "bears_on": [
+        "W6-R72",
+        "W6-R78"
+      ]
+    },
+    {
+      "command": "grep -rn -i AdministratorAccess --include='*.md' --include='*.tf' . (excl node_modules, audit/requirements)",
+      "result": "zero hits — no before-state IAM policy artifact",
+      "bears_on": [
+        "W6-R39"
+      ]
+    },
+    {
+      "command": "sed -n '<line>p' on every cited file:line",
+      "result": "all citations re-opened and confirmed this sweep (line-0 citations from the prior matrix replaced with real lines)",
+      "bears_on": [
+        "all"
+      ]
+    }
+  ]
+}

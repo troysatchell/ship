@@ -1,0 +1,31 @@
+                                Table "public.oauth_apps"
+       Column       |           Type           | Collation | Nullable |      Default      
+--------------------+--------------------------+-----------+----------+-------------------
+ id                 | uuid                     |           | not null | gen_random_uuid()
+ workspace_id       | uuid                     |           | not null | 
+ name               | text                     |           | not null | 
+ client_id          | text                     |           | not null | 
+ client_type        | text                     |           | not null | 
+ client_secret_hash | text                     |           |          | 
+ redirect_uris      | text[]                   |           | not null | '{}'::text[]
+ requested_scopes   | text[]                   |           | not null | '{}'::text[]
+ owner_user_id      | uuid                     |           |          | 
+ is_first_party     | boolean                  |           | not null | false
+ created_at         | timestamp with time zone |           |          | now()
+ revoked_at         | timestamp with time zone |           |          | 
+Indexes:
+    "oauth_apps_pkey" PRIMARY KEY, btree (id)
+    "idx_oauth_apps_client_id" UNIQUE, btree (client_id)
+    "idx_oauth_apps_owner_user_id" btree (owner_user_id)
+    "idx_oauth_apps_workspace_id" btree (workspace_id)
+Check constraints:
+    "oauth_apps_client_type_check" CHECK (client_type = ANY (ARRAY['confidential'::text, 'public'::text]))
+Foreign-key constraints:
+    "oauth_apps_owner_user_id_fkey" FOREIGN KEY (owner_user_id) REFERENCES users(id) ON DELETE SET NULL
+    "oauth_apps_workspace_id_fkey" FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+Referenced by:
+    TABLE "oauth_authorization_codes" CONSTRAINT "oauth_authorization_codes_app_id_fkey" FOREIGN KEY (app_id) REFERENCES oauth_apps(id) ON DELETE CASCADE
+    TABLE "oauth_device_codes" CONSTRAINT "oauth_device_codes_app_id_fkey" FOREIGN KEY (app_id) REFERENCES oauth_apps(id) ON DELETE CASCADE
+    TABLE "oauth_tokens" CONSTRAINT "oauth_tokens_app_id_fkey" FOREIGN KEY (app_id) REFERENCES oauth_apps(id) ON DELETE CASCADE
+    TABLE "webhook_subscriptions" CONSTRAINT "webhook_subscriptions_app_id_fkey" FOREIGN KEY (app_id) REFERENCES oauth_apps(id) ON DELETE CASCADE
+

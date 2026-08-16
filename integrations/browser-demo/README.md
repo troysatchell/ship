@@ -46,12 +46,13 @@ Env vars:
   a public browser bundle cannot keep a secret — anyone can read it out of the network tab or the
   built JS. RFC 7636's code-verifier/code-challenge pair replaces the secret with something
   generated fresh per login and never sent until the one exchange that redeems it.
-- **`localStorage`, not `sessionStorage`, for the token** (`src/localStorageTokenStore.ts`): the
-  SDK's own `authorizationCodeFlow()` already uses `sessionStorage` internally for the *in-flight*
-  PKCE verifier, which only needs to survive one redirect round trip. The *access/refresh token
-  pair* this app persists after signing in needs to survive a closed tab — that's what
-  `localStorage` is for, and it's this demo's own concern, not the SDK's (the SDK deliberately
-  ships no browser `ITokenStore` — see `sdk/src/tokenStore.ts`'s header for why).
+- **`localStorage`, not `sessionStorage`, for the token** (`@ship/sdk`'s `LocalStorageTokenStore`,
+  constructed in `src/main.ts` with `storageKey: 'ship_browser_demo_tokens'`): the SDK's own
+  `authorizationCodeFlow()` already uses `sessionStorage` internally for the *in-flight* PKCE
+  verifier, which only needs to survive one redirect round trip. The *access/refresh token pair*
+  this app persists after signing in needs to survive a closed tab — that's what `localStorage`
+  is for. Since TRO-617 the store ships in the SDK (`sdk/src/localStorageTokenStore.ts`) rather
+  than as demo-private code.
 - **Refresh is automatic**: once connected, every `client.documents.iterate()` call goes through
   `@ship/sdk`'s shared request pipeline, which transparently refreshes an expired access token via
   the stored refresh token before retrying — no code in this demo handles token expiry directly.

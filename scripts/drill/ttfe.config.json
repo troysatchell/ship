@@ -1,6 +1,8 @@
 {
-  "$comment": "TRO-455 / PF-603 threshold config, committed per the PRD's own AC ('threshold config in repo'). totalBudgetMs is the graded number (PLUGFORGE.MD §5: 'TTFE CI P95 < 60 s'). stageBudgetsMs are independent, generous per-stage ceilings that exist to name WHICH stage regressed rather than only that the run was slow — they deliberately sum to well more than totalBudgetMs (82000 > 60000): a single stage can legitimately consume most of the total budget on a slow CI runner without any one stage being individually pathological. Read together with scripts/drill/thresholds.ts's own header before changing either number.",
+  "$comment": "TRO-455 / PF-603 threshold config, committed per the PRD's own AC ('threshold config in repo'). totalBudgetMs is the graded number (PLUGFORGE.MD §5: 'TTFE CI P95 < 60 s'). stageBudgetsMs are independent, generous per-stage ceilings that exist to name WHICH stage regressed rather than only that the run was slow — they deliberately sum to well more than totalBudgetMs (82000 > 60000): a single stage can legitimately consume most of the total budget on a slow CI runner without any one stage being individually pathological. Read together with scripts/drill/thresholds.ts's own header before changing either number. TRO-615: deliveryLatencyP95Ms is PLUGFORGE.MD §5's 'first-attempt webhook latency P95 < 2 s' (strict <), computed by ttfe.ts over deliveryLatencySampleSize burst-created documents (per-delivery latency = listener receivedAt - documents.create() resolved, correlated by payload data.id); the same 2000 also bounds the single first delivery's wait_for_delivery stage. tamper_reject has no per-stage budget on purpose (it is a correctness step, only its total-budget contribution counts).",
   "totalBudgetMs": 60000,
+  "deliveryLatencyP95Ms": 2000,
+  "deliveryLatencySampleSize": 20,
   "stageBudgetsMs": {
     "install_sdk": 30000,
     "device_login": 20000,

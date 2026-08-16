@@ -241,6 +241,17 @@ e2e-agent:
 # local/clean-machine run, PLUGFORGE.MD §5's separate `<= 30 min` target).
 # The drill script builds shared/sdk itself (its own untimed setup phase),
 # so no separate build step is needed here.
+#
+# TRO-621 (W6-R55): the drill's IMAGE mode (`DRILL_TTFE_API_IMAGE=<ref>` —
+# the api runs from the root Dockerfile's image via testcontainers'
+# GenericContainer, NODE_ENV=production) is GitHub-only, as CI's
+# `drill-ttfe-image` job in .github/workflows/ci.yml. It is deliberately NOT
+# added here: it needs the SAME nested-Docker capability this shared runner
+# lacks (see the paragraph above and `image-build`'s own comment) — the api
+# container, its docker Network, and a TLS-enabled Postgres container all
+# have to be started from inside the job. This job stays on tsx mode (the
+# default) so GitLab still exercises the drill's stages against a real api
+# process. See scripts/drill/ttfe-api-mode.ts's header for the mode design.
 drill-ttfe:
   extends: .node_env
   stage: e2e
