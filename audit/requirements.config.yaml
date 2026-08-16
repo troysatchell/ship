@@ -69,6 +69,17 @@ code_roots:
   - api
   - web
   - shared
+  # W6/PlugForge-only workspace packages, added 2026-08-15: `sdk` (the `@ship/sdk`
+  # package itself — SDK requirements W6-R9/R30-R34/R51/R58/R60 all cite paths
+  # under here) and `integrations` (the 5 reference integrations incl. the CLI —
+  # W6-R55-R57/R61/R62/R69). Both existed by the first W6 extraction (2026-08-10)
+  # and the 2026-08-13/14 sweeps already cited real `sdk/src/...` paths as evidence
+  # (see REPORT-W6.md W6-R9/R34) despite this gap — meaning those citations were
+  # correct in substance but produced outside the tool's own declared search scope,
+  # an inconsistency worth closing rather than repeating silently on every future
+  # sweep. Discovered and fixed during the 2026-08-15 compare sweep.
+  - sdk
+  - integrations
   - agent                 # 4th workspace member per pnpm-workspace.yaml
   - audit                 # AUDIT_REPORT.md + per-category baseline/compare artifacts
   - terraform             # Category 8 (Terraform) evidence
@@ -89,6 +100,11 @@ code_roots:
   # comment above describes for the audit tree.
   - FLEETGRAPH.MD
   - PRESEARCH.MD
+  # W6's graded deliverable file — same class as FLEETGRAPH.MD above and same gap,
+  # added alongside sdk/integrations 2026-08-15. Requirements about the platform's
+  # own execution/process discipline (architecture-doc section list, boundary
+  # rules, epic sequencing) cite this file directly.
+  - PLUGFORGE.MD
   - start.sh
   - package.json
   - pnpm-lock.yaml

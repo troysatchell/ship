@@ -55,12 +55,22 @@
  *   status this registry's `sprint.started`/`sprint.completed` events encode. Same trap
  *   `.claude/CLAUDE.md` already documents for `sprint_iterations.sprint_id` vs the dropped
  *   `documents.sprint_id` — same table, adjacent but distinct column.
- * - Note for a future ticket, not fixed here: `api/src/routes/issues.ts`'s inline
- *   `createIssueSchema` additionally accepts `'none'` as a priority value (not present in
- *   `shared/src/types/document.ts`'s `IssuePriority` union, and not present in the OpenAPI
- *   `IssuePrioritySchema` at `api/src/openapi/schemas/issues.ts:26-34` either) — this
- *   registry's `IssuePrioritySchema` below follows the canonical shared-types/OpenAPI union
- *   (`'low' | 'medium' | 'high' | 'urgent'`), not the wider route-level input schema.
+ * - **Correction (TRO-501, verified 2026-08-16 — the note below was wrong):** the note this
+ *   replaced claimed `IssuePrioritySchema` at `api/src/openapi/schemas/issues.ts:26-34` did
+ *   not include `'none'`. `git blame` on that file shows `'none'` has been in that exact enum
+ *   since the OpenAPI docs were first added (`adf72f9d`) — the OpenAPI schema and the
+ *   route-level `createIssueSchema` already agreed. TRO-501's own investigation also found
+ *   real product code depending on `'none'` as a first-class "No Priority" state (the web
+ *   Properties Panel dropdown, `IssueSidebar.tsx`, offers it explicitly; `KanbanBoard.tsx` /
+ *   `IssuesList.tsx` already render a dedicated color for it) — not an edge case to reject.
+ *   TRO-501 widened `shared/src/types/document.ts`'s `IssuePriority` union to include
+ *   `'none'`, so this registry's `IssuePrioritySchema` below now matches it, rather than
+ *   the reverse. Confirmed live before the fix (`api/src/routes/issues.test.ts`'s TRO-501
+ *   test, red before this change): creating an issue via `POST /api/issues` with
+ *   `priority: 'none'` committed successfully (201) but silently dropped the derived
+ *   `issue.created` webhook event — `InProcessEventBus.publish()` threw on the mismatch,
+ *   and `documentService.ts`'s `safeDispatch` catches+`console.error`s a dispatch throw
+ *   rather than failing the request, so nothing surfaced to the API caller.
  * ---------------------------------------------------------------------------------------
  */
 
@@ -88,8 +98,9 @@ const DocumentTypeSchema = z.enum([
 /** Mirrors `IssueState` (`shared/src/types/document.ts:56`). */
 const IssueStateSchema = z.enum(['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'])
 
-/** Mirrors `IssuePriority` (`shared/src/types/document.ts:59`). */
-const IssuePrioritySchema = z.enum(['low', 'medium', 'high', 'urgent'])
+/** Mirrors `IssuePriority` (`shared/src/types/document.ts:59`), including `'none'`
+ *  ("No Priority" — TRO-501; see this file's header comment for the correction). */
+const IssuePrioritySchema = z.enum(['low', 'medium', 'high', 'urgent', 'none'])
 
 /** Mirrors `WeekProperties.status` (`shared/src/types/document.ts:166`). */
 const SprintStatusSchema = z.enum(['planning', 'active', 'completed'])
