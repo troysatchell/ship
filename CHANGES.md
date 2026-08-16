@@ -112,17 +112,19 @@ passed unchanged. Restored the fix; all 15 tests in the file pass again.
 **Evidence.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`: 15/15 pass,
 re-verified after each CodeRabbit-driven correction above. Full `@ship/sdk` suite (25 files, incl.
 the 4 `*.liveServer.test.ts` files against this worktree's real Postgres): 227/227 pass.
-`pnpm type-check` / `pnpm build`: clean. `scripts/factory/gate.sh`, run twice (once pre-commit —
-correctly failed `regression-test`/`scope` since nothing was committed yet, an artifact of running
-the gate before `git commit`, not a real gap; once post-commit): `tests:sdk`, `typecheck`, `build`,
-`tests:not-weakened`, `regression-test`, `changes-md`, `scope`, `integration-deps`, `stash-guard`
-all clean both times. The only test failure either run: `tests:api`'s
-`webhooks.test.ts`/"rotation invalidates the old secret" case — unrelated to this diff (this code
-change touches only `sdk/src/fileTokenStore.ts` and `sdk/src/tokenStore.test.ts`; `CHANGES.md` is
-the ticket log entry itself), confirmed passing standalone both runs — load-sensitive (TRO-277
-class), not a regression from this change. `defect-gate` failed once (2 non-null assertions in the
-new test file) and was fixed before the final gate run (see the CodeRabbit-round-2 paragraph
-above); re-run after the fix to confirm.
+`pnpm type-check` / `pnpm build`: clean. `scripts/factory/gate.sh` run three times against this
+worktree: (1) pre-commit — correctly failed `regression-test`/`scope`, an artifact of running the
+gate before `git commit` existed, not a real gap; (2) post first commit (`15130bd`) — `tests:api`
+showed 1 new failure (`webhooks.test.ts`'s pre-existing "rotation invalidates the old secret"
+case, unrelated to this diff), confirmed PASSED standalone by the gate's own re-run logic —
+load-sensitive (TRO-277 class); `defect-gate` failed on 2 `!` non-null assertions in the new test
+file (fixed in the CodeRabbit-round-2 commit above); (3) post second commit (`8d4f643`, this
+branch's head) — **clean pass, verdict `"pass"` in `.factory/gate-result.json`**: every gate green
+including `tests:api` (no flake this run either) and `defect-gate`; `coderabbit` reported `warn`
+("review did not complete, rc=1 — kept 2 finding(s) from an earlier run"), which is this repo's
+documented non-blocking behavior for a transient CodeRabbit CLI failure (`gate.sh`'s own comment,
+matching TRO-605 attempt 3's precedent) — the 2 kept findings are the exact 2 from round 2, already
+triaged and addressed above, not new ones.
 
 **How to run it.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`.
 
