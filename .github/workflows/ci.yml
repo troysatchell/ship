@@ -186,6 +186,19 @@ jobs:
           NODE_ENV: test
         run: pnpm --filter @ship/agent test
 
+      # TRO-440 (PF-704): mirrors .gitlab-ci.yml's equivalent step — see
+      # that file's own comment for why this is a regression net (most
+      # agent tests never read this ambient env var) rather than a second
+      # independent assertion set; the real mode-specific proof is
+      # auditTrailProof.liveServer.test.ts, already covered above since it
+      # constructs its sdk-mode clients directly.
+      - name: Agent tests (AGENT_PLATFORM_MODE=sdk)
+        env:
+          DATABASE_URL: ${{ env.CI_DATABASE_URL }}
+          NODE_ENV: test
+          AGENT_PLATFORM_MODE: sdk
+        run: pnpm --filter @ship/agent test
+
       # TRO-405 (PF-400): sdk/'s own vitest suite — unit tests for the
       # ApiError->kind mapping plus a live-running-server integration test
       # (PLUGFORGE.MD's own words: PF-400's AC "is the MVP gate check"). Same
