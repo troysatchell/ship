@@ -112,6 +112,65 @@ clean revert. No data was changed by this migration; only the index needs removi
 
 ---
 
+## TRO-618 — `@ship/sdk`'s `IssuePriority` lacked `'none'` — added it, plus runtime enum arrays and an enum-member parity test
+
+**What was broken.** PR #276 (TRO-501) widened `shared/src/types/document.ts`'s `IssuePriority`
+and `api/src/platform/openapi/schemas/issues.ts`'s `IssuePrioritySchema` to include `'none'`, but
+`sdk/src/types.ts`'s hand-duplicated copy (duplicated on purpose — zero-dependency SDK, see that
+file's own comment) stayed at `'low' | 'medium' | 'high' | 'urgent'`. Observed, not derived: the
+committed `docs/openapi.json` `#/components/schemas/Issue/properties/priority/enum` lists five
+members; `sdk/src/types.ts:170` listed four. Consequence (derived): every SDK consumer's type said
+`priority: 'none'` cannot arrive on the wire while the server serializes it — an exhaustive
+`switch` on `Issue['priority']` in a consumer would compile clean and hit an unreachable branch at
+runtime. Nothing caught it because `sdk/src/__tests__/parity.test.ts` (PF-405) proves
+operation-level parity only — it never looks inside a schema's enum members.
+
+**What changed.**
+- `sdk/src/types.ts` — `IssuePriority` gains `'none'`; new exported runtime mirrors
+  `ISSUE_STATES` / `ISSUE_PRIORITIES` (`as const satisfies readonly IssueState[]` /
+  `readonly IssuePriority[]`) so callers can iterate/validate the members without re-typing them.
+- `sdk/src/index.ts` — exports the two arrays from the browser-safe barrel (plain string arrays,
+  no Node built-ins).
+- `sdk/src/__tests__/enumParity.test.ts` (new) — imports `v1OpenApiDocument` exactly the way
+  `parity.test.ts` does (the ticket text said "load `docs/openapi.json` the same way
+  `parity.test.ts` does"; `parity.test.ts` actually imports the live generated document, not the
+  file — adapted, and the committed `docs/openapi.json` is checked as a second source since CI's
+  `pnpm openapi:check:v1` keeps the two identical). Walks the whole document, collects every
+  string `enum`, tags any containing `'urgent'` as a priority enum and any containing
+  `'in_progress'` as a state enum, and asserts each occurrence (components AND inline schemas)
+  is set-equal to the SDK array. Zero occurrences fails (no vacuous pass).
+- `sdk/src/types.ts` also carries compile-time `Equal<>` guards that
+  `(typeof ISSUE_PRIORITIES)[number]` is exactly `IssuePriority` (and likewise for states) — in
+  `types.ts` rather than the test file because `sdk/tsconfig.json` excludes `src/__tests__/**`
+  from `tsc`, so `pnpm type-check` is what enforces them (a CodeRabbit finding on the first gate
+  run, applied). `satisfies` alone only proves the array is a subset of the union.
+- Ticket step 3 (grep `sdk/` and `integrations/cli/` for `switch`/maps over priority): grepped
+  `urgent` and `priority` across both — the only occurrence outside tests is the union itself.
+  No exhaustive switch or map exists in either package, so no `'none'` case to add. Stated so
+  the absence is on record, not assumed.
+
+**Red-before-green.** With the arrays added but still mirroring the old four-member union, the
+new suite failed 2/5: `DRIFT: OpenAPI issue priority enum at
+#/components/schemas/Issue/properties/priority/enum is [low, medium, high, urgent, none] but
+@ship/sdk's runtime array is [low, medium, high, urgent]` (once against the live document, once
+against `docs/openapi.json`). After adding `'none'`: 5/5 pass.
+
+**How to verify.**
+```bash
+set -a; . ./.factory-env; set +a          # worktree DATABASE_URL — never run tests without it
+pnpm --filter @ship/sdk build
+pnpm test:sdk                              # 26 files / 234 tests passed
+pnpm test:cli                              # 9 files / 58 tests passed
+pnpm type-check
+```
+To watch the new test bite: delete `'none'` from `ISSUE_PRIORITIES` in `sdk/src/types.ts` and
+re-run `pnpm --filter @ship/sdk exec vitest run src/__tests__/enumParity.test.ts`.
+
+**Rollback.** Revert the PR. Consumers that started importing `ISSUE_STATES`/`ISSUE_PRIORITIES`
+would need to stop.
+
+---
+
 ## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
 
 **What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:

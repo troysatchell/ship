@@ -164,10 +164,31 @@ export interface UpdateDocumentBody {
  * own header comment cites, and the same values
  * `platform/openapi/schemas/issues.ts`'s `IssueStateSchema`/
  * `IssuePrioritySchema` register. Duplicated here for the same
- * zero-dependency reason `DocumentType` above is.
+ * zero-dependency reason `DocumentType` above is. `'none'` (TRO-501 /
+ * PR #276 widened shared + OpenAPI; TRO-618 caught this copy lagging) is a
+ * real server value, not a placeholder.
  */
 export type IssueState = 'triage' | 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled';
-export type IssuePriority = 'low' | 'medium' | 'high' | 'urgent';
+export type IssuePriority = 'low' | 'medium' | 'high' | 'urgent' | 'none';
+
+/** Runtime mirrors of the two unions above (TRO-618) — `as const`, so
+ *  `(typeof ISSUE_STATES)[number]` IS `IssueState` and the enum-member parity
+ *  suite (`__tests__/enumParity.test.ts`) can compare them member-for-member
+ *  against the OpenAPI document's enums. Keep union and array in lockstep;
+ *  that suite fails on any drift between the array and the server. */
+export const ISSUE_STATES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'] as const satisfies readonly IssueState[];
+export const ISSUE_PRIORITIES = ['low', 'medium', 'high', 'urgent', 'none'] as const satisfies readonly IssuePriority[];
+
+// Compile-time lockstep guards (TRO-618). `satisfies` above only proves every
+// array member is IN the union; it does not prove the union has no member the
+// array lacks. `Equal<>` proves both directions, and lives HERE (not in the
+// test file) because `sdk/tsconfig.json` excludes `src/__tests__/**` from
+// `tsc`, so a guard there is never type-checked — `pnpm type-check` enforces
+// these. Erased at emit; nothing reaches `dist/`.
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+type _StatesMirrorUnion = Assert<Equal<(typeof ISSUE_STATES)[number], IssueState>>;
+type _PrioritiesMirrorUnion = Assert<Equal<(typeof ISSUE_PRIORITIES)[number], IssuePriority>>;
 
 /** Matches `serializeIssue()`'s actual return shape
  *  (`api/src/platform/api/v1/resources/issues.ts:96-108`) field-for-field. */
