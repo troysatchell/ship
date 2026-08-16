@@ -91,6 +91,70 @@ code path is additive and opt-in.
 
 ---
 
+## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
+
+**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
+keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
+Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
+the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
+`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
+(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
+combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
+composite index has to match that whole shape, not just the two cursor columns. Read
+`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
+`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
+'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
+`document_type = 'sprint'` combined with `workspace_id`.
+Added migration `052_documents_workspace_type_created_at_index.sql`:
+`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
+created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
+endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
+every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
+
+**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
+35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
+way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
+large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
+sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
+afterward) to get a plan that actually distinguishes the two states. Before the index:
+- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
+- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
+- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
+
+After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
+re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
+an ad hoc index, produces the win):
+- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
+- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
+  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
+- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
+
+Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
+stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
+scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
+index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
+re-sorts every not-yet-returned row of that type in the workspace.
+
+**How to run it.**
+```bash
+FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
+```
+To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
+large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
+one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
+to show the effect), then run
+`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
+'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
+worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
+Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
+with no `Sort` node.
+
+**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
+schema object with no dependents (nothing else references it by name), so dropping it is a full,
+clean revert. No data was changed by this migration; only the index needs removing.
+
+---
+
 ## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
 
 **What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:
