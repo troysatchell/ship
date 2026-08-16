@@ -6,6 +6,67 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-616 — Developer portal Audit page: `public_api_audit` queryable in the portal
+
+**What was missing.** Brief p.4: "Every public API call recorded ... Queryable in the developer
+portal." The recording half existed and was tested — `GET /api/v1/audit`
+(`api/src/platform/api/v1/resources/audit.ts`, PF-501/TRO-432: `limit`/`cursor`/`app_client_id`
+query, `{ data, next_cursor }` envelope) and `@ship/sdk`'s `AuditClient.list()` — but nothing in
+`web/src` called it (**observed**: `grep -rn "v1/audit\|/audit" web/src` → zero hits before this
+ticket), and `DeveloperSidebar.tsx`'s `DEVELOPER_NAV` listed only Apps + Webhooks. The portal token
+already carried `audit:read` (`DeveloperPortalContext.tsx`'s `PORTAL_TOKEN_SCOPES`) with nothing
+spending it.
+
+**What changed.**
+- `web/src/pages/DeveloperAudit.tsx` (new) — `DeveloperAuditPage`: table of audit rows
+  (created_at, method, route, status, latency_ms, app_client_id, user_id, scope_used, request_id)
+  loaded via `usePortalToken().callV1('/audit?limit=50…')`. Server-side cursor pagination ("Load
+  more" re-requests with `cursor=<next_cursor>` and appends); an app filter (`<select>` populated
+  from the internal `/api/oauth-apps` route via `api.oauthApps.list()`, session-authed — the same
+  source `DeveloperApps.tsx` and the Subscriptions tab use) that forwards the chosen app's
+  `client_id` as `?app_client_id=` from page one; loading/empty/error states in the same visual
+  language as `DeveloperPortal.tsx`'s delivery log (same Tailwind classes, same `role="status"` /
+  `role="alert"` blocks, same "Load more" button). Accessible table: `<caption>` (sr-only) and
+  `<th scope="col">` on every header. A `forbidden` from the server (the route is admin/owner-scoped;
+  `audit:read` alone is not enough — see `audit.ts`'s header) renders verbatim in the alert rather
+  than hiding the nav entry.
+- `web/src/main.tsx` — lazy `DeveloperAuditPage` + `<Route path="audit">` inside the existing
+  `/developer` `<DeveloperPortalProvider><Outlet/>` block (sibling of `apps`, `apps/:id`,
+  `webhooks`) — 4-panel layout untouched, the page renders in the main content column.
+- `web/src/components/sidebars/DeveloperSidebar.tsx` — `{ to: '/developer/audit', label: 'Audit' }`.
+- `web/src/pages/DeveloperAudit.test.tsx` (new, vitest/RTL, gate-executed) — 6 tests: rows render
+  from a mocked page + accessible table (caption name, 9 `columnheader`s each `scope="col"`, first
+  request is exactly `/audit?limit=50`); empty state; "Load more" requests `cursor=<next_cursor>`
+  and appends in order, button disappears on the last page; filter change requests
+  `app_client_id=<client_id>` without a cursor; error state renders the v1 error `message`;
+  portal-session error short-circuits (no `callV1` call). No axe check — neither sibling
+  (`DeveloperPortal.test.tsx`, `DeveloperApps.test.tsx`) has one and `jest-axe` is not a `web`
+  dependency; the e2e spec below is where axe lives for this portal.
+- `e2e/developer-portal-apps.spec.ts` — added a `/developer/audit` visit that syncs on
+  `page.waitForResponse(/\/api\/v1\/audit/)` (not `networkidle`) and asserts a row + the named
+  table appear (one reload allowed, since the `/api/v1/me` audit INSERT is fire-and-forget and can
+  land after the page's first query). Additive: `e2e/*.spec.ts` is never executed by the gate.
+- No `DeveloperSidebar` unit test exists to update (**observed**: `ls web/src/components/sidebars/*.test.tsx`
+  has no DeveloperSidebar entry).
+
+**Red-before-green.** With `DeveloperAudit.tsx` moved aside, `npx vitest run src/pages/DeveloperAudit.test.tsx`
+→ `Error: Failed to resolve import "@/pages/DeveloperAudit" from "src/pages/DeveloperAudit.test.tsx".
+Does the file exist?` / `Test Files 1 failed (1)`. Restored → `Test Files 1 passed (1)`, `Tests 6 passed (6)`.
+
+**How to verify.**
+```bash
+cd web && npx vitest run src/pages/DeveloperAudit.test.tsx    # 6 passed
+pnpm --filter @ship/web type-check
+# Manual: pnpm dev → sign in as a workspace admin → Developer (icon rail) → Audit;
+# network tab shows GET /api/v1/audit?limit=50 with the portal bearer token; pick an app in the
+# filter → GET /api/v1/audit?limit=50&app_client_id=<client_id>; "Load more" → &cursor=….
+```
+
+**Rollback.** Revert the PR — additive UI only (one new page, one route, one nav entry, tests); no
+API, schema, or SDK changes.
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
