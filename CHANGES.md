@@ -48,6 +48,208 @@ correct but timing-fragile under GitHub Actions specifically (not observed to fa
 
 ---
 
+## TRO-488 — PF-900 follow-up: terraform input hardening — secret/number validation blocks + verify-script block-scoped greps
+
+**CodeRabbit finding on PR #174/TRO-411, triaged real, none merge-blocking — non-code / artifact-based
+ticket, same terraform-testing precedent as TRO-411 itself (`terraform validate`/`plan` is the proof
+mechanism, not vitest; disclosed below rather than routed around).**
+
+**What was missing.**
+1. `terraform/render/variables.tf` — the three new PF-900 secrets (`secret_encryption_key`,
+   `fleetgraph_oauth_client_secret`, `grader_oauth_client_secret`) had no `validation {}` block, so
+   an empty string or an uncorrected copy-paste of `terraform.tfvars.example`'s
+   `REPLACE_WITH_A_REAL_*_KEY`/`_SECRET` placeholder would `terraform apply` clean and deploy a
+   webhook-encryption key or OAuth client secret every reader of this repo already knows, while
+   Terraform itself reported success.
+2. The TTL/RPM `number` variables (`oauth_access_token_ttl_seconds`, `oauth_refresh_token_ttl_seconds`,
+   `rate_limit_app_rpm`, `rate_limit_token_rpm`) accepted any number at all — zero, negative, or
+   fractional seconds/RPM — silently `tostring()`'d into the Render env var (web_service.tf) with no
+   rejection at plan time.
+3. `scripts/factory/verify-terraform-artifact.sh`'s items #2 (env var presence) and #4 (provider pin)
+   grepped the **entire** plan file / **entire** `versions.tf` respectively — a string that merely
+   *appeared* somewhere in the file (a doc-comment example shaped like an `env_vars` map entry, a
+   stray `version = "x.y.z"`-shaped line in an unrelated block) could false-positive a PASS without
+   actually being inside a real `render_web_service` resource's `env_vars` map or the real
+   `required_providers.render` entry.
+
+**Correction to the ticket's own framing (observed, not assumed).** The ticket names
+`agent_internal_secret` as one of "3 pre-existing [vars] with the same gap" alongside
+`ship_api_token`/`langsmith_api_key`. `grep -n 'variable "\|validation {' terraform/render/variables.tf`
+(run before touching anything) shows `agent_internal_secret` already carries a `validation {}` block
+(added under TRO-347, CodeRabbit's original finding on that PR) that already rejects both an empty
+string and its exact `terraform.tfvars.example` placeholder — precisely the shape this ticket asks
+for. Only `ship_api_token` and `langsmith_api_key` actually had the gap. Re-adding a duplicate
+validation block to `agent_internal_secret` would have been redundant, so it was left untouched; the
+"six sensitive vars" total is still six (3 new + `agent_internal_secret`'s pre-existing block counted
+as already-satisfying + `ship_api_token` + `langsmith_api_key` newly added).
+
+**What changed.**
+- `terraform/render/variables.tf` — `validation {}` blocks added to `secret_encryption_key`,
+  `fleetgraph_oauth_client_secret`, `grader_oauth_client_secret`, `ship_api_token`,
+  `langsmith_api_key` (5 vars; `agent_internal_secret` already had one — see correction above). Each
+  rejects `length(trimspace(var.x)) == 0` (empty or whitespace-only) and the exact
+  `REPLACE_WITH_A_REAL_*` placeholder string from `terraform.tfvars.example`, same shape as the
+  existing `agent_internal_secret`/`agent_platform_mode` blocks in the same file.
+- `terraform/render/variables.tf` — `validation {}` blocks added to `oauth_access_token_ttl_seconds`,
+  `oauth_refresh_token_ttl_seconds`, `rate_limit_app_rpm`, `rate_limit_token_rpm`: each rejects
+  non-positive and non-integer values (`var.x > 0 && var.x == floor(var.x)`).
+- `scripts/factory/verify-terraform-artifact.sh` — new `extract_braced_blocks()` helper
+  (brace-balanced, so nested maps like `env_vars` aren't truncated at the first inner `}`) scopes
+  item #2 to only the text inside `resource "render_web_service" "..." { ... }` block(s), and item #4
+  to only the text inside the `required_providers { render = { ... } }` entry. Item #3 (resource
+  address presence) is unchanged — the ticket scoped hardening to items #2 and #4 only.
+
+**Proof — terraform binary.** No `terraform` binary or Render credentials exist in this environment
+(`which terraform` → not found). Downloaded `terraform_1.9.8_darwin_arm64` directly from
+`releases.hashicorp.com` into the session scratchpad — never committed, same methodology this
+directory's own `plan/tro-411-pf900-w6-env-vars.md` and `plan/plan-annotated.md` already document
+("temp-downloaded into the session scratchpad, not committed"). `terraform fmt -check -diff`: clean,
+exit 0. `terraform init -input=false`: reused the committed `.terraform.lock.hcl`, no version drift.
+`terraform validate -no-color`: `Success!`, the same two pre-existing `pull_request_previews_enabled`
+deprecation warnings as every prior capture in this directory, zero new warnings, zero errors — this
+proves every new `validation {}` block is syntactically valid HCL the provider schema accepts, but
+`terraform validate` alone does **not** evaluate variable validations against concrete values for
+no-default variables (all six touched here have no default) — that needs `terraform plan`.
+
+**Proof — red before green, `terraform plan -var-file=<gitignored tfvars> -input=false` (no
+`RENDER_API_KEY` set; provider auth was never in scope for this ticket).**
+- **Red, each of the 5 newly-validated secrets, both empty and the exact tfvars.example placeholder**
+  (10 cases; `agent_internal_secret`'s pre-existing block re-confirmed as an 11th): every case produced
+  `Error: Invalid value for variable` naming the exact var and the exact error message from its
+  `validation` block, e.g. for `langsmith_api_key = "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"`:
+  `langsmith_api_key must not be empty (or whitespace-only), and must not be the terraform.tfvars.example
+  placeholder value. This was checked by the validation rule at variables.tf:203,3-13.`
+- **Red, each of the 4 number vars, zero/negative/fractional** (7 cases:
+  `oauth_access_token_ttl_seconds` = `0`, `-1`, `3600.5`; `oauth_refresh_token_ttl_seconds` = `0`;
+  `rate_limit_app_rpm` = `-5`, `0.25`; `rate_limit_token_rpm` = `0`): every case produced
+  `Error: Invalid value for variable` naming the var and its "must be a positive whole number" message.
+- **Green, all eleven sensitive/number vars given real-shaped values** (random hex-ish strings for
+  secrets, `3600`/`2592000`/`120`/`60` for numbers): zero `Invalid value for variable` errors — the
+  **only** remaining error is `Error: Missing Render API Key` (expected; this ticket was never
+  authorized to touch or fabricate Render credentials — same "never fabricate a credential" rule
+  TRO-411's own CHANGES.md entry documents). This is the correct green signature: every variable
+  validation cleared, and Terraform proceeded past the variable-evaluation stage into provider
+  initialization, which is as far as a credential-less run can go.
+
+**Proof — verify-script, red before green, three fixtures.**
+- **Red (false-positive class, pre-TRO-488 script, as evidence the fix is needed):** the OLD
+  (pre-this-ticket) script run against a hand-built prose-only fixture (never committed — a fake
+  "design doc" containing every PF-900 env-var name formatted exactly like a plan-renderer map entry,
+  e.g. `+ "SECRET_ENCRYPTION_KEY" = { ... }`, but with **zero** actual `resource "render_web_service"`
+  block anywhere in the file) reported **PASS, exit 0, all 12 checks green** — a genuine false
+  positive, confirming the ticket's premise.
+- **Red (new script, same fixture):** the hardened script against the identical fixture correctly
+  **FAILs all 8 env-var checks** (`no render_web_service resource block found in: <fixture>`) while
+  item #3 (unchanged, still flat) still passes — exit 1.
+- **Red/green pair for item #4 specifically:** temporarily edited `terraform/render/versions.tf` in
+  place (reverted immediately after, confirmed via `git status`/`git diff` clean before committing —
+  never part of any commit) to remove the render provider's own `version` line entirely while adding
+  an unrelated `resource "decoy_unrelated_thing" { version = "9.9.9" }` block elsewhere. The OLD
+  script's flat "exact-pin-line exists somewhere AND no range-line exists anywhere" logic found the
+  decoy's exact-shaped line and **incorrectly PASSed** with the real provider pin missing entirely.
+  The hardened script, scoped to the extracted `required_providers.render` block only, correctly
+  **FAILed** (`required_providers.render does not show an exact x.y.z pin`).
+- **Green (real artifact, unchanged from TRO-411's own proof):**
+  `scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md`
+  → all 12 checks PASS, exit 0 — identical output to the one already committed in that plan doc,
+  confirming zero regression from the block-scoping.
+
+**Disclosed gate exception.** This is a terraform-only ticket — nothing under `api/src/**`/
+`web/src/**` can run `terraform` or hold Render credentials, so there is no vitest regression test
+for the `.tf` changes (same precedent as TRO-411/PF-900 itself and TF-* audit findings). The proof
+above (`terraform plan` red/green against placeholder vs. real-shaped values) is the actual
+regression coverage; `scripts/factory/verify-terraform-artifact.sh`'s own red/green run against the
+prose decoy IS a real, re-runnable shell-level regression check for item #2/#4's fix (not gated by
+`gate.sh`, but runnable by any future reviewer). Expect `regression-test` to report
+`pass-with-disclosed-exception` for this reason.
+
+**Not verified.** No live `terraform apply` was run (never authorized, never attempted — this ticket
+only needed variable-validation and static-grep proof). Whether a real Render API call would accept
+any of the real-shaped-but-fake secret values used in the green proof — not applicable, since those
+values are never sent anywhere in a plan-only run. `terraform plan`'s provider-init step was reached
+but not passed (no `RENDER_API_KEY`), so the full plan graph past that point was not exercised by
+this ticket's proof — TRO-411's own live-plan capture already covers that, unaffected by this change.
+
+**How to run it.** `cd terraform/render && terraform init && terraform validate` — no credentials
+needed. To see the validation blocks fire: `terraform plan -input=false -var-file=<tfvars with a bad
+value>` — e.g. set `langsmith_api_key = "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"` in a scratch tfvars
+file and watch it fail before Terraform even asks for `RENDER_API_KEY`.
+`scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md`
+re-runs the (now block-scoped) mechanical assist against the real committed artifact.
+
+**How to roll it back.** `git revert` this commit. Removes the 9 new `validation {}` blocks (5
+secrets + 4 numbers) and reverts `verify-terraform-artifact.sh`'s item #2/#4 checks to the prior
+flat-grep behavior. No live resource was ever touched — nothing to tear down. Any `terraform.tfvars`
+that was passing invalid values only by accident (there should be none, since `terraform.tfvars` is
+gitignored and never committed) would need a real value going forward, same as it always should have.
+
+---
+
+## TRO-609 — e2e/program-mode-week-ux.spec.ts: sprint filter test asserted a `<select>` that never existed, cascaded to 30 skipped tests
+
+**What changed.** `e2e/program-mode-week-ux.spec.ts`'s file-scoped `test.describe.configure({mode:
+'serial'})` means one early failure skips every test after it (54 tests, 1 failure, 30 skipped —
+confirmed live before this fix). The one reported failure, `"Issues tab has sprint filter
+dropdown"`, asserted `page.locator('select')`, but the sprint filter (`IssuesList.tsx:1115-1128`)
+is a Radix Popover + cmdk `Combobox` and has never been a native `<select>`, since it was
+introduced (`6adf8f6`, 2026-01-21). Rewrote that test's locators to the real UI
+(`getByRole('combobox', {name: 'Filter issues by week'})` + `[cmdk-item]`, the pattern already
+proven in `e2e/weeks.spec.ts`).
+
+Fixing that one test only advanced the cascade point, so the fix kept going until it stopped
+surfacing failures inside its own root-cause cluster:
+
+- 8 tests asserted bucketed week filters ("Active Week"/"Upcoming Weeks"/"Completed Weeks"/
+  "Backlog (No Week)" as selectable filter values) that have never existed —
+  `sprintOptions` (`IssuesList.tsx:540-552`) is built only from real sprint names on issues, no
+  bucket/category concept anywhere, confirmed via `git log -S` on `web/src` (never introduced) and
+  on the test file (introduced in `ed932c9`, "Eliminate all test skips and fix test failures").
+  Same never-built-UI pattern as TRO-293/TRO-596: deleted, not fixed.
+- "Move to Week" in the bulk action bar (`BulkActionBar.tsx`) is also never a `<select>` — a
+  custom `ActionButton` + `role="menu"` dropdown. 2 tests rewritten to match.
+- The selection-count assertion `getByText(/\d+ issue[s]? selected/)` never matched the actual
+  rendered text (`BulkActionBar.tsx:159`: `{selectedCount} selected`, no "issue(s)" word) — only
+  surfaced once the cascade above stopped hiding it. 3 occurrences fixed to
+  `getByText(/^\d+ selected$/)`.
+- `"bulk \"Move to Week\" updates issues"` waited on `PATCH /api/issues/`, but the real call is
+  `POST /api/issues/bulk` (`useIssuesQuery.ts`'s `bulkUpdateIssuesApi`). Fixed the wait condition
+  and dropped an unverified "or 400" status assumption that doesn't apply to this endpoint.
+
+54 tests → 45 (9 deleted). `test.describe.configure({mode: 'serial'})` was deliberately **not**
+rescoped to per-`describe`-block serial mode — documented inline why: `e2e/fixtures/isolated-env.ts`
+gives each Playwright worker one persistent Postgres container shared across every test that
+worker runs, and several blocks mutate that shared week/sprint data
+(`cleanupExtraSprints()`/creation flows). Under `fullyParallel: true`, un-grouping the file would
+let those mutations race against other blocks' read assertions on the same worker DB. Splitting it
+safely needs a full read/write audit per block — filed as a separate follow-up, not guessed at
+here.
+
+**Not fixed here — filed as TRO-613.** Getting past the fixed cascade point surfaced a *different*,
+unrelated failure next in file order: `"active sprint shows Linear-style progress graph"` (Phase 2
+Continued) asserts `"Scope:"/"Started:"/"Completed:"` text that `WeekProgressGraph.tsx` does not
+appear to render (confirmed via grep — only found in code comments). Different feature, different
+component, same origin commit (`ed932c9`) — out of scope for this ticket, not investigated further
+here. The other 8 tests in that describe block, plus "Phase 2: Empty States" (2) and "Phase 3
+Continued" (1) after it, have still never been reached by any run to date.
+
+**How to verify it.** Every rewritten test verified individually,
+`PLAYWRIGHT_WORKERS=1 pnpm exec playwright test e2e/program-mode-week-ux.spec.ts -g "<test name>"
+--retries=0` (isolated, to rule out the shared-machine resource contention this session hit
+repeatedly while multiple factory sessions ran concurrently — two other unrelated tests
+spuriously failed with `ENOENT`/60s-timeout signatures under that load and passed cleanly in
+isolation; not counted as real failures). Cumulative full-file serial runs reached and passed every
+test through the end of "Phase 4 Continued: Filter Functionality" and the "Integration" test above
+across three independent attempts before hitting TRO-613's separate failure each time.
+
+**Rollback.** Revert this commit on branch
+`troysatchell/tro-609-e2eprogram-mode-week-uxspects-issues-tab-has-sprint-filter` — the only file
+touched is `e2e/program-mode-week-ux.spec.ts` (plus this CHANGES.md entry and a
+`.claude/skills/ship-factory/references/lessons.md` note). No application code changed. Reverting
+restores the original 54-test file with the pre-existing `<select>`-based cascade (1 failure, 30
+skipped) and the never-built bucketed-filter tests.
+
+---
+
 ## TRO-440 — PF-704: Flag matrix in CI + audit-trail proof — the Epic 7 submission evidence
 
 **What was built.** The missing graded proof artifact for Epic 7 (agent-as-platform-citizen). The
