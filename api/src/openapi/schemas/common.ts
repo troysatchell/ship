@@ -3,6 +3,7 @@
  */
 
 import { z, registry } from '../registry.js';
+import { ERROR_CODES } from '@ship/shared';
 
 // ============== Base Types ==============
 
@@ -33,6 +34,31 @@ export const ErrorResponseSchema = z.object({
 }).openapi('ErrorResponse');
 
 registry.register('ErrorResponse', ErrorResponseSchema);
+
+// TRO-493 (PF-102 follow-up): `ErrorResponseSchema` above (flat `error: string`)
+// is real for `documents.ts`/`issues.ts`, but a wider, dominant convention across
+// this internal `/api` surface (api-tokens.ts, workspaces.ts, oauth-apps.ts, and
+// 6 more route files — verified by grepping every `api/src/routes/*.ts` for
+// `success: false` before writing this) is `{success: false, error: {code,
+// message, details?}}`. oauth-apps.ts registered `ErrorResponseSchema` against
+// that shape by mistake — this schema describes what it, and the other 9
+// files sharing the convention, actually return.
+export const InternalErrorResponseSchema = z.object({
+  success: z.literal(false).openapi({ description: 'Always false on an error response' }),
+  error: z.object({
+    code: z.enum(Object.values(ERROR_CODES) as [string, ...string[]]).openapi({
+      description: 'Machine-readable error code',
+    }),
+    message: z.string().openapi({ description: 'Human-readable error message' }),
+    details: z.record(z.unknown()).optional().openapi({
+      description:
+        'Additional context, shape varies by error — e.g. a validation error carries ' +
+        "zod's flatten() output ({formErrors, fieldErrors}).",
+    }),
+  }),
+}).openapi('InternalErrorResponse');
+
+registry.register('InternalErrorResponse', InternalErrorResponseSchema);
 
 // ============== Pagination ==============
 
