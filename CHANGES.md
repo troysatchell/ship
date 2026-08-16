@@ -40,14 +40,32 @@ directly from this worktree rather than recalled from the PRD or prior sessions'
   `pinnedDependencies.test.ts`): asserts every closed-epic section has the mandated
   Before/Fix/After/Proof labels, that E5/E7 are explicitly deferred rather than absent, a
   file-citation-density floor, exactly three discovery sections, Observed/Derived provenance
-  markers present, and that the new discoveries doc is distinct from the stale one. 19 assertions,
-  all real. **Red before green, genuinely produced while writing this suite** (not asserted from
+  markers present, and that the new discoveries doc is distinct from the stale one. 19 `it()` test
+  cases (several with multiple `expect()`s each — e.g. the shape check alone is 4 per epic), all
+  real. **Red before green, genuinely produced while writing this suite** (not asserted from
   memory): the shape-check caught 3 of the 7 epic sections (E2, E6, E8) using an embellished label
   — e.g. `**Fix — all 5 committed integrations, verified present:**` instead of the plain `**Fix.**`
   every other section used — each failure naming exactly which label was missing per epic; a fourth
   failure caught the citation-count regex undercounting real `.sql`/`.json`/`.mjs` citations
   alongside `.ts`. Both were fixed for real (the doc's labels normalized, the regex broadened to
   match the doc's actual citation shapes) rather than by loosening the check to fit the draft.
+
+**CodeRabbit round (real, completed — not rate-limited), 7 findings, all fixed:** the "explicitly
+defers E5/E7" check only looked for deferral prose, not absence of a real `## Epic E5`/`## Epic E7`
+heading — added the absence assertion. The citation-density check made the `:line` suffix optional,
+so filename-only references (real or invented) could satisfy it — now `.ts` code citations require
+a real `:NN`; 3 previously-bare citations (`rate-limit.ts`, `documentService.ts`,
+`bearerAuth.ts`, `signer.ts`) were given their actual line numbers in the doc itself rather than
+just loosened in the test, and the threshold was set to the genuine resulting count (14), not
+padded. The Observed/Derived check counted document-wide instead of per-section — now every
+discovery section is checked individually. The "distinct from the stale doc" check only matched
+self-descriptive words — now it actually reads `docs/submission/DISCOVERY.md` and asserts zero
+heading overlap. Two doc-accuracy findings: CHANGES.md called the suite's 19 `it()` blocks "19
+assertions" (corrected — several blocks carry multiple `expect()`s); both docs' route-fitness
+description said "five things as five blocks" then called one of those five "a sixth block," which
+is self-contradictory — reworded to state five properties across six total `it()` blocks (five
+properties + one sanity check) precisely. One markdownlint finding (missing blank lines around two
+fences, missing language tag on a plain-output fence) fixed.
 
 **How to verify.**
 

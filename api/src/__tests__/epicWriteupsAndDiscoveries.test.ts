@@ -81,35 +81,69 @@ describe('PLUGFORGE-EPIC-WRITEUPS.md — per-epic before/fix/after/proof shape',
     // read as "forgotten," not "deliberately not yet ready."
     expect(doc).toMatch(/E5.*not closed|E5.{0,80}not closed/is)
     expect(doc).toMatch(/E7.*(PF-704|Backlog|in-progress|not closed)/is)
+    // CodeRabbit (PR #261): the two checks above only prove deferral TEXT
+    // exists — they'd still pass if a half-written "## Epic E5" section were
+    // added alongside it. A real H2 heading for either must not exist while
+    // they're deferred; when one lands for real, this line (not the prose
+    // checks above) is what should be updated to reflect the new epic.
+    expect(doc).not.toMatch(/^## Epic E5\b/m)
+    expect(doc).not.toMatch(/^## Epic E7\b/m)
   })
 
   it('cites real file:line evidence, not prose-only claims', () => {
-    // Heuristic, not exhaustive: a doc built on real citations has many
-    // `path/to/file.ext[:NN]`-shaped references (code files with a line
-    // number, or config/migration files cited by name alone). A threshold
-    // well below the actual authored count catches a doc that regressed to
-    // unsupported prose without being brittle to minor rewording.
-    const citationLikePattern = /`[\w/-]+\.(ts|sql|json|mjs)(:\d+(-\d+)?)?`/g
-    const matches = doc.match(citationLikePattern) ?? []
-    expect(matches.length).toBeGreaterThanOrEqual(20)
+    // CodeRabbit (PR #261): the line-number suffix was optional, so 20
+    // filename-only references (real or invented) could satisfy the
+    // threshold without pointing at a specific, checkable line. Code
+    // citations (`.ts`) now REQUIRE `:NN`; config/migration/data files
+    // (`.sql`/`.json`/`.mjs`) are legitimately cited whole-file (a migration
+    // has no single "line" the way a claim about a function does), so those
+    // stay optional on the line suffix.
+    const codeCitationPattern = /`[\w/-]+\.ts:\d+(-\d+)?`/g
+    const fileCitationPattern = /`[\w/-]+\.(sql|json|mjs)(:\d+(-\d+)?)?`/g
+    const codeMatches = doc.match(codeCitationPattern) ?? []
+    const fileMatches = doc.match(fileCitationPattern) ?? []
+    expect(codeMatches.length, 'expected real file:line citations for .ts claims').toBeGreaterThanOrEqual(14)
+    expect(codeMatches.length + fileMatches.length).toBeGreaterThanOrEqual(20)
   })
 })
 
 describe('PLUGFORGE-DISCOVERIES.md — three provenance-disciplined discovery essays', () => {
   const doc = readDoc(DISCOVERIES_PATH, 'docs/submission/PLUGFORGE-DISCOVERIES.md')
 
+  function discoverySections(): string[] {
+    const headingIdxs = [...doc.matchAll(/^## Discovery:.*$/gm)].map((m) => m.index ?? -1)
+    return headingIdxs.map((idx, i) => doc.slice(idx, headingIdxs[i + 1] ?? doc.length))
+  }
+
   it('has exactly three discovery sections', () => {
-    const matches = doc.match(/^## Discovery:/gm) ?? []
-    expect(matches.length).toBe(3)
+    expect(discoverySections().length).toBe(3)
   })
 
-  it('marks claims Observed vs Derived per the provenance rule', () => {
-    const observedCount = (doc.match(/\*\*Observed/g) ?? []).length
-    expect(observedCount).toBeGreaterThanOrEqual(3)
+  it('marks claims Observed vs Derived in EVERY discovery, not just document-wide', () => {
+    // CodeRabbit (PR #261): a document-wide count of 3 could all come from a
+    // single well-cited section while the other two carried no provenance
+    // markers at all. Require each section to carry its own.
+    for (const section of discoverySections()) {
+      const heading = section.split('\n', 1)[0]
+      expect(section, `${heading} has no "**Observed" marker`).toMatch(/\*\*Observed/)
+    }
   })
 
-  it('is a distinct W6 document, not a silent edit of the stale Week-4 DISCOVERY.md', () => {
+  it('is a distinct W6 document, not a silent edit/copy of the stale Week-4 DISCOVERY.md', () => {
+    const staleDoc = readDoc(
+      join(REPO_ROOT, 'docs/submission/DISCOVERY.md'),
+      'docs/submission/DISCOVERY.md'
+    )
     expect(doc).toMatch(/DISCOVERY\.md/)
     expect(doc.toLowerCase()).toMatch(/leftover week-4|week-4 document|distinct.{0,40}document|new.{0,40}document/)
+    // CodeRabbit (PR #261): the two checks above only look for self-descriptive
+    // WORDS in the new doc — a copy of the stale doc with those words pasted
+    // in would still pass. Actually load the stale doc and assert the new
+    // one's headings don't overlap with it, i.e. this is genuinely different
+    // content, not a relabeled copy.
+    const newHeadings = new Set((doc.match(/^##.*$/gm) ?? []).map((h) => h.trim()))
+    const staleHeadings = new Set((staleDoc.match(/^##.*$/gm) ?? []).map((h) => h.trim()))
+    const overlap = [...newHeadings].filter((h) => staleHeadings.has(h))
+    expect(overlap, 'new discoveries doc shares headings verbatim with the stale Week-4 doc').toEqual([])
   })
 })

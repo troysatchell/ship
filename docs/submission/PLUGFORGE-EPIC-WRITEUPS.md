@@ -22,7 +22,7 @@ Two epics are deliberately absent:
 ## Epic E0 — Boundary & error contract (PF-001–004)
 
 **Before.** Ship had no public API surface — every route was internal `/api/*`, session-cookie
-authed. **Observed:** the legacy rate limiters (`api/src/middleware/rate-limit.ts`) mount on the
+authed. **Observed:** the legacy rate limiters (`api/src/middleware/rate-limit.ts:138-139`) mount on the
 bare `/api/` prefix with no skip logic; a v1 router added under that prefix would silently inherit
 IP/identity-keyed semantics instead of app/token buckets. The production numbers are real, not
 PRD prose: `identityLimit: isTestEnv ? 10000 : isDevEnv ? 1000 : 600` and
@@ -31,6 +31,7 @@ per identity, 6,000/min per IP in production, exactly matching the PRD's post-TR
 
 **Fix.** `/api/v1` mounted via `createV1Router()` (`api/src/app.ts:54,` imported and wired before
 `/api/v1/*` routes attach). **Observed:** the exact `ApiError` wire shape —
+
 ```ts
 export interface ApiErrorBody {
   code: ApiErrorCode;
@@ -39,6 +40,7 @@ export interface ApiErrorBody {
   request_id: string;
 }
 ```
+
 (`api/src/platform/api/v1/errors.ts:31-36`), matching PLUGFORGE.MD §2.5 verbatim. The boundary
 lint is a real, live ESLint rule, not aspirational: `eslint.config.mjs:113-120` configures
 `no-restricted-imports` with `group: ['**/routes/**', '**/routes']` and an explicit message
@@ -72,10 +74,12 @@ PF-100 blocked all of this epic's code until Troy personally studied RFC 6749/76
 `oauth_apps`, `oauth_authorization_codes`, `oauth_tokens`, `oauth_device_codes`, and ALTER
 `api_tokens` to add `scopes text[]`. PKCE is genuinely S256-only, not just documented as such:
 `api/src/routes/oauth-authorize.ts:192-194` —
+
 ```ts
 if (codeChallengeMethod !== 'S256') {
   // S256-only ... 'plain' and anything else are rejected here.
 ```
+
 — a real branch that rejects `plain` and anything else before a code is ever issued. The Device
 Grant's `slow_down` is real server-side state, not a client-trust convention: `device.ts:40-54`
 documents that a poll arriving before `interval_seconds` has elapsed gets `slow_down` **and** has
@@ -86,7 +90,7 @@ gameable interval forever. One asymmetry worth flagging honestly: `device.ts:212
 still-open finding (see Backlog), not something this write-up is hiding.
 
 **After.** Two token classes — OAuth access tokens and short-lived scoped personal tokens — flow
-through one bearer middleware (`platform/oauth/bearerAuth.ts`), populating `req.principal = {app,
+through one bearer middleware (`api/src/platform/oauth/bearerAuth.ts:163`), populating `req.principal = {app,
 user, scopes}`. A `403` names the missing scope in `details`, never an opaque "forbidden."
 
 **Proof.** Negative cases are real, not implied: wrong PKCE verifier, reused authorization code
@@ -113,15 +117,18 @@ build rather than silently shipping stale documentation.
 
 **Proof.** This epic's real center of gravity is its own drift gate. **Observed:**
 `api/src/platform/api/v1/__tests__/route-fitness.test.ts:275` walks the live router stack and
-asserts, per route, five independent things as five separate `it(...)` blocks (not one combined
-assertion, so a failure names exactly which property broke): **(a)** an OpenAPI entry exists with
-security matching real `bearerAuth` presence, **(b)** a scope is declared via `requireScope(...)`
-or is a documented exemption, **(c)** the generic failure path returns the §2.5 `ApiError` shape,
-**(d)** a `GET` collection route paginates with `{data, next_cursor}` or is exempt, **(e)** every
-response carries `X-RateLimit-*` headers (added later, by PF-500, as literally a sixth `it(...)`
-block onto the same walk rather than a parallel test file — the comment at line 55-57 states this
-is the intended extension pattern). A route that skips OpenAPI registration fails this walk, and
-therefore fails CI — the drift is structurally impossible to land silently.
+asserts, per route, five independent properties — not one combined assertion, so a failure names
+exactly which property broke: **(a)** an OpenAPI entry exists with security matching real
+`bearerAuth` presence, **(b)** a scope is declared via `requireScope(...)` or is a documented
+exemption, **(c)** the generic failure path returns the §2.5 `ApiError` shape, **(d)** a `GET`
+collection route paginates with `{data, next_cursor}` or is exempt, **(e)** every response carries
+`X-RateLimit-*` headers. Each property is its own `it(...)` block, plus one leading sanity check
+that the walk itself found real routes (not silently empty) — six `it(...)` blocks in the
+`describe` total. Property **(e)** is the newest: it was added later, by a different ticket
+(PF-500, TRO-427), as literally the file's sixth `it(...)` block onto the *same* walk rather than a
+parallel test file — the comment at line 55-57 states this is the intended extension pattern for a
+future seventh property, should one ever be needed. A route that skips OpenAPI registration fails
+this walk, and therefore fails CI — the drift is structurally impossible to land silently.
 
 ---
 
@@ -135,14 +142,14 @@ the collaboration server's Yjs persist (`api/src/collaboration/index.ts:207`), d
 live editing session — deliberately excluded from event publication (a webhook per keystroke-batch
 would be absurd), a disclosed decision, not an oversight.
 
-**Fix.** An 8-type event registry with Zod schemas. **Observed:** `api/src/services/documentService.ts`
+**Fix.** An 8-type event registry with Zod schemas. **Observed:** `api/src/services/documentService.ts:425-556`
 is now the *only* file in `api/src` that calls `.publish(` — `grep -rn "\.publish(" api/src
---include="*.ts"` (excluding tests) returns 8 call sites, all inside `documentService.ts:425-556`.
+--include="*.ts"` (excluding tests) returns 8 call sites, all inside that range.
 This is enforced, not just currently true: `publish-boundary.test.ts` walks every route-layer file
 and fails if any calls `.publish(` directly, with a *positive control* asserting `documentService.ts`
 itself does call it — so a regex that silently stopped matching anything fails loudly instead of
 the whole suite going vacuous. The HMAC signer uses Node's real `crypto.timingSafeEqual`
-(`signer.ts`, imported, not hand-rolled). The retry ladder is exactly
+(`api/src/platform/webhooks/signer.ts:21`, imported, not hand-rolled). The retry ladder is exactly
 `RETRY_SCHEDULE_MS = [1_000, 4_000, 16_000, 60_000, 300_000, 1_800_000]` (`deliverer.ts:109`).
 
 **After.** `POST /api/v1/webhooks/deliveries/:id/replay` re-emits carrying the *original*
@@ -203,7 +210,8 @@ pass overall, while still naming *which* stage regressed if one blows its own bu
 
 **Proof.** Ran the drill directly in this ticket's own worktree, against real infrastructure (not
 a simulation): `pnpm drill ttfe` —
-```
+
+```text
 install_sdk: 1171ms
 device_login: 34ms
 webhook_create: 6ms
@@ -213,6 +221,7 @@ verify_webhook: 1ms
 total: 1998ms / 60000ms budget
 verdict: pass
 ```
+
 Total wall-clock: **1998ms against a 60,000ms budget** — roughly 30x margin, on a local run (CI
 timing will differ, but this is a genuine, directly-observed, end-to-end pass of the graded path
 moments before this write-up, not a remembered or assumed number).

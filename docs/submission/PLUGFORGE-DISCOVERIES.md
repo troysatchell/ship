@@ -62,12 +62,13 @@ that pattern and apply it *twice*, in two directions, as two separate CI-enforce
 and what that buys you that a single generator step doesn't.
 
 **Observed, direction one:** `api/src/platform/api/v1/__tests__/route-fitness.test.ts:275` walks
-the live, mounted router stack and asserts, per route, five independently-checkable properties as
-five separate `it(...)` blocks rather than one combined assertion — a real OpenAPI entry with
+the live, mounted router stack and asserts, per route, five independently-checkable properties,
+each its own `it(...)` block rather than one combined assertion — a real OpenAPI entry with
 security metadata matching actual `bearerAuth` presence; a declared scope or a documented
 exemption; the exact §2.5 `ApiError` shape on the generic failure path; `{data, next_cursor}`
-pagination on list routes; and `X-RateLimit-*` headers. That last check was added later than the
-first four, by a different ticket (PF-500) — and it was added as a sixth `it(...)` block onto the
+pagination on list routes; and `X-RateLimit-*` headers. That last property was added later than
+the first four, by a different ticket (PF-500) — as literally the file's sixth `it(...)` block
+(five properties plus one leading sanity check that the walk found real routes at all) onto the
 *same* walk, not a parallel test file (the code's own comment states this is the intended extension
 pattern). A route that skips OpenAPI registration, or forgets a scope, fails this walk — and
 therefore fails CI. Documentation drift stops being a class of bug this codebase can *have*.
