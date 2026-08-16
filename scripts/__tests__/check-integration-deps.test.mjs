@@ -125,6 +125,66 @@ test('scanIntegrations: a compliant package (only @ship/sdk) scans clean', () =>
   }
 })
 
+// --- TRO-496 (CodeRabbit on PR #175): optionalDependencies / peerDependencies
+// can smuggle a runtime dep past a `dependencies`-only check. npm installs
+// `optionalDependencies` by default (unless `--omit=optional`), and
+// `peerDependencies` land in the runtime graph too — both are checked now.
+// devDependencies remains exempt (see next test).
+
+test('checkPackageDeps: a package with @ship/sdk PLUS an optionalDependencies smuggled dep reports a violation', () => {
+  const pkgJson = {
+    name: '@ship/cli',
+    dependencies: { '@ship/sdk': '*' },
+    optionalDependencies: { express: '^4' },
+  }
+  const { violations } = checkPackageDeps(pkgJson)
+  assert.equal(violations.length, 1)
+  assert.equal(violations[0].dependency, 'express')
+  assert.equal(violations[0].field, 'optionalDependencies')
+})
+
+test('checkPackageDeps: a package with @ship/sdk PLUS a peerDependencies smuggled dep reports a violation', () => {
+  const pkgJson = {
+    name: '@ship/cli',
+    dependencies: { '@ship/sdk': '*' },
+    peerDependencies: { react: '^18' },
+  }
+  const { violations } = checkPackageDeps(pkgJson)
+  assert.equal(violations.length, 1)
+  assert.equal(violations[0].dependency, 'react')
+  assert.equal(violations[0].field, 'peerDependencies')
+})
+
+test('checkPackageDeps: @ship/sdk listed in optionalDependencies is still allowed (not flagged)', () => {
+  const pkgJson = {
+    name: '@ship/cli',
+    optionalDependencies: { '@ship/sdk': '*' },
+  }
+  const { violations } = checkPackageDeps(pkgJson)
+  assert.deepEqual(violations, [])
+})
+
+test('scanIntegrations: a package compliant on dependencies but violating via optionalDependencies is caught', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'pf003-optional-violation-'))
+  try {
+    mkdirSync(join(dir, 'badpkg'))
+    writeFileSync(
+      join(dir, 'badpkg', 'package.json'),
+      JSON.stringify({
+        name: '@ship/badpkg',
+        dependencies: { '@ship/sdk': '*' },
+        optionalDependencies: { express: '^4' },
+      }),
+    )
+    const result = scanIntegrations(dir)
+    assert.equal(result.violations.length, 1)
+    assert.equal(result.violations[0].dependency, 'express')
+    assert.equal(result.violations[0].field, 'optionalDependencies')
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 test('scanIntegrations: a violating package (this ticket AC top-line evidence, local form) is caught by name', () => {
   const dir = mkdtempSync(join(tmpdir(), 'pf003-violation-'))
   try {
