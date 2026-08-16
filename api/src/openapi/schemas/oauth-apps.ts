@@ -232,7 +232,9 @@ registry.registerPath({
   description:
     'Generates a new client secret for a confidential app, returned exactly once. The previous ' +
     'secret is invalid immediately — there is no grace period. Public apps have no secret to ' +
-    'rotate and this returns 400.',
+    'rotate and this returns 400. Two concurrent rotations of the same app never both succeed ' +
+    '(TRO-492): exactly one wins, and the loser gets 409 with a retry-able message rather than a ' +
+    '200 wrapping a secret that is already dead.',
   request: {
     params: z.object({ id: UuidSchema }),
   },
@@ -255,6 +257,11 @@ registry.registerPath({
     },
     404: {
       description: 'OAuth app not found',
+      content: { 'application/json': { schema: ErrorResponseSchema } },
+    },
+    409: {
+      description:
+        'Lost a race against a concurrent rotation of the same app (TRO-492) — retry the request.',
       content: { 'application/json': { schema: ErrorResponseSchema } },
     },
   },
