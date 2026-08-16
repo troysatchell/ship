@@ -6,6 +6,60 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-437 — PF-906: Per-epic write-ups + three discoveries, provenance-disciplined
+
+**What this closes.** PF-906's AC: "committed; claims follow CLAUDE.md provenance discipline
+(observed vs derived, evidence linked)." Two new submission docs, each backed by evidence read
+directly from this worktree rather than recalled from the PRD or prior sessions' summaries.
+
+**What changed.**
+- Added `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` — before → fix → after → proof for the 7
+  epics with genuine closing proof as of this writing: E0, E1, E2, E3, E4, E6, E8. E5 and E7 are
+  **explicitly deferred**, not silently omitted — PF-503 (E5's remaining screen) wasn't merged and
+  PF-704 (E7's own proof — the audit rows) was still Backlog when this was written; writing E7's
+  section against rows that don't exist yet would be exactly the unmarked-inference failure
+  `.claude/CLAUDE.md` names as this project's own recurring failure mode. Every claim is anchored
+  to a real `file.ts:NN`/`.sql`/`.json` citation, verified by reading the file or running the
+  command in this worktree — not copied from PLUGFORGE.MD's own prose. One correction the research
+  turned up: the PRD's E3 write-up says "at least nine" route files had inline document SQL;
+  `grep -rln "INSERT INTO documents\|UPDATE documents SET\|DELETE FROM documents" api/src/routes/*.ts`
+  (excluding tests) returns 12 — stated as the actually-observed count, not the PRD's estimate.
+  E6's proof includes a live number, not a claimed one: `pnpm drill ttfe` run directly in this
+  ticket's own worktree returned `total: 1998ms / 60000ms budget, verdict: pass`.
+- Added `docs/submission/PLUGFORGE-DISCOVERIES.md` — three essays (OAuth Device Authorization
+  Grant in TypeScript; zod-driven OpenAPI with bidirectional fitness-test parity; Stripe-style HMAC
+  signing and the encrypt-not-hash trade-off), chosen from the PRD's four candidates as the three
+  with the most specific, file-cited stories rather than the most generic. A genuinely new
+  document — `docs/submission/DISCOVERY.md` is a leftover Week-4 document on an unrelated subject
+  and is untouched. The Device Grant essay surfaces a real, disclosed asymmetry found while
+  researching it: `api/src/platform/oauth/device.ts:212-214` stores `user_code` in plaintext
+  alongside the hashed `device_code_hash` — a defensible design (a human types it into an already-
+  trusted page) but a genuinely open Backlog finding, named honestly rather than glossed over.
+- Added `api/src/__tests__/epicWriteupsAndDiscoveries.test.ts` — a structural presence lint over
+  both docs (pattern: `architectureDocSections.test.ts` / TRO-424, itself modeled on
+  `pinnedDependencies.test.ts`): asserts every closed-epic section has the mandated
+  Before/Fix/After/Proof labels, that E5/E7 are explicitly deferred rather than absent, a
+  file-citation-density floor, exactly three discovery sections, Observed/Derived provenance
+  markers present, and that the new discoveries doc is distinct from the stale one. 19 assertions,
+  all real. **Red before green, genuinely produced while writing this suite** (not asserted from
+  memory): the shape-check caught 3 of the 7 epic sections (E2, E6, E8) using an embellished label
+  — e.g. `**Fix — all 5 committed integrations, verified present:**` instead of the plain `**Fix.**`
+  every other section used — each failure naming exactly which label was missing per epic; a fourth
+  failure caught the citation-count regex undercounting real `.sql`/`.json`/`.mjs` citations
+  alongside `.ts`. Both were fixed for real (the doc's labels normalized, the regex broadened to
+  match the doc's actual citation shapes) rather than by loosening the check to fit the draft.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/__tests__/epicWriteupsAndDiscoveries.test.ts
+```
+
+**Rollback.** `git rm docs/submission/PLUGFORGE-EPIC-WRITEUPS.md docs/submission/PLUGFORGE-DISCOVERIES.md api/src/__tests__/epicWriteupsAndDiscoveries.test.ts`,
+revert this entry. No schema, no migration, no other file touched.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
