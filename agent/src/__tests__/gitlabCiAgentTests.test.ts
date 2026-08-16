@@ -134,3 +134,97 @@ describe('.gitlab-ci.yml — verify job runs the agent regression suite (TRO-369
     expect(actualCommandWithWhitespace).toMatch(AGENT_TEST_LIST_ENTRY);
   });
 });
+
+/**
+ * TRO-440 (PF-704) — "CI runs agent tests with flag on and off." Asserts
+ * the SECOND invocation exists as a real script list entry with
+ * `AGENT_PLATFORM_MODE=sdk` set, inside the same `verify` job, distinct
+ * from the flag-off invocation above.
+ */
+describe('.gitlab-ci.yml — verify job runs the agent suite a second time with AGENT_PLATFORM_MODE=sdk (TRO-440)', () => {
+  const AGENT_TEST_SDK_MODE_ENTRY = /^\s*-\s+AGENT_PLATFORM_MODE=sdk pnpm --filter @ship\/agent test(?:\s|$)/m;
+
+  it('invokes the agent suite a second time with AGENT_PLATFORM_MODE=sdk as a real script list entry', () => {
+    const yaml = readGitlabCi();
+    const verifyBody = extractJobBody(yaml, 'verify');
+
+    expect(verifyBody).toMatch(AGENT_TEST_SDK_MODE_ENTRY);
+  });
+
+  it('the flag-off invocation (no AGENT_PLATFORM_MODE) still exists alongside the flag-on one — both, not a replacement', () => {
+    const yaml = readGitlabCi();
+    const verifyBody = extractJobBody(yaml, 'verify');
+
+    expect(verifyBody).toMatch(AGENT_TEST_LIST_ENTRY);
+    expect(verifyBody).toMatch(AGENT_TEST_SDK_MODE_ENTRY);
+  });
+});
+
+/**
+ * TRO-440 (PF-704), CodeRabbit finding on this ticket's own PR — the
+ * GitLab-side fitness test above had no `.github/workflows/ci.yml`
+ * equivalent, so a future edit could silently desync the two platforms with
+ * nothing structural to catch it (exactly the class of gap TRO-369's own
+ * `.gitlab-ci.yml` test exists to prevent, just on the other file).
+ *
+ * GH Actions' YAML shape differs from GitLab's (a job's `steps:` is a list
+ * of `- name: ... / run: ...` pairs, not a flat `script:` list), so this
+ * reuses the same "slice out one top-level job's own body, stop at the next
+ * unindented top-level key" technique `extractJobBody` above already
+ * established, rather than force-fitting GitLab's job-extraction helper
+ * onto a differently-shaped file.
+ */
+function readGithubCi(): string {
+  const repoRoot = path.resolve(fileURLToPath(import.meta.url), '../../../../');
+  return readFileSync(path.join(repoRoot, '.github/workflows/ci.yml'), 'utf8');
+}
+
+function extractGithubJobBody(yaml: string, jobName: string): string {
+  const lines = yaml.split('\n');
+  const startIndex = lines.findIndex((line) => line === `  ${jobName}:`);
+  if (startIndex === -1) {
+    throw new Error(`No top-level job named "  ${jobName}:" found in .github/workflows/ci.yml`);
+  }
+  const rest = lines.slice(startIndex + 1);
+  // A GH Actions job's own top-level keys (steps:, runs-on:, needs:, ...)
+  // sit at 4-space indent under the 2-space job name — the boundary is the
+  // first non-blank line indented by 2 spaces or less (the next job, or a
+  // workflow-level key), same "stop before the next unindented key" idea
+  // extractJobBody uses, just at this file's own indent depth.
+  const endOffset = rest.findIndex((line) => line.trim().length > 0 && !line.startsWith('    '));
+  const bodyLines = endOffset === -1 ? rest : rest.slice(0, endOffset);
+  return bodyLines.join('\n');
+}
+
+describe('.github/workflows/ci.yml — verify job runs the agent suite a second time with AGENT_PLATFORM_MODE=sdk (TRO-440)', () => {
+  it('finds the verify job and stops before the next top-level job', () => {
+    const yaml = readGithubCi();
+    const body = extractGithubJobBody(yaml, 'verify');
+    expect(body).toContain('Agent tests');
+    // drill-ttfe is a distinct top-level job — its own name must not leak
+    // into verify's slice.
+    expect(body).not.toContain('drill · TTFE');
+  });
+
+  it('has both the flag-off "Agent tests" step and the flag-on "Agent tests (AGENT_PLATFORM_MODE=sdk)" step', () => {
+    const yaml = readGithubCi();
+    const body = extractGithubJobBody(yaml, 'verify');
+
+    expect(body).toMatch(/- name: Agent tests\s*$/m);
+    expect(body).toMatch(/- name: Agent tests \(AGENT_PLATFORM_MODE=sdk\)/);
+  });
+
+  it('the flag-on step actually sets AGENT_PLATFORM_MODE: sdk in its own env block, not just its name', () => {
+    const yaml = readGithubCi();
+    const body = extractGithubJobBody(yaml, 'verify');
+    const stepStart = body.indexOf('- name: Agent tests (AGENT_PLATFORM_MODE=sdk)');
+    expect(stepStart).toBeGreaterThan(-1);
+    // The step's own body: from its header to the next `- name:` (or end).
+    const afterStep = body.slice(stepStart);
+    const nextStepOffset = afterStep.indexOf('\n      - name:', 1);
+    const stepBody = nextStepOffset === -1 ? afterStep : afterStep.slice(0, nextStepOffset);
+
+    expect(stepBody).toMatch(/AGENT_PLATFORM_MODE:\s*sdk\b/);
+    expect(stepBody).toMatch(/run:\s*pnpm --filter @ship\/agent test\b/);
+  });
+});

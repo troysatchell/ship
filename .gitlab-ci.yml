@@ -122,6 +122,22 @@ verify:
     # failure here fails the job outright rather than going through the
     # testdiff regression check below.
     - pnpm --filter @ship/agent test
+    # TRO-440 (PF-704): the flag half of "CI runs agent tests with flag on
+    # and off" — same command, same DB, `AGENT_PLATFORM_MODE=sdk` set at
+    # this one step only (not job-level, so it never leaks into the `test`
+    # step above or any other package's tests in this job). Most existing
+    # agent tests construct their own explicit config objects and never
+    # read this ambient value (confirmed by grep: only `index.ts`'s real
+    # boot path and the CLI trace-* scripts call bare `loadConfig()`), so
+    # today this step is a regression net against an accidental ambient
+    # read elsewhere in the suite, not a second distinct set of assertions
+    # — the actual mode-specific behavioral proof is
+    # `auditTrailProof.liveServer.test.ts` (TRO-440's own new file, already
+    # covered by the unconditional `pnpm --filter @ship/agent test` above,
+    # since it constructs its sdk-mode clients directly rather than reading
+    # this env var). Documented here rather than oversold as a second
+    # independent test pass.
+    - AGENT_PLATFORM_MODE=sdk pnpm --filter @ship/agent test
     # TRO-405 (PF-400): sdk/'s own vitest suite — unit tests for the
     # ApiError->kind mapping plus a live-running-server integration test
     # (PLUGFORGE.MD's own words: PF-400's AC "is the MVP gate check"). Same
