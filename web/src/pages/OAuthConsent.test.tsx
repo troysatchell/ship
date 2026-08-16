@@ -112,4 +112,27 @@ describe('OAuthConsentPage — app name is server-verified, never query-string-c
     ).toBeInTheDocument();
     expect(screen.queryByText(new RegExp(SPOOFED_NAME, 'i'))).not.toBeInTheDocument();
   });
+
+  it('falls back to generic copy on a malformed 200 response body (empty/missing/non-string name), never the spoofed app_name', async () => {
+    // CodeRabbit review finding, TRO-550: a 200 status alone doesn't make the
+    // body trustworthy — each of these is shaped like success but must still
+    // land on the generic-copy fallback, not render blank/undefined/spoofed
+    // content.
+    for (const body of [{ name: '' }, {}, { name: 123 }, null]) {
+      const fetchMock = vi.fn(async () => jsonResponse(body));
+      global.fetch = fetchMock as typeof fetch;
+
+      const { unmount } = render(
+        <MemoryRouter initialEntries={[consentUrl()]}>
+          <OAuthConsentPage />
+        </MemoryRouter>
+      );
+
+      expect(
+        await screen.findByRole('heading', { name: /Authorize This application/i })
+      ).toBeInTheDocument();
+      expect(screen.queryByText(new RegExp(SPOOFED_NAME, 'i'))).not.toBeInTheDocument();
+      unmount();
+    }
+  });
 });

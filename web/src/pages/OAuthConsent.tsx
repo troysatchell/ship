@@ -95,10 +95,22 @@ export function OAuthConsentPage() {
     fetch(`${API_URL}/oauth/app-info?${query.toString()}`)
       .then((res) => {
         if (!res.ok) throw new Error(`GET /oauth/app-info failed: ${res.status}`);
-        return res.json() as Promise<{ name: string }>;
+        return res.json() as Promise<unknown>;
       })
       .then((data) => {
-        if (!cancelled) setAppInfo({ status: 'loaded', name: data.name });
+        // CodeRabbit review finding, TRO-550: don't trust the response shape
+        // just because the status was 200 — require a real, non-empty
+        // string `name` before treating it as loaded. A malformed/empty
+        // value falls through to the same generic-copy catch below rather
+        // than rendering blank/undefined/non-string content.
+        const name =
+          typeof data === 'object' && data !== null && 'name' in data
+            ? (data as { name: unknown }).name
+            : undefined;
+        if (typeof name !== 'string' || name.length === 0) {
+          throw new Error('GET /oauth/app-info returned a malformed body');
+        }
+        if (!cancelled) setAppInfo({ status: 'loaded', name });
       })
       .catch(() => {
         // Unknown/revoked client_id, network failure, or a malformed
