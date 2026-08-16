@@ -6,6 +6,59 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-549 — E2E login-flow assertions accept any non-/login URL as proof of sign-in
+
+**What changed.** Five sites across `e2e/auth.spec.ts` (lines 53, 67, 94) and
+`e2e/oauth-authorize.spec.ts` (lines 122, 178) asserted `expect(page).not.toHaveURL('/login',
+{timeout: 5000})` right after a login form submission. That passes on *any* URL that isn't
+`/login` — including a transient intermediate route or a silent-failure error page — so it proves
+only "navigated away from /login," not "actually signed in." Replaced each with a positive
+assertion on the real authenticated landing route, `expect(page).toHaveURL('/docs', {timeout:
+5000})`, matching the shape `oauth-authorize.spec.ts:137/188`'s existing `toHaveURL(/\/oauth-consent/)`
+already used correctly.
+
+`/docs` (not `/my-week`, despite `main.tsx`'s nested index route redirecting bare `/` there) was
+confirmed as the real post-login landing URL by running the suite, not assumed: all three
+`auth.spec.ts` sites are already followed by a `getByText`/`locator('h1', {hasText: 'Documents'})`
+landmark check that passes today, and the login flow's `PublicRoute` wrapper
+(`main.tsx`'s `if (user) return <Navigate to="/docs" replace />`) wins the race against
+`LoginPage`'s own `navigate(from)` call with `from = '/'`.
+
+**Not fixed here — pre-existing, unrelated failure surfaced by running the target files.**
+`e2e/oauth-authorize.spec.ts`'s first test still fails, but at line 158 (`getByRole('heading',
+{name: /Authorize This application/i})`), not at either line this ticket touched — confirmed
+identical failure location/message before and after this change. TRO-550 (PR #265, already on
+`main` before this branch forked) changed `OAuthConsentPage` to show the real, server-looked-up
+app name (`Authorize {appName}`) instead of the old generic `"Authorize This application"`
+fallback; the seeded test app name (`"PF-103 E2E Demo Client"`) never matches that regex anymore.
+Because the describe block is `mode: 'serial'`, that failure skips the file's second test too.
+This is a stale assertion left behind by a later, unrelated ticket — out of scope for TRO-549's
+"replace the weak URL assertion" mandate (no drive-by fixes), and not something this ticket can
+make green by itself. Filed as a discrepancy for follow-up rather than patched here.
+
+**How to verify it.** `pnpm exec playwright test e2e/auth.spec.ts e2e/oauth-authorize.spec.ts`.
+`auth.spec.ts`: 7/7 pass. `oauth-authorize.spec.ts`: both tests still fail/skip, identically to a
+pre-change baseline run of the same command — the failure is at the unrelated line 158 heading
+check in both runs, confirming this ticket's two target lines (125, 181 post-edit) are not the
+cause.
+
+**Gate results (documented here, not just the PR body).** `scripts/factory/gate.sh` on this
+branch: pass on every check except two, both intentional and disclosed here rather than papered
+over:
+- `regression-test` — fails, no new `it(`/`test(` case added. This ticket strengthens five
+  existing assertions in place; it does not add new coverage, so there is no new test case to
+  add. Same disclosed-exception shape as TRO-596/TRO-609 (assertion-only e2e tickets).
+- `tests:api` — fails on `webhooks.test.ts`, but that file is untouched by this diff (this ticket
+  only edits `e2e/*.spec.ts` and `CHANGES.md`) and `.factory/api-standalone.txt` confirms it
+  passes standalone — the known load-sensitive/test-isolation flake class (TEST-12/TRO-277) the
+  gate script's own comments already name, not a regression this ticket introduced.
+
+**Rollback.** Revert this commit on branch `fix/tro-549-login-assertion-sweep` — only
+`e2e/auth.spec.ts` and `e2e/oauth-authorize.spec.ts` (plus this CHANGES.md entry) changed. No
+application code touched.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
