@@ -2,6 +2,19 @@
 
 *What works, what's left, what changed. Append-style updates with dates; newest section first.*
 
+## 2026-08-16 (~13:35–16:20Z) — 4th concurrent orchestrator: TRO-490 + TRO-491 shipped
+
+- Resumed from ship-38's 13:35Z handoff; ship-38 kept the merge queue + TRO-500/549, ship-16 took TRO-590 after a claim collision (yielded, they had the worktree). Claimed TRO-490 and TRO-491; both apply-tier, dispatched as sonnet appliers with fully specified briefs (red-before-green captured in both).
+- **TRO-491** decision made as PM: derive the OpenAPI scopes enum from `ScopeRegistry.names()` (registry is import-free, registers at load — still one source of truth); `APIToken.scopes` required-nullable. Gate attempt 1 failed G7b on `as any` in the new test — the brief specified it (orchestrator error), fixed with typed `openapi3-ts` accessors. CLI CodeRabbit ran clean except 1 minor finding on TRO-493's already-merged CHANGES.md entry → dismissed, ledgered. PR #288 → `41e1ac32`.
+- **TRO-490**: `jsonToYaml` fixed (JSON-string quoting keeps TRO-309 tests byte-identical; inline `{}`/`[]`; single re-indent), `yaml@2.9.0` devDep + round-trip tests, `api/openapi.yaml` regenerated. 5 gate runs, 2 passes; every fail was `tests:api` on a different standalone-passing test at load avg 10–21 (TRO-277). PR #287 → `6b60377b`.
+- Merge choreography: agreed explicit windows over SendMessage — ship-38's batch → ship-90's #300 (9 tickets, given the slot ahead of mine because it was already green) → #288 → #287. GitLab synced after each; SHAs verified.
+- Memory-bank hygiene: the shared main worktree's uncommitted `activeContext.md`/`progress.md`/`scorecard.jsonl` edits were reset by another session's checkout ~14:15Z (content survived on PR #284); this entry's PR also carries ship-90's uncommitted lines/rows so they are not lost. Scorecard row for TRO-490 attempt 4 (pass, ~14:17Z) was recorded late in that PR — noted in the row.
+
+## 2026-08-16 (~14:25–15:50Z) — requirements audit `w6-2026-08-16b` + gap-closure wave (audit session)
+- Full compare sweep of all 79 W6 requirements against 08505d2d with real verification (unit suites on a throwaway DB, 7 targeted Playwright specs, schema dumps, CI drill history): 59 VERIFIED / 12 PARTIAL / 3 IMPL-UNVERIFIED / 2 MISSING / 3 N/A. Two corrections to the prior sweep (drill didn't assert tamper/≤2 s; portal had no audit page). Troy ruled I-05..I-08 (face value). Reports: audit/requirements/REPORT-W6-2026-08-16b.md, gaps-W6-2026-08-16b.md, matrix.after-w6-2026-08-16b.json (merged via #284).
+- Filed TRO-615..621; three Workflows (implement → gate.sh → blind verify → PR) in isolated worktrees; every gate passed (first-attempt fails were all TRO-277 load flakes from ~9 concurrent gates); merged as convoy PR #300 → main 5eab5069 (+ GitLab). New CI job `drill · TTFE image-mode (TRO-621)` green on first run. Also merged #284 (audit + memory-bank sync).
+- Human items prepared: TRO-444 (script + real capture PNG + social draft), TRO-429 (pre-search pre-fill). Remaining for Troy: answers/ack, record/post, TRO-415.
+
 ## 2026-08-16 ~13:56Z — 4th concurrent session (usage-limited): TRO-490 + TRO-491 built, gates pending
 
 - Resumed from ship-38's 13:35Z handoff; ship-38 confirmed it owns the merge queue + TRO-500/549 — no duplication. Claim collision on TRO-590 with ship-16 resolved by yielding (they had the worktree).
