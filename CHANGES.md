@@ -6,6 +6,60 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-610 — Absolute session-timeout "I Understand" button silently extended the session it says cannot be extended
+
+**The bug.** `SessionTimeoutModal.tsx`'s action button was wired unconditionally to
+`onClick={onStayLoggedIn}`, regardless of `warningType`. For `warningType === 'absolute'`, the
+modal's own copy says "This timeout cannot be extended" — but clicking "I Understand" called the
+exact same handler as "Stay Logged In" for the inactivity case, which is `useSessionTimeout.ts`'s
+`resetTimer()`: it calls `POST /api/auth/extend-session`, genuinely extending the server-side
+session. A user hitting the 12-hour absolute cap, clicking through the warning, silently got their
+session extended anyway.
+
+**The fix.**
+- `web/src/hooks/useSessionTimeout.ts` — added `dismissAbsoluteWarning()`, a new returned function
+  that hides the warning WITHOUT calling `resetTimer()`/extend-session and without touching the
+  running countdown interval. Internally, `showWarning`'s externally-visible value is now a
+  computed field (`showWarning && !(warningType === 'absolute' && absoluteWarningDismissed)`) —
+  dismissal sets a separate `absoluteWarningDismissed` flag rather than the underlying `showWarning`
+  state, because flipping `showWarning` itself would re-trigger `scheduleAbsoluteWarning`'s own
+  effect (dependent on `[sessionCreatedAt, showWarning, warningType]`), whose "already past the
+  threshold" branch treats any `warningType !== 'inactivity'` as a reason to unconditionally
+  re-show — an infinite re-show loop, found and fixed during this ticket, not present before this
+  ticket's own dismiss path existed.
+- `web/src/components/SessionTimeoutModal.tsx` — new `onDismissAbsolute` prop; the button's
+  `onClick` now routes on `warningType`: `isInactivity ? onStayLoggedIn : onDismissAbsolute`.
+- `web/src/pages/App.tsx` — wires `dismissAbsoluteWarning` from the hook through to the modal's new
+  `onDismissAbsolute` prop.
+
+**How to run it.**
+
+```
+pnpm --filter @ship/web exec vitest run src/hooks/useSessionTimeout.test.ts src/components/SessionTimeoutModal.test.tsx
+```
+
+**Regression tests, red before green:**
+- `web/src/hooks/useSessionTimeout.test.ts` — two new cases in the "Absolute Timeout" describe
+  block: `dismissAbsoluteWarning()` hides the warning without calling `extend-session` (asserts
+  `mockFetch` never called), and does not prevent the real 12-hour timeout from firing (asserts
+  `onTimeout` fires once the remaining 5 minutes elapse in the background). Both reverted to
+  `TypeError: result.current.dismissAbsoluteWarning is not a function` against pre-fix code.
+- `web/src/components/SessionTimeoutModal.test.tsx` — new file, component-level per this ticket's
+  own note that this behavior should be gate-verified, not e2e-only. Asserts the absolute case
+  calls `onDismissAbsolute` and never `onStayLoggedIn`; the inactivity case calls `onStayLoggedIn`
+  and never `onDismissAbsolute`. Reverting just `SessionTimeoutModal.tsx`'s wiring reproduces the
+  exact original bug: `onDismissAbsolute` gets called 0 times instead of 1 (`expected "vi.fn()" to
+  be called 1 times, but got 0 times`), confirming the click landed on `onStayLoggedIn` instead.
+- `e2e/session-timeout.spec.ts`'s pre-existing `clicking I Understand on absolute warning does NOT
+  extend session` test (added before this ticket, never weakened) is unaffected by this change and
+  should now genuinely pass rather than coincidentally pass.
+
+**Rollback.** Revert this commit — the three modified files (`useSessionTimeout.ts`,
+`SessionTimeoutModal.tsx`, `App.tsx`) return to the prior unconditional-button-wiring behavior, and
+delete the new `SessionTimeoutModal.test.tsx` file. No migration, no config, no API change.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
