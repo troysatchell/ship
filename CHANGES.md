@@ -25,6 +25,11 @@ tagging @GauntletAI, plus the 3-line "what Troy does" checklist. New
 commit b68da413) and `webhooks-tail-verified.png` (a Playwright render of that text — a drawn
 terminal window, not a photo; stated as such in the docs and in the image footer).
 
+Also `integrations/cli/src/__tests__/demoScript.drift.test.ts`: a filesystem-only drift guard
+that pins every CLI output line the script quotes to the command source that prints it, checks
+the captured frame matches `formatDeliveryLine()`'s exact shape, and asserts the stale W5 claims
+are gone (red against the pre-rewrite script — it contained "PF-600 is failing CI"; green now).
+
 **Why.** PF-908 is a human checkpoint (Troy records and posts); the agent-side halves — accurate
 script, real screenshot, post text — were stale or missing.
 
