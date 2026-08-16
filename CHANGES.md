@@ -32,9 +32,12 @@ operation-level parity only — it never looks inside a schema's enum members.
   `pnpm openapi:check:v1` keeps the two identical). Walks the whole document, collects every
   string `enum`, tags any containing `'urgent'` as a priority enum and any containing
   `'in_progress'` as a state enum, and asserts each occurrence (components AND inline schemas)
-  is set-equal to the SDK array. Zero occurrences fails (no vacuous pass). Also carries
-  compile-time `Equal<>` guards that `(typeof ISSUE_PRIORITIES)[number]` is `IssuePriority` and
-  likewise for states.
+  is set-equal to the SDK array. Zero occurrences fails (no vacuous pass).
+- `sdk/src/types.ts` also carries compile-time `Equal<>` guards that
+  `(typeof ISSUE_PRIORITIES)[number]` is exactly `IssuePriority` (and likewise for states) — in
+  `types.ts` rather than the test file because `sdk/tsconfig.json` excludes `src/__tests__/**`
+  from `tsc`, so `pnpm type-check` is what enforces them (a CodeRabbit finding on the first gate
+  run, applied). `satisfies` alone only proves the array is a subset of the union.
 - Ticket step 3 (grep `sdk/` and `integrations/cli/` for `switch`/maps over priority): grepped
   `urgent` and `priority` across both — the only occurrence outside tests is the union itself.
   No exhaustive switch or map exists in either package, so no `'none'` case to add. Stated so

@@ -179,6 +179,17 @@ export type IssuePriority = 'low' | 'medium' | 'high' | 'urgent' | 'none';
 export const ISSUE_STATES = ['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled'] as const satisfies readonly IssueState[];
 export const ISSUE_PRIORITIES = ['low', 'medium', 'high', 'urgent', 'none'] as const satisfies readonly IssuePriority[];
 
+// Compile-time lockstep guards (TRO-618). `satisfies` above only proves every
+// array member is IN the union; it does not prove the union has no member the
+// array lacks. `Equal<>` proves both directions, and lives HERE (not in the
+// test file) because `sdk/tsconfig.json` excludes `src/__tests__/**` from
+// `tsc`, so a guard there is never type-checked — `pnpm type-check` enforces
+// these. Erased at emit; nothing reaches `dist/`.
+type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+type Assert<T extends true> = T;
+type _StatesMirrorUnion = Assert<Equal<(typeof ISSUE_STATES)[number], IssueState>>;
+type _PrioritiesMirrorUnion = Assert<Equal<(typeof ISSUE_PRIORITIES)[number], IssuePriority>>;
+
 /** Matches `serializeIssue()`'s actual return shape
  *  (`api/src/platform/api/v1/resources/issues.ts:96-108`) field-for-field. */
 export interface Issue {

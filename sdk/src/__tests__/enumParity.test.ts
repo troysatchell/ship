@@ -41,17 +41,11 @@ import { describe, it, expect } from 'vitest';
 
 import { v1OpenApiDocument } from '../../../api/src/platform/openapi/index.js';
 import { ISSUE_PRIORITIES, ISSUE_STATES } from '../types.js';
-import type { IssuePriority, IssueState } from '../types.js';
 
-// ─── compile-time guards: the runtime arrays and the unions must be the same
-// set in both directions. Vitest transpiles (no type-check) so these never
-// fail a run, but they DO fail `tsc` in any consumer that type-checks this
-// file — and they document the intent next to the runtime assertions.
-type Equal<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
-const _prioritiesMirrorUnion: Equal<(typeof ISSUE_PRIORITIES)[number], IssuePriority> = true;
-const _statesMirrorUnion: Equal<(typeof ISSUE_STATES)[number], IssueState> = true;
-void _prioritiesMirrorUnion;
-void _statesMirrorUnion;
+// The compile-time array<->union lockstep guards live in `sdk/src/types.ts`
+// (next to the arrays), NOT here: `sdk/tsconfig.json` excludes
+// `src/__tests__/**` from `tsc`, so a type-level guard in this file would
+// never actually be checked. This file is runtime parity only.
 
 /** Walk any JSON-ish value and collect every `enum` that is an array of
  *  strings, tagged with the JSON-pointer-ish path it was found at (for the
