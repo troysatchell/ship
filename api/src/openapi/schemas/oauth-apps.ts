@@ -262,7 +262,7 @@ registry.registerPath({
     409: {
       description:
         'Lost a race against a concurrent rotation of the same app (TRO-492) — retry the request.',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
   },
 });
