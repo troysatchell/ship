@@ -9,7 +9,7 @@ import cookieParser from 'cookie-parser';
 import session from 'express-session';
 import { csrfSync } from 'csrf-sync';
 import rateLimit from 'express-rate-limit';
-import { createApiRateLimiters, createSpaStaticLimiter } from './middleware/rate-limit.js';
+import { createApiRateLimiters, createSpaStaticLimiter, createOAuthRateLimiter } from './middleware/rate-limit.js';
 import {
   createRedisClientFromEnv,
   createRedisRateLimitStore,
@@ -141,6 +141,13 @@ const [perSourceIpLimiter, perIdentityLimiter] = createApiRateLimiters(process.e
 // and why this is its own limiter rather than a reuse of
 // perSourceIpLimiter/perIdentityLimiter.
 const spaStaticLimiter = createSpaStaticLimiter(process.env, rateLimitRedisClient);
+
+// TRO-588: `/oauth/*` (PF-103/104/106) has never had rate-limit coverage —
+// see createOAuthRateLimiter's own doc for why the legacy /api/ limiters and
+// PF-500's v1 buckets both miss it. Built here alongside the other limiters
+// for the same shared-Redis-client reason as spaStaticLimiter; mounted below,
+// directly ahead of the three /oauth-prefixed routers it protects.
+const oauthRateLimiter = createOAuthRateLimiter(process.env, rateLimitRedisClient);
 
 
 /**
@@ -541,6 +548,13 @@ export function createApp(
   // Mount at both /caia and /piv paths - /piv/callback is registered with CAIA
   app.use('/api/auth/caia', caiaAuthRoutes);
   app.use('/api/auth/piv', caiaAuthRoutes);
+
+  // TRO-588: per-source-IP flood ceiling for the whole /oauth prefix, ahead
+  // of every /oauth-mounted router below — same "cheap, runs first" ordering
+  // as perSourceIpLimiter/perIdentityLimiter above. See
+  // createOAuthRateLimiter's doc (middleware/rate-limit.ts) for why this is
+  // a separate limiter from both of those rather than a reuse.
+  app.use('/oauth', oauthRateLimiter);
 
   // OAuth authorization endpoint + consent decision (PF-103, TRO-412) — no
   // CSRF protection, same OAuth-flow rationale as CAIA above (see the
