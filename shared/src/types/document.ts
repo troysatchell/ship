@@ -55,8 +55,15 @@ export type DocumentType =
 // Issue states
 export type IssueState = 'triage' | 'backlog' | 'todo' | 'in_progress' | 'in_review' | 'done' | 'cancelled';
 
-// Issue priorities
-export type IssuePriority = 'low' | 'medium' | 'high' | 'urgent';
+// Issue priorities. 'none' ("No Priority") is a real, selectable value —
+// not just an absence sentinel: IssueSidebar.tsx's Properties Panel
+// dropdown offers it explicitly, and KanbanBoard.tsx / IssuesList.tsx
+// already render a dedicated color/label for it. The route-level
+// createIssueSchema/updateIssueSchema (api/src/routes/issues.ts) and the
+// OpenAPI IssuePrioritySchema (api/src/openapi/schemas/issues.ts) already
+// included 'none'; this union was the one source of truth out of step
+// (TRO-501).
+export type IssuePriority = 'low' | 'medium' | 'high' | 'urgent' | 'none';
 
 // Issue source - provenance, never changes after creation
 export type IssueSource = 'internal' | 'external' | 'action_items';
