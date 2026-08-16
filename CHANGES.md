@@ -796,7 +796,13 @@ strings (drill header/stages from `ttfe.ts`/`thresholds.ts`, both CI job display
 image-mode step from `ci.yml`, two Audit-page strings) — it went red on the first draft of this
 revision (three quoted phrases were line-wrapped in the markdown) and is green after unwrapping
 them, so the guard demonstrably bites. Verify: `pnpm --filter @ship/cli exec vitest run
-src/__tests__/demoScript.drift.test.ts` (22 passed).
+src/__tests__/demoScript.drift.test.ts` (22 passed). Same day, later: the X thread —
+`docs/submission/SOCIAL-THREAD-W6.md` (8 posts, X-weighted counts ≤ 278) and
+`docs/submission/social-assets/w6/thread/` (8 cards from `cards.html` via `render.mjs`, plus
+`raw/` verbatim CLI stdout and unretouched Playwright frames of the device-verify page, the
+portal Replay, and the Audit page — all captured against a local `main` @ `cf9b4e4b`); the
+single-post variants in `PLUGFORGE-SOCIAL-POST.md` stay as fallbacks. Docs and static assets
+only; rollback is the same `git revert`.
 
 **Why.** PF-908 is a human checkpoint (Troy records and posts); the agent-side halves — accurate
 script, real screenshot, post text — were stale or missing.

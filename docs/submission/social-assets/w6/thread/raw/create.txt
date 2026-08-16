@@ -1,0 +1,9 @@
+$ ship docs create --title "PlugForge demo"
+Created document.
+id: e8495519-39e9-40d3-a7af-6ca4f114113b
+title: PlugForge demo
+document_type: wiki
+created_at: 2026-08-16T16:58:57.983Z
+updated_at: 2026-08-16T16:58:57.983Z
+properties: {}
+(exit 0)

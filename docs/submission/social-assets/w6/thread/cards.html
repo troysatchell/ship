@@ -1,0 +1,248 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<title>PlugForge W6 thread cards</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  /* Treatment: Soft Structuralism — cool silver ground, heavy grotesk display, dark terminal
+     "hardware" inserts in double-bezels, soft diffused shadows. Deliberately not the W4-W5
+     OLED-black/Geist look. One accent (cobalt); green/red are semantic (verified/rejected). */
+  :root{
+    --paper:#F3F5F8; --paper-2:#E8ECF1; --ink:#0B1220; --ink-2:#2E3A4B; --mute:#75819A; --hair:rgba(11,18,32,.09);
+    --accent:#2456F6; --ok:#16A34A; --ok-soft:rgba(22,163,74,.12); --bad:#DC2626;
+    --term:#0C1220; --term-2:#111A2C; --term-bar:#0F1728; --term-ink:#DCE3EE; --term-dim:#8593AA; --term-cmd:#FFFFFF; --term-prompt:#7DA2FF;
+    --shadow:0 40px 90px -30px rgba(11,18,32,.28), 0 14px 34px -14px rgba(11,18,32,.16);
+    --shell:rgba(11,18,32,.055); --ring:rgba(11,18,32,.07);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:#DADFE6;font-family:'Plus Jakarta Sans',system-ui,sans-serif;-webkit-font-smoothing:antialiased;color:var(--ink)}
+  .card{position:relative;width:1200px;height:675px;overflow:hidden;background:var(--paper);margin:28px auto;
+    background-image:radial-gradient(60% 55% at 100% 0%, #FFFFFF 0%, transparent 60%),radial-gradient(45% 40% at 0% 100%, var(--paper-2) 0%, transparent 65%);}
+  .card::after{content:'';position:absolute;inset:0;pointer-events:none;opacity:.028;mix-blend-mode:multiply;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");}
+  .pad{position:absolute;inset:0;padding:56px 64px}
+  .eyebrow{display:inline-flex;align-items:center;gap:10px;border-radius:999px;padding:7px 14px 7px 10px;font-size:11px;font-weight:600;letter-spacing:.22em;text-transform:uppercase;color:var(--ink-2);background:#fff;border:1px solid var(--hair);box-shadow:0 1px 0 rgba(255,255,255,.8) inset}
+  .eyebrow i{width:8px;height:8px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 4px rgba(36,86,246,.14)}
+  h1{font-weight:800;letter-spacing:-.035em;line-height:.98;text-wrap:balance}
+  .h-xl{font-size:74px} .h-lg{font-size:58px} .h-md{font-size:44px}
+  .sub{font-size:19px;line-height:1.45;color:var(--ink-2);font-weight:500;max-width:52ch}
+  .mute{color:var(--mute)}
+  .foot{position:absolute;left:64px;right:64px;bottom:34px;display:flex;justify-content:space-between;align-items:center;font-size:12.5px;color:var(--mute);font-weight:500;letter-spacing:.01em}
+  .foot b{color:var(--ink-2);font-weight:600}
+  /* double-bezel */
+  .shell{background:var(--shell);border:1px solid var(--ring);border-radius:28px;padding:8px;box-shadow:var(--shadow)}
+  .core{border-radius:20px;overflow:hidden;box-shadow:inset 0 1px 1px rgba(255,255,255,.14)}
+  /* terminal */
+  .term{background:var(--term);color:var(--term-ink);font-family:'JetBrains Mono',ui-monospace,monospace;font-size:16.5px;line-height:1.62}
+  .term .bar{height:40px;background:var(--term-bar);display:flex;align-items:center;padding:0 16px;border-bottom:1px solid rgba(255,255,255,.06)}
+  .term .dot{width:11px;height:11px;border-radius:50%;margin-right:8px;background:rgba(255,255,255,.14)}
+  .term .t{flex:1;text-align:center;color:var(--term-dim);font-size:12.5px;font-family:'Plus Jakarta Sans',sans-serif;font-weight:600;letter-spacing:.06em;margin-right:56px}
+  .term .body{padding:20px 24px 24px;white-space:pre-wrap;word-break:normal;overflow-wrap:anywhere}
+  .term .p{color:var(--term-prompt);font-weight:600}.term .cmd{color:var(--term-cmd);font-weight:600}
+  .term .dim{color:var(--term-dim)}
+  .term .ok{color:#4ADE80;font-weight:700;background:rgba(74,222,128,.10);display:block;margin:4px -12px;padding:6px 12px;border-radius:8px;box-shadow:inset 0 0 0 1px rgba(74,222,128,.22)}
+  .term .bad{color:#F87171;font-weight:700}
+  .term .hi{color:#FFFFFF}
+  /* browser frame */
+  .browser{background:#0E1523;}
+  .browser .bar{height:44px;background:#141C2C;display:flex;align-items:center;padding:0 16px;gap:8px;border-bottom:1px solid rgba(255,255,255,.06)}
+  .browser .dot{width:11px;height:11px;border-radius:50%;background:rgba(255,255,255,.14)}
+  .browser .url{flex:1;margin:0 40px 0 14px;height:26px;border-radius:8px;background:rgba(255,255,255,.06);color:#93A0B8;font-size:12.5px;display:flex;align-items:center;padding:0 12px;font-family:'JetBrains Mono',monospace}
+  .browser .view{overflow:hidden;position:relative}
+  .browser img{display:block;width:100%;height:100%;object-fit:cover}
+  /* pills */
+  .pill{display:inline-flex;align-items:center;gap:10px;border-radius:999px;padding:10px 16px;font-weight:700;font-size:15px;background:#fff;border:1px solid var(--hair);box-shadow:0 8px 24px -14px rgba(11,18,32,.3)}
+  .pill.ok{color:var(--ok);background:var(--ok-soft);border-color:rgba(22,163,74,.25)}
+  .pill.bad{color:var(--bad);background:rgba(220,38,38,.09);border-color:rgba(220,38,38,.22)}
+  .num{font-weight:800;letter-spacing:-.04em;line-height:1;font-variant-numeric:tabular-nums}
+  .kicker{font-size:12px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;color:var(--mute)}
+  .mono{font-family:'JetBrains Mono',monospace}
+  /* bento tile */
+  .tile{background:#fff;border:1px solid var(--hair);border-radius:22px;padding:24px 26px;box-shadow:0 20px 50px -30px rgba(11,18,32,.25);display:flex;flex-direction:column;justify-content:space-between}
+</style></head><body>
+
+<!-- 01 HERO — editorial split -->
+<section class="card" id="01-hero">
+  <div class="pad" style="display:grid;grid-template-columns:520px 1fr;gap:44px;align-items:center;padding-right:56px">
+    <div>
+      <div class="eyebrow"><i></i>Week 6 · PlugForge · Ship becomes a platform</div>
+      <h1 class="h-xl" style="margin-top:26px">Five commands.<br>One signed event.<br><span style="color:var(--accent)">307 ms.</span></h1>
+      <p class="sub" style="margin-top:22px">Fresh terminal → <span class="mono" style="font-size:16px">npm install</span> the SDK → <span class="mono" style="font-size:16px">ship login</span> → <span class="mono" style="font-size:16px">ship webhooks tail</span> → <span class="mono" style="font-size:16px">ship docs create</span> → a webhook lands, HMAC-verified client-side.</p>
+    </div>
+    <div class="shell"><div class="core term" style="font-size:15.5px"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="t">ship webhooks tail — 127.0.0.1:3001</span></div><div class="body" data-src="tail"></div></div></div>
+  </div>
+  <div class="foot"><span>Real <b>@ship/cli</b> stdout, Ship <b>main @ cf9b4e4b</b>, 2026-08-16 — rendered, not a photo</span><span>OAuth 2.0 device flow · /api/v1 · signed webhooks · DLQ + replay · CI drill</span></div>
+</section>
+
+<!-- 02 LOGIN — z-axis cascade: terminal + real browser approve -->
+<section class="card" id="02-login">
+  <div class="pad">
+    <div class="eyebrow"><i></i>2 · ship login — RFC 8628 device flow</div>
+    <h1 class="h-md" style="margin-top:18px;max-width:640px">The CLI shows a code. You approve in the browser. It polls to a token.</h1>
+    <p class="sub mute" style="margin-top:12px;font-size:16px">No password ever touches the terminal, and the token carries exactly the scopes it asked for.</p>
+    <p class="mute" style="margin-top:14px;font-size:12.5px;font-weight:500">Left: real stdout. Right: real browser frame of the consent screen, same run.</p>
+  </div>
+  <div class="shell" style="position:absolute;left:52px;bottom:-14px;width:700px;transform:rotate(-1.4deg);transform-origin:bottom left"><div class="core term" style="font-size:14.5px"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="t">ship login</span></div><div class="body" data-src="login"></div></div></div>
+  <div class="shell" style="position:absolute;right:44px;bottom:60px;width:470px;transform:rotate(1.8deg);z-index:2"><div class="core browser"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:5174/oauth-device-verify</span></div><div class="view" style="height:300px"><img src="raw/device-verify.png" alt="Verify your device — real browser frame" style="position:absolute;width:1060px;height:auto;left:50%;top:50%;transform:translate(-50%,-47%)"></div></div></div>
+</section>
+
+<!-- 03 VERIFIED — two terminals -->
+<section class="card" id="03-verified">
+  <div class="pad" style="padding-bottom:0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div>
+        <div class="eyebrow"><i></i>3 + 4 · tail, then create</div>
+        <h1 class="h-md" style="margin-top:16px">A signed delivery, verified where it lands.</h1>
+      </div>
+      <div style="text-align:right;padding-top:6px">
+        <div class="kicker">created → ✓ verified</div>
+        <div class="num" style="font-size:64px;color:var(--ok);margin-top:6px">307<span style="font-size:28px;letter-spacing:0;margin-left:6px;color:var(--ok)">ms</span></div>
+        <div class="mono mute" style="font-size:12.5px;margin-top:6px">16:58:57.983Z → 16:58:58.290Z</div>
+      </div>
+    </div>
+  </div>
+  <div style="position:absolute;left:52px;right:52px;bottom:52px;display:grid;grid-template-columns:1fr 1fr;gap:22px;align-items:end">
+    <div class="shell"><div class="core term" style="font-size:14px"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="t">left — ship webhooks tail</span></div><div class="body" data-src="tail"></div></div></div>
+    <div class="shell"><div class="core term" style="font-size:14px"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="t">right — ship docs create</span></div><div class="body" data-src="create"></div></div></div>
+  </div>
+  <div class="foot"><span>Both panes: verbatim <b>@ship/cli</b> stdout, one run, 2026-08-16.</span><span>Ctrl+C deactivates the subscription on the way out.</span></div>
+</section>
+
+<!-- 04 SIGNATURE — what verified means -->
+<section class="card" id="04-signature">
+  <div class="pad" style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center;padding-bottom:90px">
+    <div>
+      <div class="eyebrow"><i></i>What “verified” means</div>
+      <h1 class="h-md" style="margin-top:18px">Every delivery is signed. The subscriber checks it in one call.</h1>
+      <div class="shell" style="margin-top:26px"><div class="core term" style="font-size:14px"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="t">request headers</span></div><div class="body"><span class="hi">Ship-Signature:</span> <span class="dim">t=</span><span class="hi">&lt;unix seconds&gt;</span><span class="dim">,v1=</span><span class="hi">&lt;hmac-sha256 hex&gt;</span>
+<span class="hi">Idempotency-Key:</span> <span class="dim">&lt;same across retries and replays&gt;</span></div></div></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:14px;padding-top:26px">
+      <div class="tile" style="gap:8px"><div class="kicker">verifyWebhook(headers, rawBody, secret)</div>
+        <div style="font-size:16.5px;line-height:1.5;color:var(--ink-2);font-weight:500">
+          1 · parse <span class="mono">t</span> and <span class="mono">v1</span> from the header<br>
+          2 · reject if <span class="mono">t</span> is outside a 300 s window<br>
+          3 · recompute HMAC-SHA256 over <span class="mono">${t}.${rawBody}</span><br>
+          4 · <span class="mono">timingSafeEqual</span> against <span class="mono">v1</span>
+        </div></div>
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+        <span class="pill ok">✓ verified &nbsp;<span style="font-weight:500;opacity:.8">signature + timestamp good</span></span>
+        <span class="pill bad">✗ rejected &nbsp;<span style="font-weight:500;opacity:.8">one flipped byte</span></span>
+      </div>
+      <p class="mute" style="font-size:14px;line-height:1.5;margin-top:4px">Same function the CI drill uses to assert tamper-rejection on every push. From <span class="mono">@ship/sdk</span> — 4.97 kB gzipped, zero runtime dependencies.</p>
+    </div>
+  </div>
+  <div class="foot"><span>Header shape and steps from <b>sdk/src/verifyWebhook.ts</b>; the drill's tamper stage is <b>scripts/drill/ttfe.ts</b>.</span><span></span></div>
+</section>
+
+<!-- 05 PORTAL — real screenshot (filled in by render step) -->
+<section class="card" id="05-portal">
+  <div class="pad" style="padding-bottom:0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:30px">
+      <div><div class="eyebrow"><i></i>Developer portal · Deliveries &amp; DLQ</div>
+        <h1 class="h-md" style="margin-top:16px;max-width:760px">Every attempt is a row. Six failures park it in the DLQ. Replay is a real round-trip.</h1></div>
+    </div>
+  </div>
+  <div class="shell" style="position:absolute;left:52px;right:52px;bottom:-140px"><div class="core browser"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:5174/developer/webhooks</span></div><div class="view" style="height:520px"><img src="raw/portal-replay.png" alt="Developer portal — delivery log with the replayed row" style="position:absolute;left:0;top:0;width:1440px;height:900px;object-fit:fill;transform-origin:0 0;transform:translate(-262px,-52px) scale(0.93)"></div></div></div>
+  <!-- toast callout: a crop of the same screenshot's bottom-right, scaled up so it reads -->
+  <div style="position:absolute;right:120px;top:118px;width:200px;height:31px;border-radius:10px;overflow:hidden;transform:scale(1.7) rotate(-2deg);transform-origin:right top;box-shadow:0 30px 60px -18px rgba(11,18,32,.5), 0 0 0 1px rgba(255,255,255,.5);background:url('raw/portal-replay.png') no-repeat;background-size:1440px 900px;background-position:-1222px -787px;z-index:4"></div>
+  <div style="position:absolute;right:120px;top:190px;font-size:12.5px;color:var(--ink-2);font-weight:600;text-align:right;letter-spacing:.01em;z-index:4">↑ same frame · attempt 7 below is the replay, “Replayed from” filled</div>
+</section>
+
+<!-- 06 AUDIT — real screenshot -->
+<section class="card" id="06-audit">
+  <div class="pad" style="padding-bottom:0">
+    <div class="eyebrow"><i></i>Developer portal · Audit</div>
+    <h1 class="h-md" style="margin-top:16px;max-width:820px">Every <span class="mono" style="font-size:38px">/api/v1</span> call writes an audit row — app, user, scope, latency, request id.</h1>
+  </div>
+  <div class="shell" style="position:absolute;left:52px;right:52px;bottom:-140px"><div class="core browser"><div class="bar"><span class="dot"></span><span class="dot"></span><span class="dot"></span><span class="url">localhost:5174/developer/audit</span></div><div class="view" style="height:520px"><img src="raw/portal-audit.png" alt="Developer portal — public API audit log" style="position:absolute;left:0;top:0;width:1920px;height:1000px;object-fit:fill;transform-origin:0 0;transform:translate(-190px,-27px) scale(0.665)"></div></div></div>
+  <div class="foot" style="z-index:3"><span></span><span></span></div>
+</section>
+
+<!-- 07 CI — bento numbers from run 31955603688 -->
+<section class="card" id="07-ci">
+  <div class="pad" style="padding-bottom:0">
+    <div style="display:flex;justify-content:space-between;align-items:flex-start">
+      <div><div class="eyebrow"><i></i>CI · drill · TTFE (PF-603) — every push</div>
+        <h1 class="h-md" style="margin-top:16px;max-width:700px">The demo is the regression test.</h1></div>
+      <div class="mono mute" style="font-size:12.5px;text-align:right;padding-top:8px">GitHub Actions run 31955603688<br>jobs 95187181592 · 95187329714</div>
+    </div>
+  </div>
+  <div style="position:absolute;left:52px;right:52px;bottom:64px;display:grid;grid-template-columns:1.25fr 1fr 1fr 1.1fr;grid-template-rows:200px 172px;gap:14px">
+    <div class="tile" style="grid-row:span 2;background:var(--ink);color:#fff;border-color:transparent">
+      <div class="kicker" style="color:#93A0B8">install → first verified event</div>
+      <div><div class="num" style="font-size:96px">5.0<span style="font-size:34px;margin-left:8px;letter-spacing:0">s</span></div>
+      <div style="color:#93A0B8;font-size:14px;margin-top:8px;font-weight:500">budget 60 s · clean <span class="mono">npm install</span> of the SDK tarball, device login, subscribe, create, wait, verify</div></div>
+    </div>
+    <div class="tile"><div class="kicker">tamper_reject</div><div><div class="num" style="font-size:44px;color:var(--ok)">✓ rejected</div><div class="mute" style="font-size:13.5px;margin-top:6px;font-weight:500">one flipped byte → <span class="mono">verifyWebhook()</span> false</div></div></div>
+    <div class="tile"><div class="kicker">first-attempt delivery P95</div><div><div class="num" style="font-size:52px">975<span style="font-size:22px;letter-spacing:0;margin-left:4px">ms</span></div><div class="mute" style="font-size:13.5px;margin-top:6px;font-weight:500">over 20 deliveries · target &lt;&nbsp;2000&nbsp;ms</div></div></div>
+    <div class="tile"><div class="kicker">against the container image</div><div><div class="num" style="font-size:52px">4.9<span style="font-size:22px;letter-spacing:0;margin-left:4px">s</span></div><div class="mute" style="font-size:13.5px;margin-top:6px;font-weight:500"><span class="mono">drill · TTFE image-mode</span> — same drill, prod image, P95 974 ms</div></div></div>
+    <div class="shell" style="grid-column:2 / span 3;padding:6px"><div class="core term" style="font-size:12.5px;line-height:1.5;height:100%"><div class="body" style="padding:12px 16px" data-src="ci"></div></div></div>
+  </div>
+  <div class="foot"><span>Numbers copied from the green run's log (<b>drill · TTFE (PF-603)</b>, <b>drill · TTFE image-mode (TRO-621)</b>), 2026-08-16.</span><span>thresholds committed in <b>scripts/drill/ttfe.config.json</b></span></div>
+</section>
+
+<!-- 08 CLOSE -->
+<section class="card" id="08-close">
+  <div class="pad" style="display:grid;grid-template-columns:1fr 1fr;gap:40px;align-items:center">
+    <div>
+      <div class="eyebrow"><i></i>Ship · open source</div>
+      <h1 class="h-lg" style="margin-top:22px">Platform, not a feature.</h1>
+      <p class="sub" style="margin-top:18px">A third party can build against Ship the way they'd build against Stripe or GitHub — and CI proves the install-to-first-event path stays fast, signed, and replayable on every push.</p>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div class="tile"><div class="kicker">@ship/sdk</div><div><div class="num" style="font-size:46px">4.97<span style="font-size:20px;letter-spacing:0;margin-left:4px">kB</span></div><div class="mute" style="font-size:13px;margin-top:6px;font-weight:500">gzipped · 0 runtime deps · size gate in CI</div></div></div>
+      <div class="tile"><div class="kicker">retry schedule</div><div><div class="num" style="font-size:30px;line-height:1.15">1s · 4s · 16s<br>1m · 5m</div><div class="mute" style="font-size:13px;margin-top:6px;font-weight:500">+ jitter · 6 attempts · 4xx → DLQ immediately</div></div></div>
+      <div class="tile"><div class="kicker">auth</div><div><div class="num" style="font-size:26px;line-height:1.15;white-space:nowrap">device · PKCE<br>client credentials</div><div class="mute" style="font-size:13px;margin-top:6px;font-weight:500">rotating refresh tokens, family revocation on reuse</div></div></div>
+      <div class="tile"><div class="kicker">surface</div><div><div class="num" style="font-size:30px;line-height:1.15">/api/v1 +<br>openapi.json</div><div class="mute" style="font-size:13px;margin-top:6px;font-weight:500">CI fitness test: no unregistered route, no missing scope</div></div></div>
+    </div>
+  </div>
+  <div class="foot"><span>Fork of the U.S. Treasury's open-source <b>Ship</b> · built with Claude Code · @GauntletAI week 6</span><span></span></div>
+</section>
+
+<script type="text/plain" id="src-tail">
+$ ship webhooks tail
+Listening on http://127.0.0.1:64117/ for "document.created" deliveries.
+Registered subscription 58f019ef-3449-45e8-bb68-c7529f6aa487 (target_url: http://127.0.0.1:64117/).
+Waiting for deliveries. Press Ctrl+C to stop and clean up.
+✓ verified  2026-08-16T16:58:58.290Z  document.created
+Cleaning up...
+</script>
+<script type="text/plain" id="src-login">
+$ ship login
+To authorize this CLI, open: http://localhost:5174/oauth-device-verify
+And enter the code: MSP3-QN23
+Waiting for authorization...
+Logged in as Dev User <dev@ship.local> via app "PlugForge Demo CLI" (ship_app_e1b713b10126e5d5ac0988710ae35385) — scopes: documents:read, documents:write, webhooks:manage.
+Credentials saved to /Users/troy/.ship/credentials.json.
+</script>
+<script type="text/plain" id="src-create">
+$ ship docs create --title "PlugForge demo"
+Created document.
+id: e8495519-39e9-40d3-a7af-6ca4f114113b
+title: PlugForge demo
+document_type: wiki
+created_at: 2026-08-16T16:58:57.983Z
+updated_at: 2026-08-16T16:58:57.983Z
+properties: {}
+</script>
+<script type="text/plain" id="src-ci">
+  install_sdk 3584ms · device_login 70ms · webhook_create 18ms · document_create 13ms · wait_for_delivery 301ms · verify_webhook 0ms · tamper_reject 1ms · delivery_p95 1052ms
+  total: 5039ms / 60000ms budget
+  delivery_p95_ms: 975ms over 20 deliveries (target < 2000ms)
+verdict: pass
+first_delivery_bound: wait_for_delivery 301ms <= 2000ms — ok
+</script>
+<script>
+  const esc = (s) => s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const render = (txt) => txt.replace(/^\n|\n$/g,'').split('\n').map((l) => {
+    if (l.startsWith('$ ')) return `<span class="p">$</span> <span class="cmd">${esc(l.slice(2))}</span>`;
+    if (l.startsWith('✓ verified')) return `<span class="ok">${esc(l)}</span>`;
+    if (l.startsWith('✗ rejected')) return `<span class="bad">${esc(l)}</span>`;
+    if (/^verdict: pass/.test(l)) return `<span class="ok" style="display:inline-block;margin:2px 0">${esc(l)}</span>`;
+    return `<span class="dim">${esc(l)}</span>`;
+  }).join('\n');
+  for (const el of document.querySelectorAll('[data-src]')) el.innerHTML = render(document.getElementById('src-' + el.dataset.src).textContent);
+  document.fonts.ready.then(() => { document.body.dataset.ready = '1'; });
+</script>
+</body></html>

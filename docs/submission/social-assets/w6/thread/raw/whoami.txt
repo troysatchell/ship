@@ -1,0 +1,2 @@
+$ ship whoami
+Dev User <dev@ship.local> via app "PlugForge Demo CLI" (ship_app_e1b713b10126e5d5ac0988710ae35385) — scopes: documents:read, documents:write, webhooks:manage
