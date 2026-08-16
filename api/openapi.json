@@ -81,6 +81,56 @@
           "error"
         ]
       },
+      "InternalErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "Always false on an error response"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "VALIDATION_ERROR",
+                  "NOT_FOUND",
+                  "UNAUTHORIZED",
+                  "FORBIDDEN",
+                  "INTERNAL_ERROR",
+                  "INVALID_CREDENTIALS",
+                  "SESSION_EXPIRED",
+                  "ALREADY_EXISTS"
+                ],
+                "description": "Machine-readable error code"
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable error message"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                },
+                "description": "Additional context, shape varies by error — e.g. a validation error carries zod's flatten() output ({formErrors, fieldErrors})."
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "error"
+        ]
+      },
       "BelongsToEntry": {
         "type": "object",
         "properties": {
@@ -12552,7 +12602,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12562,7 +12612,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12591,7 +12641,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12635,7 +12685,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12645,7 +12695,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12687,7 +12737,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12697,7 +12747,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12707,7 +12757,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12751,7 +12801,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12761,7 +12811,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12771,7 +12821,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12781,7 +12831,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
