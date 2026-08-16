@@ -6,6 +6,48 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-614 — `OrgChartPage.test.tsx`'s "renders each person..." race, confirmed on 2 unrelated CI runs
+
+**What was broken.** `web/src/pages/OrgChartPage.tsx:229-230` sets its default-expanded tree state
+in a *second*, separate `useEffect` that only fires after the fetch-driven first effect has already
+rendered the tree with `expandedIds` empty. `OrgChartPage.test.tsx`'s `"renders each person..."`
+test (line 125) did `const tree = await screen.findByRole('tree', ...)` — correctly async, waits
+for the tree container — then immediately did a **synchronous** `within(tree).getByRole('treeitem',
+{ name: /Grace Hopper/ })`. Grace is a level-2 (nested) child, only present in the flattened rows
+after the second effect auto-expands the tree. `findByRole('tree', ...)` can resolve on the very
+first, collapsed render — before React flushes the second effect — so the synchronous query for
+Grace's row raced it. Confirmed as a real, pre-existing, CI-timing-sensitive defect (not local
+machine contention): two completely unrelated PRs tonight (TRO-589, oauth-only; TRO-488,
+terraform-only — neither touches `web/`) both hit this exact failure on isolated GitHub Actions
+runners, while passing 100% of the time locally. Root-caused via the failing CI run's own
+downloaded `web-tests.json` artifact and captured DOM snapshot (only Ada/Bob rendered, both
+level-1; Grace's `<li>` entirely absent) — not guessed.
+
+**What changed.** `web/src/pages/OrgChartPage.test.tsx` — replaced the synchronous `getByRole` for
+Grace with `await within(tree).findByRole('treeitem', { name: /Grace Hopper/ })`, moved before the
+`ada`/`bob` lookups. Grace is the deepest node under test, so awaiting her presence proves the
+auto-expand effect has already flushed before the rest of the test's synchronous assertions run.
+No product code changed — `OrgChartPage.tsx` itself is untouched; the two-effect split may still be
+worth simplifying later, but the test fix alone resolves the flake.
+
+**Proof.** Can't reproduce GitHub Actions' exact timing locally, so repetition is the best local
+proxy: `cd web && npx vitest run src/pages/OrgChartPage.test.tsx` run **5 times consecutively**,
+5/5 clean (all 5 tests in the file, including the previously-racing one). Full `pnpm --filter
+@ship/web test` also green. **Gate exception, disclosed:** the `regression-test` check looks for a
+newly-added test case; this ticket hardens an *existing* test's timing rather than adding coverage,
+so no new `it(...)` block was added — same class of accepted exception as this project's
+terraform-only tickets (proof is repetition-based, not a new assertion count).
+
+**How to run it.**
+```bash
+cd web && npx vitest run src/pages/OrgChartPage.test.tsx
+```
+
+**Roll back.** Revert this commit — reverts the test to its prior synchronous-query form, which is
+correct but timing-fragile under GitHub Actions specifically (not observed to fail locally).
+
+---
+
 ## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
 
 **What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
