@@ -1,9 +1,19 @@
 # PlugForge Demo Script — FINAL (PF-908 / TRO-444), 3–5 minutes
 
-*Grounded against `main` @ `b68da413` (2026-08-16). Every command, flag, output line, button label,
-and CI job name below was read from source or observed by running it in this worktree — the
+*Grounded against `main` @ `6b60377b` (2026-08-16, re-verified after the W6 gap-closure wave — PR
+#300 — landed). Every command, flag, output line, button label, and CI job name below was read from
+source at that commit or observed by running it (Act 1 in a worktree, Act 3 in CI) — the
 "Provenance" section at the end says which is which. This is a snapshot: re-check `git log main`
-before recording.*
+before recording. `pnpm --filter @ship/cli test` includes a drift guard
+(`demoScript.drift.test.ts`) that fails if the CLI, the drill, CI, or the portal stops printing any line Acts 1–3 quote.*
+
+**What changed in this revision (vs. the `b68da413` version):** Act 3's expected output now shows
+the drill as it actually prints on `main` today — two extra stages (`tamper_reject`,
+`delivery_p95`), the `delivery_p95_ms` and `first_delivery_bound` lines (TRO-615), and the
+`[mode]` line plus the second CI job `drill · TTFE image-mode (TRO-621)` that runs the same drill
+against the container image. The numbers are copied from a real green CI run, not illustrative.
+Act 2 gains one optional beat on the new **Audit** page (`/developer/audit`, TRO-616). Acts 1
+and 2 otherwise re-verified unchanged.
 
 **Who does what.** This ticket is a 🔔 human checkpoint. Troy records the video and posts. The
 agent side (this script, the shot list, the pre-stage recipes, the real captured terminal frame at
@@ -17,7 +27,8 @@ agent side (this script, the shot list, the pre-stage recipes, the real captured
 > Open a fresh terminal → install `@ship/sdk` → `ship login` → `ship docs create` →
 > `ship webhooks tail` prints a **verified, signed** delivery in real time. Then switch to the
 > developer portal and replay one delivery from the DLQ. Then show CI proving the whole
-> install-to-first-event path stays under 60 s.
+> install-to-first-event path stays under 60 s — and that a tampered signature is rejected and
+> first-attempt delivery P95 stays under 2 s — on every push.
 
 Three acts, three surfaces: **terminal (Act 1) → portal (Act 2) → CI (Act 3)**. Target 4:00, hard
 ceiling 5:00. Act 1 is the demo; Acts 2 and 3 are the "and it's operable / and it's guarded"
@@ -257,6 +268,18 @@ off-screen listener has the real secret it prints its own ✓ line — a nice se
 **3:05–3:15 Subscriptions tab** (optional): the table with the CLI's now-inactive subscription
 greyed out (`opacity-50`) is a quiet proof of the tail's cleanup.
 
+**Alternative 3:05–3:15 beat — Audit page** (optional, pick this OR the Subscriptions tab, not
+both): sidebar entry **Audit** → `$WEB_URL/developer/audit`. Header **Audit**, section
+**Public API audit log** — *"One row per `/api/v1` call, newest first."* Columns: Time · Method · Route ·
+Status · Latency · App · User · Scope · Request ID; a **Filter by app** select (lists app *names*,
+default **All apps**; the App column itself prints the `client_id`, e.g. `ship_cli_demo`). Every
+`/api/v1` call Act 1 just made (`GET /me`, `POST /webhooks`, `POST /documents`, …) is a row.
+SAY: *"Every call through the platform layer writes an audit row — app, user, scope, latency.
+This is how we later prove our own AI agent, rewired onto this same path, is no longer a
+privileged insider."* The page is admin/owner-gated — fine for `dev@ship.local`, who the seed
+makes both super-admin and workspace admin. (Empty state, if you somehow have no calls:
+*"No API calls recorded yet."*)
+
 **Fallbacks, Act 2.**
 - No dead row → P4 wasn't run against a subscription in *this* workspace (the list is
   workspace-scoped through `oauth_apps`).
@@ -271,40 +294,65 @@ greyed out (`opacity-50`) is a quiet proof of the tail's cleanup.
 
 Open the latest green run on `main` → job **`drill · TTFE (PF-603)`** (`.github/workflows/ci.yml`,
 job id `drill-ttfe`; a fresh `postgres:15-alpine` service, `pnpm drill ttfe`). Expand the step
-**Run the TTFE drill**. What it prints (shape from `scripts/drill/thresholds.ts`
-`formatDrillEvaluation`; numbers are from a run, not fixed):
+**Run the TTFE drill**. This is what it printed on the green run for the W6 gap-wave tip (run
+`31955603688`, job `95187181592`, commit `2be3d1ef` = the PR #300 tip merged as `5eab5069`;
+`scripts/drill/` and the CI job are byte-identical at `6b60377b`) — copied verbatim, only the
+port and timings will differ on your run:
 
 ```
 === TRO-455 / PF-603: TTFE drill ===
+[mode] api: tsx child
 
 [setup] reusing ambient DATABASE_URL (CI service container / .factory-env) — no Docker touched
-[setup] api ready at http://127.0.0.1:NNNNN (…ms — untimed, not part of totalBudgetMs)
+[setup] api ready at http://127.0.0.1:33637 (api: tsx child; 6363ms — untimed, not part of totalBudgetMs)
 
-  install_sdk: 4213ms
-  device_login: 812ms
-  webhook_create: 96ms
-  document_create: 71ms
-  wait_for_delivery: 240ms
-  verify_webhook: 1ms
-  total: 5433ms / 60000ms budget
+[delivery_p95] 20 deliveries; 20 correlated by payload data.id, 0 by arrival order
+[mode] api: tsx child
+  install_sdk: 3584ms
+  device_login: 70ms
+  webhook_create: 18ms
+  document_create: 13ms
+  wait_for_delivery: 301ms
+  verify_webhook: 0ms
+  tamper_reject: 1ms
+  delivery_p95: 1052ms
+  total: 5039ms / 60000ms budget
+  delivery_p95_ms: 975ms over 20 deliveries (target < 2000ms)
 verdict: pass
+first_delivery_bound: wait_for_delivery 301ms <= 2000ms — ok
 ```
 SAY: *"This job re-runs the exact five-line story on every push, from a clean `npm install` of the
 SDK tarball through a real signed delivery — and fails the build if time-to-first-event goes over
-60 s or any stage over its own budget (`scripts/drill/ttfe.config.json`, committed). It's the
-demo, as a regression gate."* Optionally point at the over-budget form: a stage line gains
-` OVER BUDGET (> 15000ms)` and the last line reads `verdict: fail`.
+60 s or any stage over its own budget (`scripts/drill/ttfe.config.json`, committed). Then it keeps
+going: it flips one byte of the signed body and asserts `verifyWebhook()` rejects it, and it
+bursts twenty documents and asserts first-attempt delivery latency P95 stays under two seconds —
+the brief's own graded rows. It's the demo, as a regression gate."* Optionally point at the
+over-budget form: a stage line gains ` OVER BUDGET (> 15000ms)`, the P95 line gains
+` OVER BUDGET (>= 2000ms)`, and the verdict reads `verdict: fail`.
+
+**Second job, 10-second beat (optional but cheap):** same run, job
+**`drill · TTFE image-mode (TRO-621)`** (job id `drill-ttfe-image`, step
+**Run the TTFE drill against the container image**). Same drill, but the API is the container image
+(`[mode] api: image ship-api:ci`), Postgres is a testcontainers `postgres:15` with `ssl=on`. From
+the same run (job `95187329714`): `install_sdk: 3215ms · device_login: 47ms · webhook_create: 10ms
+· document_create: 10ms · wait_for_delivery: 592ms · verify_webhook: 0ms · tamper_reject: 0ms ·
+delivery_p95: 1027ms · total: 4901ms / 60000ms budget · delivery_p95_ms: 974ms over 20
+deliveries (target < 2000ms) · verdict: pass · first_delivery_bound: wait_for_delivery 592ms <=
+2000ms — ok`. SAY: *"…and once more against the actual container we ship, not a dev process."*
 
 **Fallback, Act 3.** If GitHub is slow/offline: run it locally, `pnpm drill ttfe` (with
-`DATABASE_URL` set to a scratch DB it can migrate; ~30 s including setup), and show the same table
-in the terminal.
+`DATABASE_URL` set to a scratch DB it can migrate; ~15–30 s including setup — CI's setup was
+6.4 s + a 5.0 s drill), and show the same table in the terminal. It prints the identical block,
+`[mode] api: tsx child`.
 
 ---
 
 ## Close (4:00 → 4:20)
 
 *"Five commands, one screenshot, one CI job. Ship as a platform: OAuth device flow, versioned API,
-signed webhooks with a DLQ you can replay from — and a drill in CI so it stays that way."*
+signed webhooks with a DLQ you can replay from, an audit row for every call — and a drill in CI
+that re-runs the whole thing, tamper check and latency P95 included, on every push, so it stays
+that way."*
 
 ---
 
@@ -321,7 +369,8 @@ signed webhooks with a DLQ you can replay from — and a drill in CI so it stays
 | 7 | 2:05 | Portal → Delivery log with the Success row | Status badge |
 | 8 | 2:25 | Filter = Dead (DLQ), the seeded row | Attempt 6 / 500 |
 | 9 | 2:45 | Click Replay → toast "Replay succeeded" + new Success row, "Replayed from" filled | both rows |
-| 10 | 3:20 | Actions run → `drill · TTFE (PF-603)` job, per-stage table + `verdict: pass` | total line |
+| 10 | 3:20 | Actions run → `drill · TTFE (PF-603)` job, per-stage table through `first_delivery_bound … — ok` | `total:` line, `tamper_reject:` line, `delivery_p95_ms:` line, `verdict: pass` |
+| 11 | 3:50 | (optional) `drill · TTFE image-mode (TRO-621)` job, `[mode] api: image ship-api:ci` + `verdict: pass` | the `[mode]` line |
 
 Still image for the post: `docs/submission/social-assets/w6/webhooks-tail-verified.png` (frame 5,
 left pane). Prefer a real screenshot from your own take if the font is legible; otherwise the PNG
@@ -344,12 +393,30 @@ is a faithful render of real output (see Provenance).
 - **`webhooks-tail-verified.png` is a rendered image of that captured text** (dark HTML page,
   monospace, screenshotted with the repo's Playwright), **not a photograph or a real terminal
   screenshot.** The lines are real; the window chrome is not.
-- **Derived (read from source, not run in this session):** portal labels/testids
-  (`DeveloperPortal.tsx`), the CI job name and step (`ci.yml`), the drill table shape
-  (`thresholds.ts`) — the stage millisecond numbers in Act 3 are illustrative. The P4 SQL is the
+- **Observed (CI, 2026-08-16):** the whole of Act 3's quoted output — both drill blocks — is
+  copied verbatim from GitHub Actions run `31955603688` (jobs `95187181592` `drill · TTFE
+  (PF-603)` and `95187329714` `drill · TTFE image-mode (TRO-621)`, both `success`) on commit
+  `2be3d1ef`, the PR #300 tip that merged to `main` as `5eab5069`. `git diff 2be3d1ef 6b60377b --
+  scripts/drill .github/workflows/ci.yml` touches only an unrelated CodeQL `config-file` line
+  (TRO-590), so the drill this script quotes is the drill on `main` today. Read via `gh run view
+  --job <id> --log`; only the timestamps/job-name prefix were stripped. Note that `main`'s own
+  runs after `5eab5069` were mostly `cancelled` by newer pushes (concurrency group), so "latest
+  green run on `main`" may resolve to an older commit than the tip when you open Actions —
+  pick any green run at or after `5eab5069`, or a green PR run.
+- **Derived (read from source at `6b60377b`, not run in this session):** portal labels/testids
+  (`DeveloperPortal.tsx`, `DeveloperAudit.tsx`, `DeveloperSidebar.tsx`), the CI job names/steps
+  (`ci.yml`), the drill table shape (`thresholds.ts`, `ttfe.ts`), the audit page's admin/owner
+  gate (`resources/audit.ts` header) and dev@ship.local's roles (`seed.ts`). The P4 SQL is the
   e2e spec's insert with `generate_series` in place of its loop; not executed here. The
   `npm link` route in P1 was not tested. The 266 ms create→verified gap is the difference between
-  the two ISO timestamps in the transcript.
+  the two ISO timestamps in the transcript. The Act 2 audit-page beat has not been walked in a
+  browser for this revision — its labels are from source and its unit test
+  (`DeveloperAudit.test.tsx`), not from a screenshot.
+- **Not part of the demo:** the Render deployment (`ship-rr6m.onrender.com`). Its `/health`
+  answered 200 and `/api/v1/openapi.json` served 21 paths when checked for this revision, but
+  which commit it runs was not verified — auto-deploy is broken (TRO-361) and a manual deploy of
+  `main` was still pending in `memory-bank/activeContext.md`. Everything above runs locally; do
+  not point the CLI at Render on camera unless someone has redeployed and re-checked first.
 
 ---
 

@@ -26,6 +26,13 @@ const captured = read('docs/submission/social-assets/w6/webhooks-tail-verified.t
 const loginSrc = read('integrations/cli/src/commands/login.ts');
 const tailSrc = read('integrations/cli/src/commands/webhooksTail.ts');
 const docsSrc = read('integrations/cli/src/commands/docs.ts');
+// Act 2 (portal) / Act 3 (CI drill) sources — added when the script was
+// re-grounded on 6b60377b after TRO-615/616/621 changed what those surfaces
+// print. Same guard, more surfaces.
+const drillTtfeSrc = read('scripts/drill/ttfe.ts');
+const drillThresholdsSrc = read('scripts/drill/thresholds.ts');
+const ciYml = read('.github/workflows/ci.yml');
+const auditPageSrc = read('web/src/pages/DeveloperAudit.tsx');
 
 /** Literal user-visible strings the script quotes, each paired with the
  *  source file that must still contain it. */
@@ -39,6 +46,20 @@ const QUOTED: ReadonlyArray<{ line: string; source: string; sourceName: string }
   { line: '✓ verified', source: tailSrc, sourceName: 'webhooksTail.ts' },
   { line: '✗ rejected', source: tailSrc, sourceName: 'webhooksTail.ts' },
   { line: 'Created document.', source: docsSrc, sourceName: 'docs.ts' },
+  // Act 3 — the drill's own header, the two TRO-615 stages/lines, the verdict.
+  { line: '=== TRO-455 / PF-603: TTFE drill ===', source: drillTtfeSrc, sourceName: 'ttfe.ts' },
+  { line: 'tamper_reject', source: drillTtfeSrc, sourceName: 'ttfe.ts' },
+  { line: 'first_delivery_bound: wait_for_delivery ', source: drillTtfeSrc, sourceName: 'ttfe.ts' },
+  { line: 'delivery_p95_ms: ', source: drillThresholdsSrc, sourceName: 'thresholds.ts' },
+  { line: 'ms budget', source: drillThresholdsSrc, sourceName: 'thresholds.ts' },
+  { line: 'verdict: ', source: drillThresholdsSrc, sourceName: 'thresholds.ts' },
+  // Act 3 — the two CI job display names the viewer is told to click.
+  { line: 'drill · TTFE (PF-603)', source: ciYml, sourceName: 'ci.yml' },
+  { line: 'drill · TTFE image-mode (TRO-621)', source: ciYml, sourceName: 'ci.yml' },
+  { line: 'Run the TTFE drill against the container image', source: ciYml, sourceName: 'ci.yml' },
+  // Act 2 — the optional Audit-page beat.
+  { line: 'Public API audit log', source: auditPageSrc, sourceName: 'DeveloperAudit.tsx' },
+  { line: 'No API calls recorded yet.', source: auditPageSrc, sourceName: 'DeveloperAudit.tsx' },
 ];
 
 describe('PLUGFORGE-DEMO-SCRIPT.md quotes real CLI output (TRO-444 drift guard)', () => {
