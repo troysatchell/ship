@@ -696,6 +696,23 @@ that pins every CLI output line the script quotes to the command source that pri
 the captured frame matches `formatDeliveryLine()`'s exact shape, and asserts the stale W5 claims
 are gone (red against the pre-rewrite script — it contained "PF-600 is failing CI"; green now).
 
+**Addendum (2026-08-16, re-grounded on `6b60377b` after PR #300 landed).** The script's Act 3 had
+gone stale the moment TRO-615/TRO-621 merged in the same convoy: the drill now prints two more
+stages (`tamper_reject`, `delivery_p95`), a `delivery_p95_ms … (target < 2000ms)` line, a
+`first_delivery_bound … — ok` line and a `[mode] api: …` line, and CI has a second job
+`drill · TTFE image-mode (TRO-621)`. Act 3 now quotes both jobs' output verbatim from a real green
+run (GitHub Actions run `31955603688`, jobs `95187181592`/`95187329714`, commit `2be3d1ef` = the
+PR #300 tip; `scripts/drill` and the drill CI jobs are unchanged between that commit and
+`6b60377b`) instead of illustrative numbers. Act 2 gains an optional beat on the TRO-616 Audit page
+(`/developer/audit`), labels from `web/src/pages/DeveloperAudit.tsx`. Provenance section updated
+accordingly, and notes that the Render deployment's running commit was not verified (auto-deploy
+broken, TRO-361) — the demo is local. `demoScript.drift.test.ts` extended from 9 to 20 pinned
+strings (drill header/stages from `ttfe.ts`/`thresholds.ts`, both CI job display names + the
+image-mode step from `ci.yml`, two Audit-page strings) — it went red on the first draft of this
+revision (three quoted phrases were line-wrapped in the markdown) and is green after unwrapping
+them, so the guard demonstrably bites. Verify: `pnpm --filter @ship/cli exec vitest run
+src/__tests__/demoScript.drift.test.ts` (22 passed).
+
 **Why.** PF-908 is a human checkpoint (Troy records and posts); the agent-side halves — accurate
 script, real screenshot, post text — were stale or missing.
 
