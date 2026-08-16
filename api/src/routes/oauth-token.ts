@@ -69,13 +69,24 @@ function asString(value: unknown): string | undefined {
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function sendTokenError(res: Response, status: number, error: TokenErrorCode, description: string): void {
-  res.status(status).json({ error, error_description: description });
+/** `details` (TRO-598) is additive and optional — every existing call site
+ *  that never had a machine-readable reason keeps sending the plain RFC
+ *  6749 §5.2 `{ error, error_description }` shape unchanged. */
+function sendTokenError(
+  res: Response,
+  status: number,
+  error: TokenErrorCode,
+  description: string,
+  details?: { reason: string }
+): void {
+  const body: Record<string, unknown> = { error, error_description: description };
+  if (details) body.error_details = details;
+  res.status(status).json(body);
 }
 
 function sendTokenResult(res: Response, result: TokenGrantResult): void {
   if (!result.ok) {
-    sendTokenError(res, result.status, result.error, result.errorDescription);
+    sendTokenError(res, result.status, result.error, result.errorDescription, result.errorDetails);
     return;
   }
 
