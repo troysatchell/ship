@@ -257,7 +257,16 @@ echo "  Agent: http://localhost:$AGENT_PORT"
 echo ""
 
 cd "$ROOT_DIR"
-PORT=$API_PORT pnpm --parallel --filter '!@ship/agent' --recursive run dev &
+# Only the app trio (api, web, shared) belongs in this process group. The Week-6
+# workspace packages (@ship/sdk, @ship/cli, @ship/browser-demo, @ship/slack-integration)
+# also define `dev` scripts, and `--recursive` used to start ALL of them — the browser
+# demo's bare `vite` then raced @ship/web for port 5173 and whichever lost died with
+# EADDRINUSE ("Port 5173 is already in use" → web dev: Failed), observed 2026-08-16.
+# Those packages have their own documented run commands (their READMEs); `pnpm dev`
+# is the Ship app.
+PORT=$API_PORT pnpm --parallel --recursive \
+  --filter '!@ship/agent' --filter '!@ship/sdk' --filter '!@ship/cli' \
+  --filter '!@ship/browser-demo' --filter '!@ship/slack-integration' run dev &
 APP_PID=$!
 PORT=$AGENT_PORT pnpm --filter @ship/agent run dev &
 AGENT_PID=$!
