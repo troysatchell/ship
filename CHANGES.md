@@ -48,70 +48,6 @@ correct but timing-fragile under GitHub Actions specifically (not observed to fa
 
 ---
 
-## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
-
-**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
-keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
-Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
-the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
-`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
-(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
-combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
-composite index has to match that whole shape, not just the two cursor columns. Read
-`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
-`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
-'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
-`document_type = 'sprint'` combined with `workspace_id`.
-Added migration `052_documents_workspace_type_created_at_index.sql`:
-`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
-created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
-endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
-every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
-
-**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
-35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
-way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
-large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
-sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
-afterward) to get a plan that actually distinguishes the two states. Before the index:
-- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
-- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
-- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
-
-After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
-re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
-an ad hoc index, produces the win):
-- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
-- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
-  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
-- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
-
-Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
-stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
-scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
-index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
-re-sorts every not-yet-returned row of that type in the workspace.
-
-**How to run it.**
-```bash
-FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
-```
-To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
-large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
-one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
-to show the effect), then run
-`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
-'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
-worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
-Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
-with no `Sort` node.
-
-**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
-schema object with no dependents (nothing else references it by name), so dropping it is a full,
-clean revert. No data was changed by this migration; only the index needs removing.
-
----
-
 ## TRO-618 — `@ship/sdk`'s `IssuePriority` lacked `'none'` — added it, plus runtime enum arrays and an enum-member parity test
 
 **What was broken.** PR #276 (TRO-501) widened `shared/src/types/document.ts`'s `IssuePriority`
@@ -345,6 +281,129 @@ AGENT_PLATFORM_MODE=sdk SHIP_API_BASE_URL=http://localhost:$API_PORT SHIP_API_TO
 
 **Rollback.** Revert the PR. Sdk mode goes back to fail-closed synthesized fields (0 documents in
 on-demand context) and the docs go back to "not measured".
+
+---
+
+## TRO-619 — Epic write-ups E5 + E7 added, E6 proof moved to CI run IDs, README portal path, PR template
+
+**What was wrong.** Docs/process only — no `api/`, `web/`, or `shared/` runtime code changed.
+- **Observed:** `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` had H2s for E0/E1/E2/E3/E4/E6/E8 only,
+  with an intro paragraph explicitly deferring E5 and E7 (correct when written — PF-503 and PF-704
+  had not landed). Both have since merged (PF-503 via TRO-439 / PR #260, PF-704 via TRO-440), so
+  the deferral was stale. E6's proof cited a *local* `pnpm drill ttfe` run (1998ms); PLUGFORGE.MD
+  §4 (PF-906) says E6's proof is "TTFE green **in CI**".
+- **Observed:** `README.md`'s "Portal reachability" bullet said the developer portal "doesn't exist
+  on this branch yet" — false since TRO-436 (`/developer/apps`) and TRO-439 (`/developer/webhooks`)
+  merged; the routes are mounted at `web/src/main.tsx:305-323`.
+- **Observed:** no `.github/PULL_REQUEST_TEMPLATE.md` existed (`.github/` held only `workflows/`),
+  so nothing prompted a PR author for the AC advanced / fitness test / evidence / rollback that
+  PLUGFORGE.MD p.12 asks every PR to state.
+
+**What changed.**
+- `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` — intro rewritten (no longer "two epics absent");
+  new `## Epic E5 — Rate limiting, audit, portal (PF-500–504)` and
+  `## Epic E7 — Agent as platform citizen (PF-700–704)` in the same Before/Fix/After/Proof shape.
+  E7's proof quotes what `agent/src/__tests__/auditTrailProof.liveServer.test.ts` actually asserts,
+  with line numbers (reads under `ship_app_fleetgraph` with `user_id` null `:302-305`; the write
+  under the human `user_id` with `app_client_id` null `:330-332`; `x-ratelimit-*` present
+  `:346-348`; no row attributed to both `:381-383`), links `PF-704-COST-LEDGER-DELTA.md`, and states
+  plainly that token-volume equality between modes is **not yet measured** (TRO-620 owns it).
+  E5's proof cites the ratelimit/audit vitest suites and the two portal e2e specs, records the
+  PF-504 go decision as **derived** (both route trees on `main`; no separate memo exists), and
+  says the portal Audit page is TRO-616, in flight. E6's proof now cites GitHub Actions runs
+  `31949732432` (main @ `9d744017`, drill job completed 2026-08-16T13:37:33Z) and `31935025680`
+  (main @ `8592393f`, 2026-08-16T08:06:16Z), both `success` — **observed** via
+  `GH_REPO=troysatchell/ship gh run view <id> --json conclusion,headSha,createdAt` and the job
+  log (`total: 3988ms / 60000ms budget`, `verdict: pass`).
+- `api/src/__tests__/epicWriteupsAndDiscoveries.test.ts` — the structural lint that (by its own
+  comment) had to flip when E5/E7 landed: E5/E7 added to the required-heading list; the "must NOT
+  have `## Epic E5/E7`" guard replaced by a presence check; two new `it()`s pin the E7 proof
+  citations (`auditTrailProof.liveServer.test.ts`, `PF-704-COST-LEDGER-DELTA.md`, `TRO-620`, "not yet
+  measured") and the E6 CI run IDs. Red-before-green: with the test updated and the doc untouched,
+  6 of 25 failed (`has a heading for Epic E5`, `Epic E5/E7 has the mandated ... shape`, and the
+  three new `it()`s); after the doc edit, `Tests  25 passed (25)`.
+- `README.md` — the stale bullet replaced with the grader path: log in → **Developer** in the icon
+  rail → `/developer/apps` (register, shown-once secret, rotate) → `/developer/webhooks`
+  (subscriptions, delivery log, DLQ, Replay). `/developer/audit` deliberately not mentioned
+  (TRO-616 not merged).
+- `.github/PULL_REQUEST_TEMPLATE.md` — new, 26 lines: Ticket(s) / Acceptance criterion this slice
+  advances / Fitness test / Evidence / Rollback.
+
+**How to verify.**
+```bash
+pnpm --filter @ship/api exec vitest run src/__tests__/epicWriteupsAndDiscoveries.test.ts
+grep -n '^## Epic' docs/submission/PLUGFORGE-EPIC-WRITEUPS.md        # E0..E8, nine H2s
+GH_REPO=troysatchell/ship gh run view 31949732432 --json conclusion,headSha,createdAt
+GH_REPO=troysatchell/ship gh run view 31935025680 --json conclusion,headSha,createdAt
+test -f .github/PULL_REQUEST_TEMPLATE.md && wc -l .github/PULL_REQUEST_TEMPLATE.md
+```
+
+**Rollback.** Revert the PR. Docs, one structural test, and a PR template only — no schema, no
+migration, no runtime code.
+
+---
+
+## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
+
+**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
+keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
+Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
+the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
+`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
+(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
+combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
+composite index has to match that whole shape, not just the two cursor columns. Read
+`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
+`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
+'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
+`document_type = 'sprint'` combined with `workspace_id`.
+Added migration `052_documents_workspace_type_created_at_index.sql`:
+`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
+created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
+endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
+every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
+
+**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
+35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
+way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
+large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
+sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
+afterward) to get a plan that actually distinguishes the two states. Before the index:
+- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
+- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
+- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
+
+After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
+re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
+an ad hoc index, produces the win):
+- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
+- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
+  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
+- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
+
+Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
+stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
+scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
+index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
+re-sorts every not-yet-returned row of that type in the workspace.
+
+**How to run it.**
+```bash
+FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
+```
+To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
+large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
+one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
+to show the effect), then run
+`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
+'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
+worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
+Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
+with no `Sort` node.
+
+**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
+schema object with no dependents (nothing else references it by name), so dropping it is a full,
+clean revert. No data was changed by this migration; only the index needs removing.
 
 ---
 
