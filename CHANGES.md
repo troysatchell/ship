@@ -99,6 +99,108 @@ new exports.
 
 ---
 
+## TRO-492 — PF-102 follow-up: OAuth app rotation lost-update race (concurrent `/rotate` calls)
+
+**Root cause.** `api/src/platform/oauth/appRegistration.ts`'s `rotateOAuthAppSecret` UPDATEd
+`client_secret_hash` under `WHERE id = $1 AND revoked_at IS NULL` — this closes the revoke-vs-rotate
+race (CodeRabbit, TRO-408 review) but not rotate-vs-rotate: rotation never touches `revoked_at`, so
+two concurrent `/rotate` calls on the same app both matched that predicate, both got `ok: true` and a
+200, and only the last UPDATE to actually commit persisted — the other caller's just-returned raw
+secret was already dead the moment it reached them. Verified, not cross-tenant: every predicate in
+this function was already workspace-scoped via the SELECT feeding it, before or after this fix.
+
+**Claim provenance — what the ticket text assumed vs. what was actually found by reading the file.**
+The ticket text said to "restore `workspace_id` to the rotation predicate... it's apparently missing
+there currently — verify this yourself." Read `appRegistration.ts` as it exists now, before touching
+it (per this repo's CLAUDE.md on unmarked inference): confirmed `workspace_id` was in fact absent
+from the UPDATE's own WHERE clause (present only on the SELECT that fed it) — the ticket's assumption
+was accurate, not stale. Also confirmed, independently, that the rotation UPDATE already carried
+`WHERE id = $2 AND revoked_at IS NULL` as the ticket's orchestrator amendment stated — this ticket
+only needed to extend that predicate, not introduce it.
+
+**What changed.**
+- `api/src/platform/oauth/appRegistration.ts`'s `rotateOAuthAppSecret`:
+  - Restored `workspace_id = $3` to the UPDATE's own WHERE clause (defense-in-depth; the preceding
+    SELECT already scoped the lookup, so this could not previously cross workspaces, but the write
+    statement should say so directly rather than rely on the read that fed it).
+  - Added `client_secret_hash IS NOT DISTINCT FROM $4` — an optimistic-concurrency guard comparing
+    against the exact hash this call's own SELECT observed. Same "push the predicate into the WHERE
+    clause, let Postgres's row lock + READ COMMITTED's EvalPlanQual re-check decide" pattern
+    `token.ts`'s `redeemAuthorizationCode`/`rotateRefreshToken` already use for their own
+    concurrent-redemption/-rotation races — adapted here because rotation, unlike those two, has no
+    natural "already consumed" flag (an app can be legitimately rotated any number of times), so the
+    guard compares against the previously-read hash rather than a boolean flag.
+  - Added a `'conflict'` case to `RotateOAuthAppSecretError`: on 0 rows updated, re-reads `revoked_at`
+    to distinguish "a revoke won the race" (pre-existing, terminal) from "a concurrent rotation landed
+    first" (new, retry-able) — a caller needs to react differently to the two.
+- `api/src/routes/oauth-apps.ts`: `POST /:id/rotate` maps `conflict` to `409`
+  (`ERROR_CODES.ALREADY_EXISTS`, matching this same file's existing revoke-conflict convention) with a
+  message telling the caller to retry — never a silent 500, never a 200 wrapping a secret that's
+  already dead.
+- `api/src/openapi/schemas/oauth-apps.ts`: added the `409` response to the rotate endpoint's OpenAPI
+  registration and documented the guarantee in its `description`.
+
+**Regression test** — `api/src/platform/oauth/__tests__/app-registration.test.ts`:
+- New `describe('genuine concurrent rotation of the same app (forced, deterministic race)')`: a third
+  connection takes `SELECT ... FOR UPDATE` on the app row before two real `rotateOAuthAppSecret` calls
+  start; both calls' validation SELECTs succeed immediately (a plain read never blocks on a row lock),
+  but their UPDATEs block on it. Once both are observed genuinely queued
+  (`pg_stat_activity`, polled with a bounded deadline, scoped to `datname = current_database() AND pid
+  <> pg_backend_pid()` so a sibling worktree's own concurrent test run against the same shared
+  Postgres cluster can't be miscounted), the lock releases and the two UPDATEs contend for the row for
+  real. Asserts exactly one `ok: true`, the loser gets `error: 'conflict'`, the winner's own secret
+  authenticates afterward, and the persisted `client_secret_hash` matches the winner's secret exactly
+  (not just "some" hash — proving no lost update, not just "someone won").
+  - **Red-before-green, verified directly**: temporarily weakened the UPDATE back to the pre-fix
+    `WHERE id = $2 AND revoked_at IS NULL` (no `workspace_id`, no CAS guard) and reran this test — it
+    failed with `expected [ true, true ] to have a length of 1 but got 2`, reproducing the exact
+    lost-update bug this ticket closes. Restored the fix, reran: green. (First attempt at the red run
+    timed out on `waitForBlockedRotations` instead of failing on the real assertion — the weakened
+    query still had 4 bound values for only 2 placeholders, which errors before ever reaching the row
+    lock; trimmed to 2 to get a clean, meaningful red before re-confirming.)
+  - Deliberately no naive "fire two HTTP calls via `Promise.all` and assert `[200, 409]`" smoke test
+    (unlike `token.test.ts`'s equivalent redemption/refresh-rotation suites) — that shape's invariant
+    doesn't hold here. Redemption and refresh-token rotation are single-use, so even two fully
+    sequential (non-overlapping) calls produce a real winner/loser regardless of actual interleaving.
+    OAuth-app rotation is not single-use: two calls that happen not to overlap are both legitimate,
+    independent rotations that should both succeed — exactly like two rotations fired minutes apart.
+    Asserting `[200, 409]` on that shape would assert a bug that doesn't exist and would flake between
+    a false pass and a false failure depending on scheduling. Only the forced, deterministic test above
+    exercises the actual race this ticket closes.
+- New `AC-2 (rotation)`: extends the existing AC-2 log-spy grep test (previously CREATE-path only) to
+  the `/rotate` path — spies `console.log`/`console.error`/`console.warn`, rotates, and asserts neither
+  the old nor the newly-rotated secret ever appears in a logged line (serializing Errors and objects,
+  same as the existing CREATE-path version, so a leak inside a logged object wouldn't slip past).
+- New `AC-3 (rotation)`: independent of AC-4's existing rotation test (which only exercises
+  `verifyAppCredentials`), asserts the OLD secret is absent from a subsequent GET/list response (the
+  same AC-3 guarantee, exercised across a rotation instead of only at creation) and separately confirms
+  the NEW secret is likewise never returned via GET/list — only from the rotate response itself,
+  exactly once.
+
+**How to run it.**
+```bash
+source .factory-env && cd api && pnpm vitest run src/platform/oauth/__tests__/app-registration.test.ts
+```
+13/13 passed. Also ran the full `src/platform/oauth/__tests__` directory (94/94 passed, no
+regressions) and `pnpm --filter @ship/api run type-check` (clean, no new errors — a pre-existing
+`integrations/cli` type-check failure against `@ship/sdk`'s unbuilt package exports is unrelated to
+this change and untouched by it).
+
+**Not verified / left as-is.** `revokeOAuthApp` and `createOAuthApp` were read but not modified — this
+ticket is scoped to the rotation lost-update race only. `webhooks.ts`'s own signing-secret rotation (a
+different table, a similar no-grace-period shape, referenced only in a comment inside
+`appRegistration.ts`) was not audited for an analogous concurrent-rotation race — out of this ticket's
+scope, flagged here for whoever next touches it.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit, isolated to `appRegistration.ts`,
+`oauth-apps.ts`, the OpenAPI schema file, and the test file). Functionally: drop `workspace_id = $3
+AND client_secret_hash IS NOT DISTINCT FROM $4` from the UPDATE (back to `WHERE id = $2 AND
+revoked_at IS NULL`), remove the `'conflict'` case from `RotateOAuthAppSecretError` and its route
+handling, and drop the `409` response from the OpenAPI registration. No migration, no schema change,
+no data was written or backfilled by this fix, so nothing else needs undoing.
+
+---
+
 ## TRO-550 — OAuth consent screen: restore the real app name, safely, via server-verified lookup
 
 **What was built.** `GET /oauth/app-info?client_id=...` — a new endpoint, added to the existing

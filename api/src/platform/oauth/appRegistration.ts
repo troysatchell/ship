@@ -153,7 +153,7 @@ export async function getOAuthApp(appId: string, workspaceId: string): Promise<O
   return row ? toSummary(row) : null;
 }
 
-export type RotateOAuthAppSecretError = 'not_found' | 'revoked' | 'public_client_no_secret';
+export type RotateOAuthAppSecretError = 'not_found' | 'revoked' | 'public_client_no_secret' | 'conflict';
 
 export type RotateOAuthAppSecretResult =
   | { ok: true; clientSecret: string }
@@ -173,6 +173,47 @@ export type RotateOAuthAppSecretResult =
  * PM triage (this ticket's comments): public apps get NO secret, so rotation
  * for one is a 400 with a clear message, not a 404 or a silently-minted
  * secret.
+ *
+ * TRO-492 (CodeRabbit on PR #177, triaged, then independently re-verified
+ * against this file as it exists now — not assumed from the ticket text):
+ * the `revoked_at IS NULL` guard below closes the revoke-vs-rotate race (a
+ * revoke that wins between the SELECT above and this UPDATE makes the
+ * UPDATE match zero rows — same "push the predicate into the WHERE clause"
+ * reasoning as the CodeRabbit comment on it already explains) but does NOT
+ * close rotate-vs-rotate. Rotation never touches `revoked_at`, so two
+ * concurrent rotations of the same app both see `revoked_at IS NULL` hold
+ * true through both UPDATEs — without a further guard, both statements
+ * would match, the second to actually commit would silently overwrite the
+ * first's hash, and BOTH callers would get `ok: true` even though only one
+ * returned secret still authenticates. That is a lost update, not a
+ * cross-tenant leak: verified (by reading this function as written) that
+ * every predicate here — before and after this fix — already scopes by
+ * `workspace_id` via the SELECT above, so this race can only ever discard a
+ * caller's own legitimate rotation, never hand a secret across workspaces.
+ *
+ * Also verified directly against this file, not assumed from the ticket
+ * text: `workspace_id` was in fact missing from the UPDATE's own WHERE
+ * clause (the SELECT above scoped the lookup, but the UPDATE below relied on
+ * `app.id` alone) — restored below as defense-in-depth, so the write
+ * statement itself is workspace-scoped rather than only the read that fed
+ * it.
+ *
+ * Fixed the same way `token.ts`'s `redeemAuthorizationCode` /
+ * `rotateRefreshToken` close their own concurrent-redemption /
+ * concurrent-rotation races: an atomic `UPDATE ... WHERE <predicate on the
+ * value just read> ... RETURNING`, with Postgres's row lock — and READ
+ * COMMITTED's EvalPlanQual re-check of the WHERE clause against the
+ * just-committed row once that lock is released — doing the actual
+ * serialization, not application code. Unlike those two callers, rotation
+ * has no natural "already consumed" flag to gate on (an app can be rotated
+ * any number of times), so the optimistic-concurrency guard here instead
+ * compares `client_secret_hash` against the exact value this call's own
+ * SELECT observed (`client_secret_hash IS NOT DISTINCT FROM $4`). If a
+ * concurrent rotation's UPDATE has already landed by the time this one is
+ * unblocked, the hash it reads back is no longer the value this call
+ * started from, the predicate fails, and 0 rows match — the loser gets
+ * `conflict`, a defined, retry-able error, never a 200 wrapping a secret
+ * that's already dead on arrival.
  */
 export async function rotateOAuthAppSecret(params: {
   appId: string;
@@ -196,14 +237,35 @@ export async function rotateOAuthAppSecret(params: {
   // an app that's supposed to be dead. Pushing `revoked_at IS NULL` into the
   // WHERE clause makes the database the one deciding, not application code
   // (lessons.md rule 18: "push the predicate into the WHERE clause"). If a
-  // revoke won the race, 0 rows match and this reports `revoked` instead of
-  // fabricating a secret nobody should be able to use.
-  const updateResult = await pool.query(
-    `UPDATE oauth_apps SET client_secret_hash = $1 WHERE id = $2 AND revoked_at IS NULL RETURNING id`,
-    [secretHash, app.id]
+  // revoke won the race, 0 rows match.
+  //
+  // TRO-492: `workspace_id` restored to this predicate (was missing —
+  // verified by reading this function, not assumed), and
+  // `client_secret_hash IS NOT DISTINCT FROM $4` added as an optimistic-
+  // concurrency guard against a second, concurrent rotation — see the
+  // module comment above `rotateOAuthAppSecret` for the full race argument.
+  const updateResult = await pool.query<{ id: string }>(
+    `UPDATE oauth_apps SET client_secret_hash = $1
+     WHERE id = $2 AND workspace_id = $3 AND revoked_at IS NULL
+       AND client_secret_hash IS NOT DISTINCT FROM $4
+     RETURNING id`,
+    [secretHash, app.id, params.workspaceId, app.client_secret_hash]
   );
   if (updateResult.rows.length === 0) {
-    return { ok: false, error: 'revoked' };
+    // Zero rows matched for one of two distinct reasons — re-read rather
+    // than guessing, so the caller gets the right error: a revoke that won
+    // the race (pre-existing protection, above), or a concurrent rotation
+    // that landed first (the race this ticket closes). Both are real
+    // outcomes a caller needs to distinguish: `revoked` is terminal,
+    // `conflict` is retry-able.
+    const recheck = await pool.query<{ revoked_at: Date | null }>(
+      `SELECT revoked_at FROM oauth_apps WHERE id = $1 AND workspace_id = $2`,
+      [app.id, params.workspaceId]
+    );
+    const current = recheck.rows[0];
+    if (!current) return { ok: false, error: 'not_found' };
+    if (current.revoked_at) return { ok: false, error: 'revoked' };
+    return { ok: false, error: 'conflict' };
   }
 
   return { ok: true, clientSecret: rawSecret };
