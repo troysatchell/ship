@@ -5,7 +5,7 @@
  * InboxSidebar.test.tsx).
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { MemoryRouter } from 'react-router-dom';
 import { DeveloperAppsPage } from './DeveloperApps';
 import { api } from '@/lib/api';
@@ -97,8 +97,7 @@ describe('DeveloperAppsPage', () => {
       target: { value: 'https://example.com/callback' },
     });
 
-    const form = screen.getByRole('button', { name: /register app/i }).closest('form')!;
-    fireEvent.submit(form);
+    fireEvent.click(screen.getByRole('button', { name: /register app/i }));
 
     await waitFor(() => {
       expect(mockCreate).toHaveBeenCalledWith({
@@ -137,10 +136,9 @@ describe('DeveloperAppsPage', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /new app/i }));
     fireEvent.change(screen.getByLabelText(/^name$/i), { target: { value: 'Browser Demo' } });
-    fireEvent.click(within(screen.getByText(/public \(browser/i).closest('label')!).getByRole('radio'));
+    fireEvent.click(screen.getByRole('radio', { name: /public \(browser/i }));
 
-    const form = screen.getByRole('button', { name: /register app/i }).closest('form')!;
-    fireEvent.submit(form);
+    fireEvent.click(screen.getByRole('button', { name: /register app/i }));
 
     expect(await screen.findByText(/registered as a public client/i)).toBeInTheDocument();
     expect(screen.queryByText(/save your client secret/i)).not.toBeInTheDocument();
