@@ -6,6 +6,80 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
+
+**What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
+sat entirely outside this repo's two existing rate-limit layers. Confirmed by reading the mount
+points directly, not assumed: the legacy `perSourceIpLimiter`/`perIdentityLimiter` mount only on
+`/api/` (`api/src/app.ts:375-376`), and `/oauth` is a separate top-level prefix, never matched by
+that mount. PF-500's `rateLimitDefaults`/`rateLimitBuckets` mount only on `v1Router`
+(`api/src/platform/api/v1/router.ts:88`), i.e. `/api/v1`, not `/oauth` either. These are exactly
+the endpoints an attacker would hammer — credential stuffing on `/oauth/token`, `user_code`
+brute-forcing on `/oauth/device/*` — with no ceiling at all.
+
+**What changed.**
+- `api/src/middleware/rate-limit.ts` — added `resolveOAuthRateLimit()` + `createOAuthRateLimiter()`,
+  modeled directly on the existing `resolveSpaStaticLimit()`/`createSpaStaticLimiter()` pair (the
+  closest existing precedent: a single per-source-IP flood ceiling for pre-auth/anonymous traffic,
+  own Redis-backed bucket, own env-tiered limits). A per-*identity* limiter (`perIdentityLimiter`'s
+  shape) doesn't fit here — every `/oauth/*` request is pre-auth by definition, so there is no
+  session/bearer token yet to key on.
+- `api/src/middleware/redis-rate-limit-store.ts` — added `REDIS_KEY_PREFIX_OAUTH = 'rl:oauth:'`, a
+  separate bucket from every other limiter's prefix so an `/oauth/token` device-polling loop can't
+  exhaust an unrelated `/api/*` budget from the same source IP, or vice versa.
+- `api/src/app.ts` — built `oauthRateLimiter` alongside the other module-level limiters (shares the
+  same Redis client), mounted at `app.use('/oauth', oauthRateLimiter)` directly ahead of all three
+  `/oauth`-prefixed routers (`createOAuthAuthorizeRouter`/`createOAuthTokenRouter`/
+  `createOAuthDeviceRouter`), so it covers every route on every one of them.
+
+**Limit choice — disclosed as derived, not measured.** Unlike `MEASURED_WORST_CASE_BURST_PER_MINUTE`
+(the `/api/*` limiter's number, calibrated from a real audit traffic capture), this prefix has no
+equivalent capture to calibrate against. The production ceiling (120 req/min per source IP) is
+reasoned from RFC 8628's device-grant default poll interval (5s → ~12 `/oauth/token` requests/min
+per legitimate polling flow, `DEFAULT_DEVICE_POLL_INTERVAL_SECONDS` in `platform/oauth/device.ts`)
+times a generous assumption of up to ~10 concurrent device-login attempts behind one shared NAT
+egress. Test tier is 30 (fast, deterministic 429 tests without thousands of sequential requests);
+dev tier is 10,000 (permissive, matches every other limiter's dev tier in this file). If real
+`/oauth/*` traffic is ever measured, replace this reasoning with actual numbers rather than just
+raising the constant — same discipline `rate-limit.ts`'s own top-of-file doc already asks for.
+
+**Regression tests** — `api/src/app.oauth-rate-limit.test.ts` (new), modeled directly on
+`app.spa-static-rate-limit.test.ts` (TRO-308): loads the real `createApp()` wiring fresh per test
+(`vi.resetModules()`, so each test gets its own zeroed `MemoryStore` counter) and drives real HTTP
+requests through a bound server via `supertest`, not a standalone call to the middleware function.
+3 cases: (1) request #(test-tier + 1) against an unmatched `/oauth/*` path returns 429 with the
+expected error body, every prior request returns the route's real 404 — proving the limiter itself,
+not some other failure, is what changes at the throttle point; (2) exhausting the `/oauth` budget
+does not throttle unrelated `/api/*` traffic from the same source IP (separate Redis-prefixed
+bucket); (3) the limiter also covers `POST /oauth/device/code` specifically (a different router
+than the fixture path in case 1 implicitly exercises), proving the mount isn't accidentally scoped
+to only the first-registered `/oauth` router. **Red before green, genuinely verified**: `git stash`-ing
+just the `app.ts` mount change and re-running this suite reproduced the pre-fix behavior exactly —
+all 3 tests failed, with the `/oauth/device/code` case showing a real `400` (the route's own empty-body
+validation) at what should have been the 429 checkpoint, confirming no rate limiting fired at all
+before this fix. Restoring the change (`git stash pop`) returned all 3 to green with no other changes.
+Full adjacent-suite check: `rate-limit.test.ts` + `rate-limit-coverage.test.ts` +
+`rate-limit-v1-exemption.test.ts` + `app.spa-static-rate-limit.test.ts` + the new file — 34/34 passing,
+zero regressions.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run \
+  src/app.oauth-rate-limit.test.ts \
+  src/middleware/__tests__/rate-limit.test.ts \
+  src/middleware/__tests__/rate-limit-coverage.test.ts \
+  src/middleware/__tests__/rate-limit-v1-exemption.test.ts \
+  src/app.spa-static-rate-limit.test.ts
+```
+
+**Rollback.** `git revert <this commit>` — three files touched
+(`api/src/app.ts`, `api/src/middleware/rate-limit.ts`, `api/src/middleware/redis-rate-limit-store.ts`)
+plus one new test file, no migration, no schema change, no other call site depends on any of the
+new exports.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts

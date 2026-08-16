@@ -58,6 +58,7 @@ import {
   REDIS_KEY_PREFIX_IDENTITY,
   REDIS_KEY_PREFIX_SOURCE_IP,
   REDIS_KEY_PREFIX_SPA_STATIC,
+  REDIS_KEY_PREFIX_OAUTH,
 } from './redis-rate-limit-store.js';
 
 /** All `/api/` limits are evaluated over a rolling one-minute window. */
@@ -443,6 +444,84 @@ export function createSpaStaticLimiter(
     ...(redisClient
       ? {
           store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_SPA_STATIC),
+          passOnStoreError: true,
+        }
+      : {}),
+  });
+}
+
+export interface OAuthRateLimit {
+  windowMs: number;
+  /** Requests per window per source IP, across the whole `/oauth/*` prefix. */
+  limit: number;
+}
+
+/**
+ * TRO-588 — `/oauth/authorize`, `/oauth/token`, and `/oauth/device/*`
+ * (PF-103/104/106) have never had any rate-limit coverage: they sit outside
+ * `/api/` (so `perSourceIpLimiter`/`perIdentityLimiter` never mount on them,
+ * `app.ts:375-376`), and outside `/api/v1` (so PF-500's `rateLimitDefaults`/
+ * `rateLimitBuckets`, mounted only on `v1Router`, don't either). These are
+ * exactly the endpoints an attacker would hammer — credential stuffing on
+ * `/oauth/token`, `user_code` brute-forcing on `/oauth/device/verify` — and
+ * every request here is pre-auth by definition, so `perIdentityLimiter`'s
+ * session/token keying (`apiRateLimitKey`) has nothing to key on; a
+ * per-source-IP flood ceiling (`createSpaStaticLimiter`'s shape, not
+ * `createApiRateLimiters`'s) is the right fit, same reasoning as that
+ * limiter's own doc comment.
+ *
+ * One limiter across the whole prefix, not one per sub-route: the ceiling
+ * has to accommodate the highest-legitimate-frequency traffic on this
+ * prefix, which by construction also covers the lower-frequency routes
+ * (`/authorize`, `/device/verify`) more than adequately. That highest
+ * frequency is device-grant polling — RFC 8628 §3.5's default interval is 5s
+ * (`DEFAULT_DEVICE_POLL_INTERVAL_SECONDS`, `platform/oauth/device.ts`), so
+ * one well-behaved device-login flow alone is ~12 `/oauth/token` requests/
+ * min. **DERIVED, not measured** (unlike `MEASURED_WORST_CASE_BURST_PER_MINUTE`
+ * above, this prefix has no audit traffic capture to calibrate against): the
+ * production ceiling assumes up to ~10 concurrent device-login attempts
+ * behind one shared NAT egress as a generous but bounded legitimate load
+ * (10 x 12 = 120), then rounds up for authorize/token/device-verify headroom
+ * on top of that. If production traffic ever needs recalibrating, capture
+ * real `/oauth/*` volume the way `MEASURED_WORST_CASE_BURST_PER_MINUTE` was
+ * captured for `/api/*` and replace this reasoning, don't just raise the
+ * number.
+ */
+export function resolveOAuthRateLimit(env: RateLimitEnv = process.env): OAuthRateLimit {
+  const { isTestEnv, isDevEnv } = resolveEnvTier(env);
+
+  return {
+    windowMs: API_RATE_LIMIT_WINDOW_MS,
+    limit: isTestEnv ? 30 : isDevEnv ? 10000 : 120,
+  };
+}
+
+/**
+ * Build the per-source-IP flood ceiling for the `/oauth/*` prefix. No custom
+ * `keyGenerator` — like `createSpaStaticLimiter`, keys on `req.ip` via
+ * `express-rate-limit`'s own default, which is the right shape for
+ * pre-auth, anonymous traffic (no session or bearer token exists yet at this
+ * point in any OAuth flow).
+ *
+ * `redisClient` defaults from `env.REDIS_URL`, same pattern and same reason
+ * as every other limiter in this file — a per-process `MemoryStore` would
+ * silently multiply this ceiling by the instance count under autoscaling.
+ */
+export function createOAuthRateLimiter(
+  env: RateLimitEnv = process.env,
+  redisClient: Redis | undefined = createRedisClientFromEnv(env)
+): RequestHandler {
+  const { windowMs, limit } = resolveOAuthRateLimit(env);
+
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down.' },
+    ...(redisClient
+      ? {
+          store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_OAUTH),
           passOnStoreError: true,
         }
       : {}),
