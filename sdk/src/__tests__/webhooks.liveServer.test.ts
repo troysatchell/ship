@@ -77,6 +77,22 @@ function actualKeys(obj: object): string[] {
   return Object.keys(obj).sort();
 }
 
+/**
+ * TRO-612: hard-throw guard for a `beforeAll`-provided setup value (e.g.
+ * `oauthAppId`). Both `createSubscription()` cases below used to guard with
+ * `expect(x, msg).toBeDefined(); if (!x) return;` — on a falsy `x` (broken
+ * `beforeAll`: a bad insert, a bad env var) that pattern let the test SKIP
+ * its assertions silently, reported green having asserted nothing. This
+ * throws instead, so a broken setup fails the test loudly with an actionable
+ * message pointing at `beforeAll`. A TypeScript assertion function so a call
+ * site keeps using its already-declared variable afterward, narrowed, same
+ * as a plain `if (!x) throw` would — see the two call sites below and the
+ * dedicated regression test for this function itself, further down.
+ */
+function assertSetupValue<T>(value: T | undefined | null, message: string): asserts value is T {
+  if (!value) throw new Error(message);
+}
+
 // The exact real field sets, hand-mirrored from sdk/src/resources/webhooks.ts
 // — this is the assertion the whole file exists to make: not "is a
 // superset present" but "is this EXACTLY the real shape."
@@ -273,7 +289,7 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
       "CreatedWebhookSubscription's real fields, without 400ing — the exact real-server round trip " +
       "the pre-fix request body could never complete",
     async () => {
-      if (!oauthAppId) throw new Error('oauthAppId was not set in beforeAll');
+      assertSetupValue(oauthAppId, 'oauthAppId was not set in beforeAll');
       const client = new ShipClient({ token, baseUrl });
 
       const created = await client.webhooks.createSubscription({
@@ -357,8 +373,17 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
     // `event_type`/`target_url`. This call proves the fix works end-to-end:
     // a real HTTP POST against a real running server, using the corrected
     // body shape, creating a real row in the database.
-    expect(oauthAppId, 'oauthAppId must be set in beforeAll').toBeDefined();
-    if (!oauthAppId) return;
+    //
+    // TRO-612: this used to be `expect(oauthAppId, ...).toBeDefined()`
+    // followed by `if (!oauthAppId) return;` — a falsy oauthAppId (broken
+    // beforeAll setup) made the test SKIP the createSubscription() assertion
+    // below instead of failing loudly. Same "no silent skip" convention as
+    // the seed-data guidance in this repo's CLAUDE.md: fail with a clear
+    // message, don't skip. Now shares `assertSetupValue()` with the TRO-452
+    // case above (which used its own equivalent inline `if (!x) throw`) —
+    // see that function's doc comment and the dedicated regression test for
+    // it near the bottom of this file.
+    assertSetupValue(oauthAppId, 'oauthAppId was not set in beforeAll');
 
     const client = new ShipClient({ token, baseUrl });
 
@@ -479,5 +504,33 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
       await pool.query('DELETE FROM api_tokens WHERE user_id = $1', [noScopeUserId]);
       await pool.query('DELETE FROM users WHERE id = $1', [noScopeUserId]);
     }
+  });
+});
+
+describe('TRO-612: assertSetupValue() — the oauthAppId setup guard fails loudly, not skips', () => {
+  // Deliberately a plain synchronous unit test, outside the describe block
+  // above: it exercises the exact function both real `createSubscription()`
+  // cases guard with, without needing the live server, the stub target, or
+  // Postgres — so this regression coverage runs (and this specific behavior
+  // stays pinned) even in an environment where the rest of this file's suite
+  // cannot, e.g. no reachable database.
+  it('throws with the given message on undefined, null, and empty-string — never silently continues', () => {
+    expect(() => assertSetupValue(undefined, 'oauthAppId was not set in beforeAll')).toThrow(
+      'oauthAppId was not set in beforeAll'
+    );
+    expect(() => assertSetupValue(null, 'oauthAppId was not set in beforeAll')).toThrow(
+      'oauthAppId was not set in beforeAll'
+    );
+    // The exact defect class this ticket fixes: the OLD `toBeDefined()` guard
+    // would have passed on an empty string (defined, but still falsy and
+    // still useless as a UUID) and then hit `if (!x) return;` and skipped
+    // silently. assertSetupValue() throws here too — no falsy value gets past it.
+    expect(() => assertSetupValue('', 'oauthAppId was not set in beforeAll')).toThrow(
+      'oauthAppId was not set in beforeAll'
+    );
+  });
+
+  it('does not throw, and narrows to the value, when given a truthy value', () => {
+    expect(() => assertSetupValue('real-oauth-app-id', 'unused')).not.toThrow();
   });
 });
