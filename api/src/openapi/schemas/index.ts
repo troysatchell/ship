@@ -32,6 +32,7 @@ export * from './ai.js';
 export * from './agent.js';
 export * from './oauth-apps.js';
 export * from './oauth-authorize.js';
+export * from './oauth-app-info.js';
 
 // Re-export registry and generator for convenience
 export { registry, generateOpenAPIDocument } from '../registry.js';
