@@ -89,6 +89,7 @@ export function AppLayout() {
     timeRemaining,
     warningType,
     resetTimer: resetSessionTimer,
+    dismissAbsoluteWarning,
   } = useSessionTimeout(handleSessionTimeout);
 
   // Check if user needs to post a standup today
@@ -713,6 +714,7 @@ export function AppLayout() {
         timeRemaining={timeRemaining}
         warningType={warningType}
         onStayLoggedIn={resetSessionTimer}
+        onDismissAbsolute={dismissAbsoluteWarning}
       />
 
       {/* Upload Navigation Warning Modal */}

@@ -513,6 +513,91 @@ describe('useSessionTimeout', () => {
       // onTimeout should have been called due to absolute timeout
       expect(onTimeout).toHaveBeenCalled();
     });
+
+    // TRO-610: SessionTimeoutModal's button was wired unconditionally to
+    // resetTimer() (which extends the session) regardless of warningType,
+    // even though the absolute-warning copy says "This timeout cannot be
+    // extended." dismissAbsoluteWarning() is the fix's non-extending path.
+    it('dismissAbsoluteWarning() hides the warning without calling extend-session', async () => {
+      // Mount with the session already 11:55 old, same pattern as "absolute
+      // timeout fires at 12 hours regardless of activity" above — advancing
+      // this far forward from a FRESH mount would also cross the 14-minute
+      // inactivity threshold along the way and create cross-timer
+      // interaction this test isn't about.
+      const almostTwelveHoursAgo = new Date(
+        Date.now() - (ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS)
+      ).toISOString();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            createdAt: almostTwelveHoursAgo,
+            expiresAt: new Date(Date.now() + SESSION_TIMEOUT_MS).toISOString(),
+            lastActivity: new Date().toISOString(),
+          },
+        }),
+      });
+
+      const onTimeout = vi.fn();
+      const { result } = renderHook(() => useSessionTimeout(onTimeout));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(result.current.showWarning).toBe(true);
+      expect(result.current.warningType).toBe('absolute');
+
+      mockFetch.mockClear();
+
+      act(() => {
+        result.current.dismissAbsoluteWarning();
+      });
+
+      expect(result.current.showWarning).toBe(false);
+      // No extend-session (or any other) call — dismissal is a pure client-side hide.
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('dismissAbsoluteWarning() does not prevent the real 12-hour timeout from firing', async () => {
+      const almostTwelveHoursAgo = new Date(
+        Date.now() - (ABSOLUTE_SESSION_TIMEOUT_MS - ABSOLUTE_WARNING_THRESHOLD_MS)
+      ).toISOString();
+      mockFetch.mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          success: true,
+          data: {
+            createdAt: almostTwelveHoursAgo,
+            expiresAt: new Date(Date.now() + SESSION_TIMEOUT_MS).toISOString(),
+            lastActivity: new Date().toISOString(),
+          },
+        }),
+      });
+
+      const onTimeout = vi.fn();
+      const { result } = renderHook(() => useSessionTimeout(onTimeout));
+
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(result.current.warningType).toBe('absolute');
+
+      act(() => {
+        result.current.dismissAbsoluteWarning();
+      });
+      expect(onTimeout).not.toHaveBeenCalled();
+
+      // The remaining 5 minutes still elapse in the background — the
+      // countdown interval was never cleared by dismissAbsoluteWarning().
+      await act(async () => {
+        vi.advanceTimersByTime(ABSOLUTE_WARNING_THRESHOLD_MS + 1000);
+      });
+
+      expect(onTimeout).toHaveBeenCalled();
+    });
   });
 
   describe('Warning Type', () => {
