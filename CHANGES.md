@@ -6,6 +6,49 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-496 — Boundary-lint hardening: optional/peer-dep smuggling + bare `**/routes` case (PF-003 follow-up)
+
+**Source: CodeRabbit on PR #175 (TRO-399), triaged 2026-08-10.** Two small hardening items on
+PF-003's boundary-lint infrastructure, tier `apply`.
+
+**1. `scripts/check-integration-deps.mjs` only read `dependencies`.** A package under
+`integrations/*` could smuggle a runtime dependency past the PLUGFORGE.MD §2.1 "`@ship/sdk`-only"
+rule via `optionalDependencies` (npm installs these by default unless `--omit=optional` is passed)
+or `peerDependencies` (also lands in the runtime graph). `checkPackageDeps()` now checks all three
+of `dependencies`, `optionalDependencies`, `peerDependencies` — `devDependencies` stays exempt
+(each `integrations/*` package needs its own dev tooling; the constraint is about the runtime
+graph, not the build/test graph). Verified the gap existed pre-fix by running the OLD
+`checkPackageDeps` (via `git show HEAD:scripts/check-integration-deps.mjs`) against a fixture with
+`optionalDependencies: { express: '^4' }` — it returned `violations: []` (should have flagged
+`express`). All three real `integrations/*` packages (`browser-demo`, `cli`, `slack`) checked —
+each is `@ship/sdk`-only already, so this is a landed hardening item, not a fix for a live
+violation (PF-600 is the first real integrations package to actually exercise this).
+
+**2. `api/src/platform/__tests__/boundary-lint.test.ts` covered only the `**/routes/**` glob
+arm.** The ESLint config's `no-restricted-imports` group is `['**/routes/**', '**/routes']`
+(`eslint.config.mjs:118`) — two glob arms, but the test only exercised the first (a nested import
+like `'../../../../routes/documents'`). Added fixture (a2): a bare `'../../../../routes'` import
+(no path segment after `routes`), proving the second arm is also enforced.
+
+**Rollback:** revert this commit — `git revert <sha>`. Both changes are additive (new test
+coverage + a widened but backward-compatible check); no schema, config, or runtime behavior
+changes outside the lint/check scripts themselves.
+
+**Verification.**
+```bash
+# check-integration-deps.mjs — full script test suite (14 tests, was 9)
+node --test scripts/__tests__/check-integration-deps.test.mjs
+
+# boundary-lint.test.ts — real ESLint run against fixtures (3 tests, was 2)
+cd api && npx vitest run src/platform/__tests__/boundary-lint.test.ts
+```
+Both green locally. Red-before-green proof for item 1: `git show HEAD:scripts/check-integration-deps.mjs`
+loaded and run against an `optionalDependencies: { express }` fixture returns zero violations
+pre-fix (the gap CodeRabbit flagged); the same fixture is now asserted to produce exactly one
+violation with `field: 'optionalDependencies'` in the updated test file.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
