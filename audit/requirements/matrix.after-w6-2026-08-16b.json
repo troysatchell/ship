@@ -1865,7 +1865,7 @@
     },
     {
       "id": "W6-R31",
-      "verdict": "ASSUMED",
+      "verdict": "PARTIAL",
       "tickets": [
         "TRO-418",
         "TRO-600",
@@ -1940,10 +1940,10 @@
         }
       ],
       "verification": null,
-      "interpretation": null,
-      "assumption": "Traced under the reading that 'Pluggable ITokenStore (in-memory, file, browser localStorage)' obliges the SDK to define the pluggable interface and the repo to contain working implementations of all three, not that all three must be exported from the @ship/sdk package itself. Under that reading: VERIFIED. If the stricter reading is ruled, verdict becomes PARTIAL with scope 'export a LocalStorageTokenStore from sdk/src/index.ts (browser-safe barrel) and move/duplicate integrations/browser-demo/src/localStorageTokenStore.ts'.",
-      "suggested_scope": null,
-      "notes": "TRO-418 implements; TRO-600 (Done) hardens FileTokenStore atomic write; TRO-425 (Done) is the server-side device grant the flow talks to; TRO-449 (Done) supplies the localStorage store. Related open server-side hardening not affecting the SDK surface: TRO-589 (In Progress, PR #272) hashes device user_code at rest. Nuance flagged under needs_ruling: the localStorage store is NOT exported from @ship/sdk (sdk/src/index.ts exports MemoryTokenStore only, node.ts exports FileTokenStore) — it exists only as the browser-demo's own ITokenStore implementation. Prior sweeps scored this as satisfying the clause. [ASSUMED below the flood cap: the sweep ran unattended; the yes/no question is put to the user at the end of the run and the row re-tiers to the settled verdict once ruled (I-05..I-07 pending).]",
+      "interpretation": "I-06",
+      "assumption": null,
+      "suggested_scope": "Export a browser-safe LocalStorageTokenStore from @ship/sdk (move/duplicate integrations/browser-demo/src/localStorageTokenStore.ts into sdk/src/, export from the browser barrel; browser-demo imports it from the SDK). ~20 min + a unit test; parity/size gates unaffected (zero deps).",
+      "notes": "Ruled 2026-08-16 (I-06, face-value reading applied by the audit session under Troy's batch instruction): the brief lists localStorage as one of the SDK's pluggable stores, so the SDK must ship it — a consumer-side implementation does not satisfy the clause. Everything else in the row (deviceLogin, authorizationCodeFlow, Memory/File stores, TRO-600 atomic write) is green this sweep.",
       "plain_english": "The SDK must run both login flows end-to-end (device login for CLIs, PKCE code flow for browsers) and let callers plug in where tokens are kept — memory, a file, or browser localStorage. Both flows are static methods on ShipClient (sdk/src/client.ts), the ITokenStore interface plus MemoryTokenStore and FileTokenStore ship in the SDK, and a LocalStorageTokenStore is implemented in the browser demo (integrations/browser-demo). TRO-418 delivered the flows/stores; TRO-600 made the file store's write crash-safe. Today's CI run shows all the flow and store tests passing.",
       "test_files_bearing": [
         "sdk/src/deviceLogin.test.ts",
@@ -2239,7 +2239,7 @@
     },
     {
       "id": "W6-R36",
-      "verdict": "ASSUMED",
+      "verdict": "PARTIAL",
       "tickets": [
         "TRO-432",
         "TRO-436",
@@ -2279,10 +2279,10 @@
         }
       ],
       "verification": null,
-      "interpretation": null,
-      "assumption": "'Queryable in the developer portal' means a web UI view under /developer/* that reads public_api_audit rows, not merely an admin-scoped API endpoint the portal token could call.",
-      "suggested_scope": "Add an 'Audit' page under /developer/* (DeveloperSidebar DEVELOPER_NAV entry) that calls GET /api/v1/audit via usePortalToken().callV1 with cursor pagination and an app_client_id filter; the portal token already carries audit:read (DeveloperPortalContext.tsx:35). Add an RTL test + optional e2e. Ticket needed — none exists.",
-      "notes": "TRO-432 implements table+middleware+API (ticket title says 'migration 046'; the file landed as 049_public_api_audit.sql after renumbering). TRO-436/TRO-439 built the portal (apps; webhooks deliveries/DLQ/replay/subscriptions) — neither includes an audit view, and PLUGFORGE.MD's PF-501 wording ('GET /api/v1/audit ... for the portal') delivered only the endpoint. TRO-443 (PF-504, Done) recorded a GO decision on the full portal build; no ticket scopes an audit-trail page. CORRECTION vs prior sweep: the 08-16 matrix upgraded this row to IMPLEMENTED-UNVERIFIED citing 'portal query surface now code-complete via TRO-436/439' — that was inferred from the portal existing, not observed; grep of web/src shows zero calls to /api/v1/audit and DeveloperSidebar.tsx lists no audit entry. Downstream: the 08-16 report's 'E5 fully closed' framing overstates R36. web/src/lib/api.ts getAuditLogs (l.489/572) is the pre-existing INTERNAL workspace audit_logs table, not public_api_audit. [ASSUMED below the flood cap: the sweep ran unattended; the yes/no question is put to the user at the end of the run and the row re-tiers to the settled verdict once ruled (I-05..I-07 pending).]",
+      "interpretation": "I-05",
+      "assumption": null,
+      "suggested_scope": "Add an Audit page under /developer/* (DeveloperSidebar DEVELOPER_NAV entry) that calls GET /api/v1/audit via usePortalToken().callV1 with cursor pagination and an app_client_id filter; portal token already carries audit:read (DeveloperPortalContext.tsx:35). RTL test + optional e2e. No ticket exists — PM GO item 5.",
+      "notes": "Ruled 2026-08-16 (I-05): \"queryable in the developer portal\" requires a portal UI view. Table + recording middleware + GET /api/v1/audit + SDK audit.list() are all VERIFIED-level (api audit.test.ts 12 ✓, sdk audit tests ✓); the portal has no audit page (grep of web/src for /api/v1/audit → nothing; nav = Apps + Webhooks). CORRECTION vs prior sweep, which inferred the portal surface from the portal existing.",
       "plain_english": "Every public API call must be logged (who, which app, which route, scope, status, how long) and be lookable-up in the developer portal. The logging table, the recording middleware, the admin-only GET /api/v1/audit endpoint and an SDK client all exist and their tests passed this sweep (TRO-432/PF-501). What is missing is the portal part: the developer portal (TRO-436/439) has only Apps and Webhooks pages and never calls the audit endpoint, so an admin cannot browse the API audit trail in the UI today.",
       "test_files_bearing": [
         "api/src/platform/audit/__tests__/middleware.test.ts",
@@ -3213,9 +3213,9 @@
         }
       ],
       "verification": null,
-      "interpretation": null,
+      "interpretation": "I-08",
       "assumption": null,
-      "suggested_scope": "Assert the target: lower ttfe.config.json's wait_for_delivery stage ceiling to 2000 ms (a per-run max — strictly stronger than P95 — noting the deliverer's 1 s poll interval sits inside that stage), or add a dedicated first_delivery_latency_ms check; optionally aggregate wait_for_delivery across recent drill-ttfe CI runs to report an actual P95. Small ticket, scripts/drill/ only.",
+      "suggested_scope": "Compute and assert a real P95: (1) record wait_for_delivery ms per drill run as a CI artifact/output; (2) a small script (scripts/drill/p95.mjs, gh-fed or artifact-fed) that aggregates the last ≥20 drill-ttfe runs and fails if P95 ≥ 2000 ms; run it in the drill-ttfe job. Per-run ceilings alone do not satisfy the face-value P95 target (I-08).",
       "notes": "DOWNGRADE with correction: the prior 08-16 row said 'P95<2s first-delivery-latency assertion now lives on main (scripts/drill/thresholds.ts)'. I read thresholds.ts (pure budget evaluator, no latency-specific logic) and ttfe.config.json (wait_for_delivery: 15000; verify_webhook: 2000). The 2000 figure belongs to the HMAC-verify stage (W6-R58's metric), not first-attempt delivery latency. So the prior VERIFIED over-credited; the 08-15 verdict (PARTIAL: latency recorded, target unasserted) was the accurate one and remains so. What IS present: latency_ms per attempt (deliverer.ts:694, tested at webhooks.test.ts:770), and the drill's wait_for_delivery timing observed at 690 ms in CI run 31950529207's predecessor 31949732432 (job 95172637326). Downstream: W6-R46 (not my cluster) carries a similar note ('signed POST arrives within 2s') — its cited drill has the same 15 s ceiling; the main session may want to re-check that row too. bearing-but-not-green: vitest [\"scripts/drill/__tests__/thresholds.test.ts\"] e2e-red [] e2e-not-run []",
       "plain_english": "The brief sets a target that 95% of first webhook delivery attempts complete in under 2 seconds. The repo records per-attempt latency in the delivery log (TRO-438) and the CI drill measures the first-delivery wait on every run (TRO-455) — the latest main run measured 690 ms — but nothing asserts a 2-second bound: the drill's ceiling on that stage is 15 seconds, and no percentile is computed across runs. Measurement exists; the target itself is unasserted.",
       "test_files_bearing": [
@@ -3315,7 +3315,7 @@
     },
     {
       "id": "W6-R55",
-      "verdict": "ASSUMED",
+      "verdict": "PARTIAL",
       "tickets": [
         "TRO-455"
       ],
@@ -3362,10 +3362,10 @@
         }
       ],
       "verification": null,
-      "interpretation": null,
-      "assumption": "Traced under the STRICT reading: 'containerized Ship instance' means the Ship API runs from a container image, which the drill never does — hence PARTIAL. Under the lenient reading (Postgres in a container + the real API process from the checkout, SDK installed into a clean directory) the row would be VERIFIED on the same evidence.",
-      "suggested_scope": "If the strict reading holds: add an opt-in `DRILL_TTFE_API_IMAGE=<ghcr image>` path in scripts/drill/ttfe.ts that starts the built Ship image via testcontainers' GenericContainer instead of spawning tsx (GitHub Actions only — GitLab's shared runner cannot start containers, per .gitlab-ci.yml:233-241), and run it in ci.yml's drill-ttfe job. Otherwise: record an interpretation and close.",
-      "notes": "Same substantive question the prior two sweeps flagged, now sharpened after reading ttfe.ts:185-203 in full: it is not testcontainers-vs-services (both only containerize Postgres) — it is that Ship (the API) is never containerized by the drill. A Docker image of Ship IS built elsewhere in CI (ci.yml:597 build-image job) but the drill does not use it. Under the lenient reading this row is VERIFIED (30 consecutive green CI runs, clean-dir install proven, local testcontainers path documented at CHANGES.md:1445). TRO-455 implements; no open ticket. bearing-but-not-green: vitest [\"scripts/drill/__tests__/thresholds.test.ts\"] e2e-red [] e2e-not-run [] [ASSUMED below the flood cap: the sweep ran unattended; the yes/no question is put to the user at the end of the run and the row re-tiers to the settled verdict once ruled (I-05..I-07 pending).]",
+      "interpretation": "I-07",
+      "assumption": null,
+      "suggested_scope": "Add an opt-in DRILL_TTFE_API_IMAGE=<ghcr image> path in scripts/drill/ttfe.ts that starts the built Ship image via testcontainers GenericContainer instead of spawning tsx, and run it in ci.yml's drill-ttfe job (GitHub only — GitLab's shared runner cannot start containers, .gitlab-ci.yml:233-241). Image already built by ci.yml:597 build-image. 2–3 h.",
+      "notes": "Ruled 2026-08-16 (I-07): \"containerized Ship instance\" means the Ship API runs from a container image. Today only Postgres is containerized; the API is spawned via tsx from the checkout (ttfe.ts:185-203). Clean-dir SDK install, real HTTP against a real Ship, 30 consecutive green CI runs — all real, but the API-in-image half is absent.",
       "plain_english": "The brief wants a `pnpm drill ttfe` command that runs the whole loop against a containerized Ship from a clean working directory. The command exists and runs the loop (TRO-455); the SDK is installed into a fresh throwaway directory; the database is a container (CI service container, or Docker testcontainers locally). What is arguable is 'containerized Ship instance': the Ship API process itself is started from the source checkout with tsx, never from a container image, in both paths. Whether database-in-a-container plus a real API process meets the wording is a call for the maintainer.",
       "test_files_bearing": [
         "scripts/drill/__tests__/thresholds.test.ts"
@@ -4938,32 +4938,7 @@
       "note": "epic-parent organizational issue — maps to no single requirement"
     }
   ],
-  "needs_ruling": [
-    {
-      "id": "W6-R31",
-      "cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI",
-      "question": "Does an ITokenStore implementation for browser localStorage that lives in integrations/browser-demo (an SDK consumer) rather than being exported by @ship/sdk satisfy the 'browser localStorage' clause of W6-R31?",
-      "traced_under": "Traced under the reading that 'Pluggable ITokenStore (in-memory, file, browser localStorage)' obliges the SDK to define the pluggable interface and the repo to contain working implementations of all three, not that all three must be exported from the @ship/sdk package itself. Under that reading: VERIFIED. If the stricter reading is ruled, verdict becomes PARTIAL with scope 'export a LocalStorageTokenStore from sdk/src/index.ts (browser-safe barrel) and move/duplicate integrations/browser-demo/src/localStorageTokenStore.ts'."
-    },
-    {
-      "id": "W6-R36",
-      "cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS",
-      "question": "Does 'queryable in the developer portal' require a web UI view of the public API audit trail (none exists), or is the admin-scoped GET /api/v1/audit endpoint + SDK audit.list() sufficient to satisfy it?",
-      "traced_under": "'Queryable in the developer portal' means a web UI view under /developer/* that reads public_api_audit rows, not merely an admin-scoped API endpoint the portal token could call."
-    },
-    {
-      "id": "W6-R52",
-      "cluster": "C — E3 webhooks pipeline",
-      "question": "Does a per-run CI ceiling of 2000 ms on the TTFE drill's wait_for_delivery stage (max over accumulated runs) satisfy 'webhook first-attempt latency P95 < 2 s', or must an aggregated P95 over a population of ≥20 drill runs be computed and asserted?",
-      "traced_under": "Traced under the assumption that a per-run CI ceiling on the drill's wait_for_delivery stage would count as asserting the P95 target (max ≤ 2 s over accumulated runs implies P95 ≤ 2 s). Under either reading (per-run ceiling vs aggregated P95) the current repo asserts neither, so the PARTIAL verdict does not depend on the ruling — only the suggested_scope does."
-    },
-    {
-      "id": "W6-R55",
-      "cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis",
-      "question": "Does 'against a containerized Ship instance' in W6-R55 accept the current drill shape — Postgres in a container (CI services: / local testcontainers) plus the real Ship API spawned as a child process from the source checkout — or must the Ship API itself run from a container image?",
-      "traced_under": "Traced under the STRICT reading: 'containerized Ship instance' means the Ship API runs from a container image, which the drill never does — hence PARTIAL. Under the lenient reading (Postgres in a container + the real API process from the checkout, SDK installed into a clean directory) the row would be VERIFIED on the same evidence."
-    }
-  ],
+  "needs_ruling": [],
   "commands_run": [
     {
       "command": "pnpm db:migrate (DATABASE_URL → scratch DB ship_req_audit_w6b_scratch, created+dropped this sweep)",
@@ -5148,5 +5123,6 @@
     }
   ],
   "baselineRef": "matrix.baseline-W6.json",
-  "compare_against": "matrix.after-w6-2026-08-16.json"
+  "compare_against": "matrix.after-w6-2026-08-16.json",
+  "rulings_applied": "I-05..I-08 ruled 2026-08-16 ~14:35Z after the run; the three former ASSUMED rows re-tiered to PARTIAL"
 }

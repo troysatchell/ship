@@ -222,6 +222,7 @@
 - **Tickets:** TRO-433
 - **Evidence:** `api/src/platform/webhooks/signer.ts:121`, `api/src/platform/webhooks/signer.ts:144`, `api/src/platform/webhooks/signer.ts:30`, `api/src/platform/webhooks/signer.ts:34`, `api/src/platform/webhooks/__tests__/signer.test.ts:71`, `api/src/platform/webhooks/__tests__/signer.test.ts:82`, `api/src/platform/webhooks/__tests__/signer.test.ts:91`, `api/src/platform/webhooks/__tests__/signer.test.ts:100`, `api/src/platform/webhooks/__tests__/signer.test.ts:185`
 - **Verified by:** ✓ src/platform/webhooks/__tests__/signer.test.ts (20 tests) 223ms \| local vitest this sweep: api/src/platform/webhooks/__tests__/signer.test.ts ✓
+- **Interpretation:** I-04
 
 ### W6-R26 — VERIFIED
 **Brief says:** "Exponential backoff with jitter: 1s, 4s, 16s, 1m, 5m, 30m. Subscribers returning 5xx or timing out are retried; 4xx responses are treated as permanent failures and dead-lettered."
@@ -269,15 +270,16 @@
 - **Evidence:** `sdk/src/client.ts:115`, `sdk/src/client.ts:119`, `sdk/src/client.ts:122`, `sdk/src/client.ts:130`, `sdk/src/__tests__/parity.test.ts:248`, `sdk/src/__tests__/parity.test.ts:296`, `sdk/src/__tests__/parity.test.ts:316`, `sdk/src/resources/webhooks.ts:181`, `sdk/src/resources/webhooks.ts:220`, `.github/workflows/ci.yml:212`, `.gitlab-ci.yml:147`
 - **Verified by:** ✓ src/__tests__/parity.test.ts (57 tests); ✓ src/__tests__/webhookResponseShape.test.ts (5 tests); ✓ src/resources/__tests__/webhooks.test.ts (9 tests); ✓ src/__tests__/webhooks.liveServer.test.ts (10 tests) — 2026-08-16 […]
 
-### W6-R31 — ASSUMED
+### W6-R31 — PARTIAL
 **Brief says:** "ShipClient.authorizationCodeFlow() and ShipClient.deviceLogin() handle their flows end-to-end. Pluggable ITokenStore (in-memory, file, browser localStorage)."
 
 **In plain English:** The SDK must run both login flows end-to-end (device login for CLIs, PKCE code flow for browsers) and let callers plug in where tokens are kept — memory, a file, or browser localStorage. Both flows are static methods on ShipClient (sdk/src/client.ts), the ITokenStore interface plus MemoryTokenStore and FileTokenStore ship in the SDK, and a LocalStorageTokenStore is implemented in the browser demo (integrations/browser-demo). TRO-418 delivered the flows/stores; TRO-600 made the file store's write crash-safe. Today's CI run shows all the flow and store tests passing.
 
 - **Tickets:** TRO-418, TRO-600, TRO-425, TRO-449
 - **Evidence:** `sdk/src/client.ts:186`, `sdk/src/client.ts:222`, `sdk/src/deviceLogin.ts:188`, `sdk/src/deviceLogin.ts:219`, `sdk/src/authorizationCodeFlow.ts:218`, `sdk/src/tokenStore.ts:45`, `sdk/src/tokenStore.ts:56`, `sdk/src/fileTokenStore.ts:112`, `sdk/src/fileTokenStore.ts:169`, `sdk/src/fileTokenStore.ts:181`, `integrations/browser-demo/src/localStorageTokenStore.ts:25`, `sdk/src/tokenStore.test.ts:155`, `sdk/src/__tests__/client.deviceLogin.liveServer.test.ts:46`
-- **Traced under assumption (ruling pending):** Traced under the reading that 'Pluggable ITokenStore (in-memory, file, browser localStorage)' obliges the SDK to define the pluggable interface and the repo to contain working implementations of all three, not that all three must be exported from the @ship/sdk package itself. Under that reading: VER […]
-- **Delta vs 08-16 sweep:** VERIFIED → ASSUMED
+- **Interpretation:** I-06
+- **Smallest change that would close it:** Export a browser-safe LocalStorageTokenStore from @ship/sdk (move/duplicate integrations/browser-demo/src/localStorageTokenStore.ts into sdk/src/, export from the browser barrel; browser-demo imports it from the SDK). ~20 min + a unit test; parity/size gates unaffected (zero deps).
+- **Delta vs 08-16 sweep:** VERIFIED → PARTIAL
 
 ### W6-R32 — VERIFIED
 **Brief says:** "for await (const doc of client.documents.iterate()) walks pages transparently. Cursors handled internally; consumer code never sees them."
@@ -315,16 +317,16 @@
 - **Evidence:** `api/src/platform/ratelimit/middleware.ts:21`, `api/src/platform/ratelimit/middleware.ts:131`, `api/src/platform/ratelimit/middleware.ts:171`, `api/src/platform/ratelimit/middleware.ts:202`, `api/src/middleware/rate-limit.ts:212`
 - **Verified by:** test.log:17974 ✓ ratelimit/middleware.test.ts (9 tests, incl. '429s with Retry-After once the per-token bucket is exhausted' l.143); :18249 ✓ tokenBucket.test.ts (11, injected FakeClock); :18280 ✓ config.test.ts (5); :16 […]
 
-### W6-R36 — ASSUMED
+### W6-R36 — PARTIAL
 **Brief says:** "Every public API call recorded with timestamp, app client_id, user_id, route, scope used, status, latency. Queryable in the developer portal."
 
 **In plain English:** Every public API call must be logged (who, which app, which route, scope, status, how long) and be lookable-up in the developer portal. The logging table, the recording middleware, the admin-only GET /api/v1/audit endpoint and an SDK client all exist and their tests passed this sweep (TRO-432/PF-501). What is missing is the portal part: the developer portal (TRO-436/439) has only Apps and Webhooks pages and never calls the audit endpoint, so an admin cannot browse the API audit trail in the UI today.
 
 - **Tickets:** TRO-432, TRO-436, TRO-439, TRO-443
 - **Evidence:** `api/src/db/migrations/049_public_api_audit.sql:40`, `api/src/platform/audit/middleware.ts:111`, `api/src/platform/api/v1/resources/audit.ts:89`, `sdk/src/resources/audit.ts:68`, `web/src/contexts/DeveloperPortalContext.tsx:35`, `web/src/components/sidebars/DeveloperSidebar.tsx:21`
-- **Traced under assumption (ruling pending):** 'Queryable in the developer portal' means a web UI view under /developer/* that reads public_api_audit rows, not merely an admin-scoped API endpoint the portal token could call.
-- **Smallest change that would close it:** Add an 'Audit' page under /developer/* (DeveloperSidebar DEVELOPER_NAV entry) that calls GET /api/v1/audit via usePortalToken().callV1 with cursor pagination and an app_client_id filter; the portal token already carries audit:read (DeveloperPortalContext.tsx:35). Add an RTL test + optional e2e. Ticket needed — none exists.
-- **Delta vs 08-16 sweep:** IMPLEMENTED-UNVERIFIED → ASSUMED
+- **Interpretation:** I-05
+- **Smallest change that would close it:** Add an Audit page under /developer/* (DeveloperSidebar DEVELOPER_NAV entry) that calls GET /api/v1/audit via usePortalToken().callV1 with cursor pagination and an app_client_id filter; portal token already carries audit:read (DeveloperPortalContext.tsx:35). RTL test + optional e2e. No ticket exists — PM GO item 5.
+- **Delta vs 08-16 sweep:** IMPLEMENTED-UNVERIFIED → PARTIAL
 
 ### W6-R37 — VERIFIED
 **Brief says:** "In-app UI for: listing apps, registering apps, viewing/rotating client_secret (shown once), managing subscriptions, browsing the delivery log, replaying failed deliveries."
@@ -470,7 +472,8 @@
 
 - **Tickets:** TRO-438, TRO-455
 - **Evidence:** `api/src/platform/webhooks/deliverer.ts:694`, `api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:770`, `scripts/drill/ttfe.ts:498`, `scripts/drill/ttfe.config.json:9`, `scripts/drill/thresholds.ts:18`, `.github/workflows/ci.yml:418`
-- **Smallest change that would close it:** Assert the target: lower ttfe.config.json's wait_for_delivery stage ceiling to 2000 ms (a per-run max — strictly stronger than P95 — noting the deliverer's 1 s poll interval sits inside that stage), or add a dedicated first_delivery_latency_ms check; optionally aggregate wait_for_delivery across recent drill-ttfe CI runs to report an actual P95. Small ticket, scripts/drill/ only.
+- **Interpretation:** I-08
+- **Smallest change that would close it:** Compute and assert a real P95: (1) record wait_for_delivery ms per drill run as a CI artifact/output; (2) a small script (scripts/drill/p95.mjs, gh-fed or artifact-fed) that aggregates the last ≥20 drill-ttfe runs and fails if P95 ≥ 2000 ms; run it in the drill-ttfe job. Per-run ceilings alone do not satisfy the face-value P95 target (I-08).
 - **Delta vs 08-16 sweep:** VERIFIED → PARTIAL
 
 ### W6-R53 — VERIFIED
@@ -491,16 +494,15 @@
 - **Evidence:** `api/src/platform/api/v1/__tests__/route-fitness.test.ts:402`, `api/src/platform/api/v1/router.ts:88`, `api/src/platform/ratelimit/__tests__/middleware.test.ts:143`
 - **Verified by:** test.log:17973 ✓ route-fitness.test.ts (126 tests incl. check (e) per route); :17974 ✓ ratelimit/middleware.test.ts (9 tests) \| local vitest this sweep: api/src/platform/api/v1/__tests__/route-fitness.test.ts ✓; api/src […]
 
-### W6-R55 — ASSUMED
+### W6-R55 — PARTIAL
 **Brief says:** "CLI drill harness: pnpm drill ttfe runs the full loop end-to-end against a containerized Ship instance from a clean working directory."
 
 **In plain English:** The brief wants a `pnpm drill ttfe` command that runs the whole loop against a containerized Ship from a clean working directory. The command exists and runs the loop (TRO-455); the SDK is installed into a fresh throwaway directory; the database is a container (CI service container, or Docker testcontainers locally). What is arguable is 'containerized Ship instance': the Ship API process itself is started from the source checkout with tsx, never from a container image, in both paths. Whether database-in-a-container plus a real API process meets the wording is a call for the maintainer.
 
 - **Tickets:** TRO-455
 - **Evidence:** `package.json:36`, `scripts/drill/run.ts:13`, `scripts/drill/ttfe.ts:349`, `scripts/drill/ttfe.ts:386`, `scripts/drill/ttfe.ts:390`, `scripts/drill/ttfe.ts:186`, `.github/workflows/ci.yml:440`, `.gitlab-ci.yml:244`
-- **Traced under assumption (ruling pending):** Traced under the STRICT reading: 'containerized Ship instance' means the Ship API runs from a container image, which the drill never does — hence PARTIAL. Under the lenient reading (Postgres in a container + the real API process from the checkout, SDK installed into a clean directory) the row would  […]
-- **Smallest change that would close it:** If the strict reading holds: add an opt-in `DRILL_TTFE_API_IMAGE=<ghcr image>` path in scripts/drill/ttfe.ts that starts the built Ship image via testcontainers' GenericContainer instead of spawning tsx (GitHub Actions only — GitLab's shared runner cannot start containers, per .gitlab-ci.yml:233-241), and run it in ci.yml's drill-ttfe job. Otherwise: record an interpretation and close.
-- **Delta vs 08-16 sweep:** PARTIAL → ASSUMED
+- **Interpretation:** I-07
+- **Smallest change that would close it:** Add an opt-in DRILL_TTFE_API_IMAGE=<ghcr image> path in scripts/drill/ttfe.ts that starts the built Ship image via testcontainers GenericContainer instead of spawning tsx, and run it in ci.yml's drill-ttfe job (GitHub only — GitLab's shared runner cannot start containers, .gitlab-ci.yml:233-241). Image already built by ci.yml:597 build-image. 2–3 h.
 
 ### W6-R56 — VERIFIED
 **Brief says:** "Timing instrumentation: each stage of the drill (install, login, register subscription, create document, receive webhook, verify signature) records elapsed milliseconds."
@@ -574,7 +576,6 @@
 - **Tickets:** TRO-434, TRO-440, TRO-399
 - **Evidence:** `docs/submission/PF-905-AI-COST-ANALYSIS.md:17`, `docs/submission/PF-905-AI-COST-ANALYSIS.md:34`, `api/src/services/ai-analysis.ts:13`, `docs/submission/PF-704-COST-LEDGER-DELTA.md:69`, `agent/cost-ledger-snapshot.jsonl:1`, `api/src/__tests__/pf905CostAnalysisDocSections.test.ts:63`
 - **Verified by:** Zero LLM-client imports under api/src/platform (the W6 platform layer). The whole api package has no anthropic/openai/langchain dependency; its single LLM call site is the pre-existing Bedrock plan/retro scorer in api/sr […]
-- **Traced under assumption (ruling pending):** 'the platform itself' = the W6 platform layer under api/src/platform (per inventory meaning), not every route in the Ship API.
 - **Delta vs 08-16 sweep:** IMPLEMENTED-UNVERIFIED → VERIFIED
 
 ### W6-R64 — PARTIAL
@@ -632,7 +633,6 @@
 - **Tickets:** TRO-399, TRO-448, TRO-500, TRO-496
 - **Evidence:** `pnpm-workspace.yaml:7`, `scripts/check-integration-deps.mjs:44`, `scripts/check-integration-deps.mjs:52`, `scripts/__tests__/check-integration-deps.test.mjs:47`, `scripts/__tests__/check-integration-deps.test.mjs:128`, `.github/workflows/ci.yml:118`, `.github/workflows/ci.yml:124`, `.gitlab-ci.yml:97`, `scripts/factory/gate.sh:285`, `integrations/cli/package.json:23`, `integrations/slack/package.json:16`, `integrations/browser-demo/package.json:15`, `integrations/slack/scripts/build.mjs:4`, `CHANGES.md:2707`, `PLUGFORGE.MD:220`
 - **Verified by:** Real tree: 'check-integration-deps: OK — 3 package(s) checked (browser-demo, cli, slack), all depend only on @ship/sdk.' exit 0. node:test: 10 pass / 0 fail. Scratch violation: 'FAIL — 1 runtime-dependency violation(s) f […]
-- **Traced under assumption (ruling pending):** 'import only @ship/sdk — never api/src/' is read as forbidding Ship-internal imports other than the SDK (api/src, shared/src, web/src), not as forbidding third-party plumbing packages like commander/express, which PLUGFORGE PF-600 explicitly allows.
 - **Delta vs 08-16 sweep:** IMPLEMENTED-UNVERIFIED → VERIFIED
 
 ### W6-R70 — VERIFIED
