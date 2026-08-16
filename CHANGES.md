@@ -65,6 +65,142 @@ Real run in the factory worktree: `wait_for_delivery: 194ms`, `tamper_reject: 0m
 
 ---
 
+## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
+
+**What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:
+'invalid_grant'` for three different rejection reasons (unknown token, expired token, reused/stolen
+token) — the enum is closed, so a new top-level value would be a spec-breaking, externally-visible
+contract change. Added an **additive**, non-RFC `error_details: { reason }` field alongside the
+existing `error`/`error_description` — never replacing either — populated only for the three
+refresh-token-specific rejection branches this ticket is about:
+
+- `api/src/platform/oauth/token.ts` — new `RefreshTokenErrorReason` type (`'token_unknown' |
+  'token_expired' | 'token_reused'`), `TokenGrantResult`'s error variant gains an optional
+  `errorDetails` field, `invalidGrant()` takes an optional second argument. Populated at
+  `rotateRefreshToken`'s three relevant call sites (unknown lookup, already-revoked-on-first-read,
+  and the atomic-UPDATE-lost-the-race branch — the last two both mean "reused," matching the
+  module's own documented "same outward behavior, deliberately" reasoning for those two paths).
+  **Deliberately not touched:** the authorization-code grant's own `invalidGrant` calls, and the
+  refresh grant's "wrong client" rejection — none of those are one of the three reasons this ticket
+  scopes.
+- `api/src/routes/oauth-token.ts` — `sendTokenError` takes an optional `details` parameter, only
+  emits `error_details` in the JSON body when present. Every existing call site that never had a
+  reason keeps sending the unmodified RFC 6749 §5.2 shape.
+
+**Regression tests.** Two changes:
+1. Extended `refresh-rotation-stolen-token.test.ts`'s existing reuse assertion (the file whose own
+   header previously documented "no machine-readable discriminator exists, only `error_description`
+   text" as a deliberate, still-open choice — that header is updated to reflect this ticket closing
+   the gap) with `expect(...).error_details?.reason).toBe('token_reused')`.
+2. New `it()` in `token.test.ts`'s "refresh_token grant — other negative cases" — one focused test
+   hitting all three reasons (`token_unknown`/`token_expired`/`token_reused`) back to back, isolated
+   from the narrated stolen-token story, and asserting the RFC `error`/`error_description` fields
+   are unchanged alongside the new one.
+
+**Confirmed red before green:** temporarily reverted the `{ reason: 'token_reused' }` argument at
+the reuse call site — real `AssertionError`, `Expected: "token_reused"` / `Received: undefined`, not
+an import/typo error. Restored; 34/34 tests in both `token.test.ts` and
+`refresh-rotation-stolen-token.test.ts` pass.
+
+**Not done (per the ticket's own "not verified" note, still true):** no SDK/portal consumer was
+wired up to read `error_details.reason` — this ticket adds the server-side field, per its own
+"Candidate fix" scope; whether any consumer needs it programmatically vs. `error_description`
+text-matching being sufficient remains unverified, as the ticket itself flagged going in.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts src/platform/oauth/__tests__/token.test.ts
+```
+
+**Roll back.** Revert this commit. Changes are localized to `api/src/platform/oauth/token.ts`,
+`api/src/routes/oauth-token.ts`, `api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts`.
+Purely additive (a new optional field, populated at 3 call sites) — no RFC-shaped field changed, so
+reverting has no effect on any client that never reads `error_details`.
+
+---
+
+## TRO-589 — Device-grant `user_code` stored plaintext, not hashed
+
+**Root cause.** `oauth_device_codes.device_code_hash` (the machine-held device_code) has always
+been SHA-256-hashed at rest (`hashDeviceCode`/`hashToken`, `api/src/platform/oauth/device.ts`).
+`user_code` — the human-typed 8-char verification code, same table, same migration (043) — was
+written to the database as plaintext: `createDeviceCode`'s `INSERT` bound the raw generated code
+directly, and `lookupDeviceCodeByUserCode`'s `SELECT ... WHERE user_code = $1` compared against it
+directly. Found by TRO-425's own landing agent's security self-review. Low severity as-found:
+device codes expire in `DEVICE_CODE_TTL_MS` (10 min), and a leaked `user_code` alone cannot
+complete the flow without a live, session-authenticated `/oauth/device/verify` approval — but it
+didn't satisfy a "hashed or not trivially guessable from DB" bar.
+
+**The fix.** `api/src/platform/oauth/device.ts` — mirrors the existing `device_code_hash` pattern
+exactly:
+
+- New `hashUserCode(raw): string` (SHA-256 hex via the same `hashToken` from `token.ts` that
+  `hashDeviceCode` already uses) — deterministic, so a lookup by the value a human typed still
+  works, it just hashes first.
+- `createDeviceCode`'s `INSERT` now binds `hashUserCode(userCode)` instead of the raw `userCode`.
+  The function's RETURN VALUE is unchanged — the caller (and the human who reads/types the code)
+  still sees the real plaintext code. Nothing about what the user sees or types changed; only what
+  lands in the database changed.
+- `lookupDeviceCodeByUserCode` now hashes its input (the already-`normalizeUserCode`-normalized
+  plaintext from `decideDeviceCode`) before the `SELECT ... WHERE user_code = $1` comparison.
+- `DeviceCodeRow.user_code`'s doc comment updated to state it now holds a hash, not plaintext,
+  despite the unchanged column name (see below).
+
+**Migration: none needed.** `oauth_device_codes.user_code` is `TEXT NOT NULL`
+(`api/src/db/migrations/043_oauth_tokens_and_codes.sql:99`) — no `VARCHAR(N)` length constraint.
+**Observed**, not assumed: queried `information_schema.columns` directly against this worktree's
+own database (`data_type: 'text'`, `character_maximum_length: null`), and separately confirmed
+migrations 043 and 046 are both applied (`schema_migrations` has both version rows) — so this
+database's `oauth_device_codes` shape matches the migration file read. A 64-char SHA-256 hex
+digest fits a `TEXT` column with no widening required. The existing `idx_oauth_device_codes_user_code`
+unique index is unaffected — it still enforces uniqueness, just over hash values instead of
+plaintext values, which is exactly as meaningful (SHA-256 collisions are not a realistic concern
+at this table's scale, same posture already accepted for `device_code_hash`'s own unique index).
+
+**Deliberately NOT done: renaming the `user_code` column to `user_code_hash`.** Would be the more
+self-documenting name (matching `device_code_hash`'s own naming), but renaming an existing column
+requires its own migration (`ALTER TABLE ... RENAME COLUMN`) and isn't required to close this
+finding — the severity was already low, and the ticket's own scope was "hash the value," not
+"rename the column." Documented at length in-code (`device.ts`'s `hashUserCode` and
+`DeviceCodeRow.user_code` doc comments) so a future reader isn't misled by the column name alone.
+If a future ticket wants the rename for consistency, it's a small, isolated follow-up.
+
+**Regression test.** `api/src/platform/oauth/__tests__/device.test.ts`, new `describe('TRO-589:
+user_code is hashed at rest')` block: issues a real device code via `POST /oauth/device/code`,
+then queries `oauth_device_codes` directly by `device_code_hash` (bypassing this module's own
+lookup helpers, which would trivially "pass" either way) and asserts the stored `user_code`
+column value (a) is not equal to the plaintext code returned to the client, (b) is exactly
+`sha256(plaintext).hex()`, and (c) is a 64-char hex string — then proves the hash still resolves
+correctly by submitting the plaintext code to `/oauth/device/verify` and confirming a real
+`approved` redirect.
+
+**Observed red-before-green, not assumed:** reverted only `device.ts` to its pre-fix `HEAD` state
+(`git checkout -- api/src/platform/oauth/device.ts`, leaving the new test in place) and ran the
+test — it failed with `AssertionError: expected 'H9GR-7BL8' not to be 'H9GR-7BL8'` (the DB
+literally held the human-readable code). Re-applied the fix; the same test then passed, along with
+all 9 pre-existing tests in the file (10/10) and all 7 pre-existing tests in
+`api/src/db/__tests__/migrations-042-043.test.ts` (index-shape assertions unaffected by content
+change).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/device.test.ts
+```
+
+**Roll back.** Revert this commit. No migration was added, so there is no down-path to run —
+reverting `api/src/platform/oauth/device.ts` and the test file returns `user_code` storage to
+plaintext with no schema cleanup needed (the column's `TEXT` type and unique index are unchanged
+either way). Any rows written while this fix was live will have hashed `user_code` values; a
+revert makes those existing hashed rows permanently unusable for the (already-consumed-or-expired,
+10-minute-TTL) verify lookup — not a concern in practice given the TTL, but noted for completeness
+since a migration-less code revert cannot un-hash already-written data.
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
