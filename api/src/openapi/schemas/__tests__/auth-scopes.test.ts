@@ -10,31 +10,52 @@
  * (both response sites in `api-tokens.ts` always emit it, as array or null).
  */
 import { describe, it, expect } from 'vitest';
+import type { OpenAPIObject, SchemaObject } from 'openapi3-ts/oas30';
 import { generateOpenAPIDocument } from '../../index.js';
 import { ScopeRegistry } from '../../../platform/scopes/registry.js';
 
+// Typed accessors instead of an untyped cast (review-patterns gate, TS-7/TS-8):
+// `components.schemas[name]` and `properties[prop]` are typed as
+// `SchemaObject | ReferenceObject`; a `$ref` here would be a real regression
+// (the schemas under test are registered inline), so it fails loudly.
+function schemaOf(doc: OpenAPIObject, name: string): SchemaObject {
+  const s = doc.components?.schemas?.[name];
+  if (!s || '$ref' in s) throw new Error(`components.schemas.${name} missing or a $ref`);
+  return s;
+}
+function propOf(schema: SchemaObject, prop: string): SchemaObject {
+  const p = schema.properties?.[prop];
+  if (!p || '$ref' in p) throw new Error(`property ${prop} missing or a $ref`);
+  return p;
+}
+function itemsOf(schema: SchemaObject): SchemaObject {
+  const i = schema.items;
+  if (!i || '$ref' in i) throw new Error('items missing or a $ref');
+  return i;
+}
+
 describe('TRO-491: OpenAPI scopes enum derived from ScopeRegistry', () => {
   it('CreateAPIToken.scopes items enum equals ScopeRegistry.names()', () => {
-    const doc = generateOpenAPIDocument() as any;
-    expect(doc.components.schemas.CreateAPIToken.properties.scopes.items.enum).toEqual(
-      ScopeRegistry.names()
-    );
+    const doc = generateOpenAPIDocument();
+    const scopes = propOf(schemaOf(doc, 'CreateAPIToken'), 'scopes');
+    expect(itemsOf(scopes).enum).toEqual(ScopeRegistry.names());
     // Guards against a vacuous empty enum trivially satisfying the assertion above.
     expect(ScopeRegistry.names().length).toBeGreaterThanOrEqual(7);
   });
 
   it('APIToken.scopes items enum equals ScopeRegistry.names() and is required-nullable', () => {
-    const doc = generateOpenAPIDocument() as any;
-    expect(doc.components.schemas.APIToken.properties.scopes.items.enum).toEqual(
-      ScopeRegistry.names()
-    );
-    expect(doc.components.schemas.APIToken.properties.scopes.nullable).toBe(true);
-    expect(doc.components.schemas.APIToken.required).toContain('scopes');
+    const doc = generateOpenAPIDocument();
+    const apiToken = schemaOf(doc, 'APIToken');
+    const scopes = propOf(apiToken, 'scopes');
+    expect(itemsOf(scopes).enum).toEqual(ScopeRegistry.names());
+    expect(scopes.nullable).toBe(true);
+    expect(apiToken.required).toContain('scopes');
   });
 
   it('enum is derived, not a second copy', () => {
-    const doc = generateOpenAPIDocument() as any;
-    expect(new Set(doc.components.schemas.CreateAPIToken.properties.scopes.items.enum)).toEqual(
+    const doc = generateOpenAPIDocument();
+    const scopes = propOf(schemaOf(doc, 'CreateAPIToken'), 'scopes');
+    expect(new Set(itemsOf(scopes).enum)).toEqual(
       new Set(ScopeRegistry.list().map((s) => s.name))
     );
   });
