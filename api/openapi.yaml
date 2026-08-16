@@ -2864,7 +2864,18 @@ components:
           nullable: true
           items:
             type: string
-          description: "Scopes granted to this token (e.g. \"documents:read\"). Null = legacy unscoped token, never valid at /api/v1."
+            enum:
+              - "documents:read"
+              - "documents:write"
+              - "issues:read"
+              - "issues:write"
+              - "sprints:read"
+              - "sprints:write"
+              - "webhooks:manage"
+              - "audit:read"
+            description: A scope name registered in ScopeRegistry.
+            example: "documents:read"
+          description: Scopes granted to this token. Null = legacy unscoped token, never valid at /api/v1.
           example:
             - "documents:read"
       required:
@@ -2874,6 +2885,7 @@ components:
         - last_used_at
         - created_at
         - expires_at
+        - scopes
     CreateAPIToken:
       type: object
       properties:
@@ -2892,6 +2904,17 @@ components:
           type: array
           items:
             type: string
+            enum:
+              - "documents:read"
+              - "documents:write"
+              - "issues:read"
+              - "issues:write"
+              - "sprints:read"
+              - "sprints:write"
+              - "webhooks:manage"
+              - "audit:read"
+            description: A scope name registered in ScopeRegistry.
+            example: "documents:read"
           minItems: 1
           description: "Scopes to grant this token, from ScopeRegistry (e.g. \"documents:read\"). Omit for a legacy unscoped token — never valid at /api/v1."
           example:

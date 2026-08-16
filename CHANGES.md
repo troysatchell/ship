@@ -6,6 +6,57 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-491 — OpenAPI scopes enum derived from ScopeRegistry; APIToken.scopes required-nullable
+
+**Observed, not inferred.** `api/openapi.json` (before this change, lines ~3679-3690 and
+~3716-3725) typed `CreateAPIToken.scopes` and `APIToken.scopes` items as `{"type": "string"}` with
+no `enum` — free-form strings — even though the runtime accepts only names registered in
+`ScopeRegistry` (`api/src/platform/scopes/registry.ts`), enforced by `api/src/routes/api-tokens.ts`'s
+`scopeSchema` zod refine. Separately, `APIToken.required` did not list `"scopes"`, even though both
+response sites that build an `APIToken` (`api/src/routes/api-tokens.ts:112` and `:150`) always emit
+the `scopes` key (array or `null`) — never omit it.
+
+**Decision (made by the orchestrator, not re-litigated here): derive, don't copy.**
+`api/src/openapi/schemas/auth.ts` now imports `ScopeRegistry` and builds a shared `ScopeNameSchema
+= z.enum(ScopeRegistry.names())` at module load, used by both `APITokenScopesSchema` (nullable
+array) and `CreateAPITokenSchema.scopes`. `registry.ts` has zero imports and registers all 8 scopes
+at the bottom of the file at load time, so importing it guarantees `names()` is complete by the time
+`auth.ts` evaluates — a hand-copied enum list was rejected because it would be a second source of
+truth free to drift from the registry (the exact failure mode TRO-430's registry work was built to
+prevent). A defensive `if (scopeNames.length === 0) throw` guards against a silent empty enum if
+import order ever regresses. Runtime enforcement is untouched — `api/src/routes/api-tokens.ts`'s
+`scopeSchema` refine still does the actual rejection; this change only makes the *documented* shape
+match what the route already enforced.
+`APITokenSchema.scopes` changed from `APITokenScopesSchema.optional()` to `APITokenScopesSchema`
+(required-nullable), matching the two response sites confirmed above by reading the route file.
+
+**Regression test, red before green (observed).** New file
+`api/src/openapi/schemas/__tests__/auth-scopes.test.ts`, 3 cases: `CreateAPIToken.scopes`
+items-enum equals `ScopeRegistry.names()` (plus a `length >= 7` guard against a vacuous empty-enum
+pass), `APIToken.scopes` items-enum equals `ScopeRegistry.names()` and `scopes` is both `nullable`
+and in `required`, and the enum is a genuine derivation (`Set` equality against
+`ScopeRegistry.list().map(s => s.name)`), not a second literal copy. Ran before the fix: all 3
+failed with `expected undefined to deeply equal [...]` (`items.enum` didn't exist yet). Ran after:
+all 3 pass.
+
+**How to verify.**
+```bash
+source .factory-env
+pnpm --filter @ship/api vitest run src/openapi/schemas/__tests__/auth-scopes.test.ts
+pnpm --filter @ship/api vitest run src/openapi src/routes/api-tokens.test.ts src/swagger.test.ts
+pnpm --filter @ship/api openapi:generate   # observed idempotent: ran twice, second run produced no further diff
+```
+`pnpm type-check` was run from repo root: the `api` package (and `shared`, `sdk`, `agent`) type-check
+clean. `integrations/browser-demo` fails with `Cannot find module '@ship/sdk'` — observed pre-existing
+and unrelated: `sdk/dist` does not exist in this worktree (the `sdk` package hasn't been built), and
+this change touches nothing under `sdk/` or `integrations/`. Confirmed by also running
+`pnpm --filter @ship/api type-check` alone, which is clean.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit touching `api/src/openapi/schemas/auth.ts`,
+the new test file, and the regenerated `api/openapi.json`/`api/openapi.yaml`).
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
