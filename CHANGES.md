@@ -57,6 +57,226 @@ the new test file, and the regenerated `api/openapi.json`/`api/openapi.yaml`).
 
 ---
 
+## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes
+
+**Non-code / CI-config ticket — `terraform validate`-style proof, not vitest** (same disclosed-exception
+class as TRO-488/TF-1..TF-10: no unit test can exercise a GitHub Actions CodeQL config, so the proof is
+static verification of the config plus confirmation against the *live* alerts it addresses).
+
+**What was flagged.** `api/src/platform/oauth/__tests__/device.test.ts:51` defines `introspectionApp`, a
+scratch `express()` instance created purely to mount the real `bearerAuth` middleware and prove it works
+(`GET /scratch-protected`) — never imported by `api/src/app.ts`, never reachable in production. CodeQL's
+`js/missing-rate-limiting` query has no way to distinguish a test fixture from a real route and flagged it
+as an unprotected production endpoint. Same blind-spot class TRO-307 already documented for this query.
+
+**Verified beyond the ticket's own claim, not just trusted.** Pulled the live open alerts via
+`gh api code-scanning/alerts` rather than assuming the ticket's one cited instance was the only one:
+found **5** open alerts rooted in the same "CodeQL treats test helper code as production" pattern, not 1:
+- `#371` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/device.test.ts:51` (the ticket's
+  own citation).
+- `#369` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/token.test.ts:61`, an identical
+  scratch-app pattern the ticket didn't mention.
+- `#4`/`#5` `js/incomplete-multi-character-sanitization` — `web/src/components/editor/lowlight.test.ts:176,191`,
+  a naive `html.replace(/<[^>]*>/g, '')` used only to strip markup for a test assertion, not shipped
+  sanitization logic. Read in full before including in scope.
+- `#6` `js/incomplete-sanitization` — `web/src/lib/radixVersionDedupe.test.ts:47`, a regex parsing
+  `pnpm-lock.yaml` inside a test helper, not user input handling. Also read in full before including.
+
+All five are the same root cause (test/fixture code scanned as if it were production surface), so the fix
+is scoped to test-file paths generally — as the ticket's own suggested fix asked for — rather than only
+the one file it cited, since a file-by-file allowlist would leave every *future* scratch test app hitting
+this again.
+
+**Fix.** New `.github/codeql/codeql-config.yml` (didn't exist before — repo had no CodeQL config file,
+only workflow-inline `init`/`analyze` steps) with `paths-ignore: ['**/__tests__/**', '**/*.test.ts',
+'**/*.test.tsx']`. Wired in via `config-file:` on the existing `Initialize CodeQL` step in
+`.github/workflows/ci.yml` (`codeql` job) — one line added, nothing else in that job changed.
+
+**Verification.**
+- `python3 -c "import yaml; yaml.safe_load(...)"` — both the new config file and the edited
+  `ci.yml` parse as valid YAML.
+- Confirmed the three glob patterns actually match all 5 flagged files (`__tests__/` directory segment
+  or a `.test.ts`/`.test.tsx` suffix) and do not match any production entry point — `api/src/app.ts`
+  mounts none of `bearerAuth`'s test-only callers, confirmed via `grep` for `scratch-protected`/
+  `introspectionApp` returning zero hits outside the test file.
+- Cannot run CodeQL's actual analysis locally (GitHub-hosted action, no local CLI in this repo's
+  toolchain) — the real green/red proof is the next `security scan (CodeQL)` run on this PR's own CI,
+  which analyzes this exact config. Flagging this limitation rather than asserting local verification
+  that didn't happen.
+
+**Scope note.** Did not dismiss alerts `#371`/`#369`/`#4`/`#5`/`#6` via the API (the TRO-587/TRO-492
+precedent for confirmed false positives) — excluding the paths going forward is the ticket's actual ask;
+whether GitHub auto-resolves the existing alert records once the paths stop being analyzed, or whether
+they need a manual dismissal pass, is not yet observed and is worth a fast follow-up if they don't
+clear on their own after this merges.
+
+**Rollback.** Revert this commit — deletes `.github/codeql/codeql-config.yml` and the `config-file:`
+line in `ci.yml`; CodeQL returns to scanning every path, including test fixtures.
+
+---
+
+## TRO-614 — `OrgChartPage.test.tsx`'s "renders each person..." race, confirmed on 2 unrelated CI runs
+
+**What was broken.** `web/src/pages/OrgChartPage.tsx:229-230` sets its default-expanded tree state
+in a *second*, separate `useEffect` that only fires after the fetch-driven first effect has already
+rendered the tree with `expandedIds` empty. `OrgChartPage.test.tsx`'s `"renders each person..."`
+test (line 125) did `const tree = await screen.findByRole('tree', ...)` — correctly async, waits
+for the tree container — then immediately did a **synchronous** `within(tree).getByRole('treeitem',
+{ name: /Grace Hopper/ })`. Grace is a level-2 (nested) child, only present in the flattened rows
+after the second effect auto-expands the tree. `findByRole('tree', ...)` can resolve on the very
+first, collapsed render — before React flushes the second effect — so the synchronous query for
+Grace's row raced it. Confirmed as a real, pre-existing, CI-timing-sensitive defect (not local
+machine contention): two completely unrelated PRs tonight (TRO-589, oauth-only; TRO-488,
+terraform-only — neither touches `web/`) both hit this exact failure on isolated GitHub Actions
+runners, while passing 100% of the time locally. Root-caused via the failing CI run's own
+downloaded `web-tests.json` artifact and captured DOM snapshot (only Ada/Bob rendered, both
+level-1; Grace's `<li>` entirely absent) — not guessed.
+
+**What changed.** `web/src/pages/OrgChartPage.test.tsx` — replaced the synchronous `getByRole` for
+Grace with `await within(tree).findByRole('treeitem', { name: /Grace Hopper/ })`, moved before the
+`ada`/`bob` lookups. Grace is the deepest node under test, so awaiting her presence proves the
+auto-expand effect has already flushed before the rest of the test's synchronous assertions run.
+No product code changed — `OrgChartPage.tsx` itself is untouched; the two-effect split may still be
+worth simplifying later, but the test fix alone resolves the flake.
+
+**Proof.** Can't reproduce GitHub Actions' exact timing locally, so repetition is the best local
+proxy: `cd web && npx vitest run src/pages/OrgChartPage.test.tsx` run **5 times consecutively**,
+5/5 clean (all 5 tests in the file, including the previously-racing one). Full `pnpm --filter
+@ship/web test` also green. **Gate exception, disclosed:** the `regression-test` check looks for a
+newly-added test case; this ticket hardens an *existing* test's timing rather than adding coverage,
+so no new `it(...)` block was added — same class of accepted exception as this project's
+terraform-only tickets (proof is repetition-based, not a new assertion count).
+
+**How to run it.**
+```bash
+cd web && npx vitest run src/pages/OrgChartPage.test.tsx
+```
+
+**Roll back.** Revert this commit — reverts the test to its prior synchronous-query form, which is
+correct but timing-fragile under GitHub Actions specifically (not observed to fail locally).
+
+---
+
+## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
+
+**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
+keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
+Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
+the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
+`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
+(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
+combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
+composite index has to match that whole shape, not just the two cursor columns. Read
+`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
+`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
+'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
+`document_type = 'sprint'` combined with `workspace_id`.
+Added migration `052_documents_workspace_type_created_at_index.sql`:
+`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
+created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
+endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
+every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
+
+**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
+35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
+way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
+large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
+sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
+afterward) to get a plan that actually distinguishes the two states. Before the index:
+- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
+- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
+- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
+
+After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
+re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
+an ad hoc index, produces the win):
+- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
+- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
+  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
+- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
+
+Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
+stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
+scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
+index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
+re-sorts every not-yet-returned row of that type in the workspace.
+
+**How to run it.**
+```bash
+FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
+```
+To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
+large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
+one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
+to show the effect), then run
+`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
+'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
+worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
+Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
+with no `Sort` node.
+
+**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
+schema object with no dependents (nothing else references it by name), so dropping it is a full,
+clean revert. No data was changed by this migration; only the index needs removing.
+
+---
+
+## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
+
+**What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:
+'invalid_grant'` for three different rejection reasons (unknown token, expired token, reused/stolen
+token) — the enum is closed, so a new top-level value would be a spec-breaking, externally-visible
+contract change. Added an **additive**, non-RFC `error_details: { reason }` field alongside the
+existing `error`/`error_description` — never replacing either — populated only for the three
+refresh-token-specific rejection branches this ticket is about:
+
+- `api/src/platform/oauth/token.ts` — new `RefreshTokenErrorReason` type (`'token_unknown' |
+  'token_expired' | 'token_reused'`), `TokenGrantResult`'s error variant gains an optional
+  `errorDetails` field, `invalidGrant()` takes an optional second argument. Populated at
+  `rotateRefreshToken`'s three relevant call sites (unknown lookup, already-revoked-on-first-read,
+  and the atomic-UPDATE-lost-the-race branch — the last two both mean "reused," matching the
+  module's own documented "same outward behavior, deliberately" reasoning for those two paths).
+  **Deliberately not touched:** the authorization-code grant's own `invalidGrant` calls, and the
+  refresh grant's "wrong client" rejection — none of those are one of the three reasons this ticket
+  scopes.
+- `api/src/routes/oauth-token.ts` — `sendTokenError` takes an optional `details` parameter, only
+  emits `error_details` in the JSON body when present. Every existing call site that never had a
+  reason keeps sending the unmodified RFC 6749 §5.2 shape.
+
+**Regression tests.** Two changes:
+1. Extended `refresh-rotation-stolen-token.test.ts`'s existing reuse assertion (the file whose own
+   header previously documented "no machine-readable discriminator exists, only `error_description`
+   text" as a deliberate, still-open choice — that header is updated to reflect this ticket closing
+   the gap) with `expect(...).error_details?.reason).toBe('token_reused')`.
+2. New `it()` in `token.test.ts`'s "refresh_token grant — other negative cases" — one focused test
+   hitting all three reasons (`token_unknown`/`token_expired`/`token_reused`) back to back, isolated
+   from the narrated stolen-token story, and asserting the RFC `error`/`error_description` fields
+   are unchanged alongside the new one.
+
+**Confirmed red before green:** temporarily reverted the `{ reason: 'token_reused' }` argument at
+the reuse call site — real `AssertionError`, `Expected: "token_reused"` / `Received: undefined`, not
+an import/typo error. Restored; 34/34 tests in both `token.test.ts` and
+`refresh-rotation-stolen-token.test.ts` pass.
+
+**Not done (per the ticket's own "not verified" note, still true):** no SDK/portal consumer was
+wired up to read `error_details.reason` — this ticket adds the server-side field, per its own
+"Candidate fix" scope; whether any consumer needs it programmatically vs. `error_description`
+text-matching being sufficient remains unverified, as the ticket itself flagged going in.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts src/platform/oauth/__tests__/token.test.ts
+```
+
+**Roll back.** Revert this commit. Changes are localized to `api/src/platform/oauth/token.ts`,
+`api/src/routes/oauth-token.ts`, `api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts`.
+Purely additive (a new optional field, populated at 3 call sites) — no RFC-shaped field changed, so
+reverting has no effect on any client that never reads `error_details`.
+
+---
+
 ## TRO-589 — Device-grant `user_code` stored plaintext, not hashed
 
 **Root cause.** `oauth_device_codes.device_code_hash` (the machine-held device_code) has always

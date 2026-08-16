@@ -1,0 +1,41 @@
+-- TRO-591: composite index for keyset-paginated list queries over `documents`.
+--
+-- `api/src/platform/api/v1/pagination.ts` documents the shared keyset shape
+-- every `/api/v1` list endpoint uses: `(created_at, id)` cursor,
+-- `ORDER BY created_at DESC, id DESC`. The real query shape (verified against
+-- `resources/issues.ts`, `resources/sprints.ts`, `resources/documents.ts`) is:
+--
+--   WHERE workspace_id = $1 AND document_type = $2 AND deleted_at IS NULL
+--     [AND (created_at, id) < ($cursor.created_at, $cursor.id)]
+--   ORDER BY created_at DESC, id DESC
+--   LIMIT $n
+--
+-- No existing index matches this shape. `idx_documents_ticket_number`
+-- (038) is `(workspace_id, ticket_number) WHERE document_type = 'issue'` —
+-- usable only for the `workspace_id` equality, not the sort. No index at all
+-- covers `document_type = 'sprint'` combined with `workspace_id`.
+--
+-- EXPLAIN ANALYZE against this worktree's DB (docker `ship-postgres-1`,
+-- workspace seeded to 15,110 issues / 3,035 sprints / 2,007 wiki docs — a
+-- large-workspace volume; the ~500-doc audit-baseline volume shows no
+-- measurable difference, which is expected — the cost this index removes is
+-- proportional to how many non-returned rows exist ahead of the LIMIT):
+--
+--   issues, first page:        Seq Scan + top-N sort of 15,110 rows  →  5.408ms
+--                               Index Scan, 21 rows read              →  0.055ms
+--   issues, cursor mid-page:   Seq Scan + sort of 9,402 candidate rows → 10.468ms
+--                               Index Scan, 21 rows read               →  0.070ms
+--   sprints, first page:       Bitmap Heap Scan + sort of 3,035 rows  →  1.505ms
+--                               Index Scan, 21 rows read               →  0.048ms
+--
+-- Every case drops the `Sort` node entirely and shared buffer hits fall from
+-- 650/115 to single digits, because the LIMIT can be satisfied by walking the
+-- index in already-sorted order instead of materializing and sorting every
+-- matching row first. Full before/after output: CHANGES.md (TRO-591 entry).
+--
+-- Partial (`WHERE deleted_at IS NULL`) to match every list query's own
+-- `deleted_at IS NULL` predicate exactly, and to exclude soft-deleted rows
+-- from the index entirely (they are never part of a paginated list).
+CREATE INDEX IF NOT EXISTS idx_documents_workspace_type_created_at
+  ON documents (workspace_id, document_type, created_at DESC, id DESC)
+  WHERE deleted_at IS NULL;
