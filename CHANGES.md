@@ -6,6 +6,70 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-620 — sdk-mode `getDocument` passes content/visibility/created_by/completed_at through; token volume measured
+
+**What was broken.** OBSERVED by reading `agent/src/shipClient.ts` `getDocumentViaSdk` against
+`sdk/src/types.ts` `Document` and `api/src/platform/api/v1/resources/documents.ts`
+`serializeDocument()`: since TRO-605 the v1 route and the SDK type both carry `content`,
+`visibility`, `created_by` and `completed_at` (all four non-optional on the SDK type), but the
+agent's sdk-mode read still returned `content: null`, `visibility: 'sdk_mode_unknown'`,
+`created_by: null`, `completed_at: undefined` — the pre-TRO-605 "fail closed" synthesis. Downstream,
+`expansion.ts`'s `passesAskerVisibility` therefore rejected every fetched candidate in sdk mode
+(OBSERVED in the measurement below: `documentsPulled: 0` on every pre-fix sdk turn), so
+`AGENT_PLATFORM_MODE=sdk` chat turns reached the model with no Ship context at all — and
+`docs/submission/PF-905-AI-COST-ANALYSIS.md` §2.1 / `PF-704-COST-LEDGER-DELTA.md` still carried
+"not yet measured" / a `TODO(TRO-434)` placeholder for exactly this question.
+
+**What changed.**
+- `agent/src/shipClient.ts` — `getDocumentViaSdk` is a straight passthrough of all `ShipDocument`
+  fields from the SDK `Document`; the `SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN` sentinel is gone; the
+  module docstring's "Fields that CANNOT carry over" section now says there are none for
+  `getDocument()` as of TRO-605 (the one server-side nuance — `content` masked to `null` for a
+  private doc the caller did not create — is passed through as-is, never re-synthesized).
+- `agent/src/__tests__/shipClientParity.liveServer.test.ts` — the `getDocument` case asserts full
+  field equality between modes (red before the fix: `expected null to deeply equal { type: 'doc',
+  …}`; green after), with fixture sanity checks so the equalities cannot pass on null === null.
+- `agent/src/__tests__/shipClient.test.ts` — new unit test: sdk-mode `getDocument` passes the four
+  fields through and never touches the internal HTTP client.
+- `agent/src/scripts/measure-token-volume.ts` — new one-off utility (same posture as the
+  `trace-invoke-*.ts` siblings; not a test, spends real money): runs 3 fixed on-demand questions
+  against one seed document in whichever `AGENT_PLATFORM_MODE` is set, mirroring `index.ts`'s
+  on-demand `shipClientFactory`, and records each model call to `AGENT_COST_LEDGER_PATH`.
+- `docs/submission/cost-ledger/tro-620-{internal,sdk,sdk-before-fix}.jsonl` — the three raw
+  ledgers (9 real `claude-haiku-4-5-20251001` calls, ≈ $0.0074). Result: input tokens per turn
+  identical `internal` vs post-fix `sdk` (424/425/425 both); pre-fix `sdk` 65/66/66 (−84.5%,
+  0 docs in context). One output-token difference (Q2: 279 vs 261) on an identically-sized prompt
+  is model non-determinism, not a mode effect.
+- `docs/submission/PF-704-COST-LEDGER-DELTA.md` — new "Measured: matched workload, both modes"
+  section with the per-turn table, setup, and the two disclosed boundaries: only the `on_demand`
+  trigger was run, and the first sdk attempt hit `/api/v1`'s default `RATE_LIMIT_TOKEN_RPM=60`
+  bucket (HTTP 429 mid-walk — sdk-mode association reads page per document); the run used
+  `RATE_LIMIT_TOKEN_RPM=10000` locally. That rate-limit interaction is a real, separate sdk-mode
+  operability finding, out of this ticket's scope.
+- `docs/submission/PF-905-AI-COST-ANALYSIS.md` §2.1 — TODO placeholder replaced with the measured
+  summary table (provenance note about PR #263 kept); method note and §4 summary row updated.
+- `api/src/__tests__/pf905CostAnalysisDocSections.test.ts` — asserts the measured content is
+  present and the placeholder is gone, instead of asserting the placeholder.
+
+**How to verify.**
+```bash
+set -a; . ./.factory-env; set +a          # exclusive worktree DATABASE_URL
+pnpm --filter @ship/sdk build
+pnpm --filter @ship/agent exec vitest run src/__tests__/shipClientParity.liveServer.test.ts src/__tests__/shipClient.test.ts
+AGENT_PLATFORM_MODE=sdk pnpm test:agent && AGENT_PLATFORM_MODE=internal pnpm test:agent
+pnpm --filter @ship/api exec vitest run src/__tests__/pf905CostAnalysisDocSections.test.ts
+# Re-measure (spends ~$0.003/mode; needs agent/.env ANTHROPIC_API_KEY, a running local API with
+# RATE_LIMIT_TOKEN_RPM raised, a personal api_tokens row and its user id):
+AGENT_PLATFORM_MODE=sdk SHIP_API_BASE_URL=http://localhost:$API_PORT SHIP_API_TOKEN=<tok> \
+  ASKING_USER_ID=<uid> AGENT_COST_LEDGER_PATH=/tmp/sdk.jsonl \
+  pnpm --filter @ship/agent exec tsx src/scripts/measure-token-volume.ts <seedDocId>
+```
+
+**Rollback.** Revert the PR. Sdk mode goes back to fail-closed synthesized fields (0 documents in
+on-demand context) and the docs go back to "not measured".
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
