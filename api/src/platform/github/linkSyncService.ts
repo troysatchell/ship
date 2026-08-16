@@ -67,7 +67,9 @@ export async function syncPullRequestLinks(pool: Pool, event: PullRequestEvent, 
          (issue_id, workspace_id, repo_owner, repo_name, pr_number, pr_url, pr_state, installation_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (issue_id, repo_owner, repo_name, pr_number)
-       DO UPDATE SET pr_state = EXCLUDED.pr_state, installation_id = EXCLUDED.installation_id, updated_at = now()`,
+       DO UPDATE SET pr_state = EXCLUDED.pr_state,
+         installation_id = COALESCE(EXCLUDED.installation_id, github_pr_links.installation_id),
+         updated_at = now()`,
       [issue.id, workspaceId, repoOwner, repoName, event.pull_request.number, event.pull_request.html_url, prState, installationId]
     )
     result.linkedIssueIds.push(issue.id)
@@ -82,10 +84,22 @@ export async function syncPullRequestLinks(pool: Pool, event: PullRequestEvent, 
  *  (`linkSyncService.test.ts`) proving the schema round-trips, rather than sitting untested until
  *  that future consumer lands. */
 export async function getLinksForIssue(pool: Pool, issueId: string): Promise<
-  Array<{ repoOwner: string; repoName: string; prNumber: number; prUrl: string; prState: string }>
+  Array<{ repoOwner: string; repoName: string; prNumber: number; prUrl: string; prState: string; installationId: string | null }>
 > {
-  const result = await pool.query<{ repo_owner: string; repo_name: string; pr_number: number; pr_url: string; pr_state: string }>(
-    `SELECT repo_owner, repo_name, pr_number, pr_url, pr_state FROM github_pr_links WHERE issue_id = $1 ORDER BY created_at ASC`,
+  // installation_id is BIGINT (migration 053) — node-postgres returns bigint columns as strings,
+  // never as JS `number`, to avoid silent precision loss past Number.MAX_SAFE_INTEGER. The type
+  // here previously said `number | null`, which was wrong but functionally silent (the only use
+  // was string interpolation into a URL, where a numeric string and a number render identically) —
+  // caught when a stricter test assertion on the actual value exposed the mismatch.
+  const result = await pool.query<{
+    repo_owner: string
+    repo_name: string
+    pr_number: number
+    pr_url: string
+    pr_state: string
+    installation_id: string | null
+  }>(
+    `SELECT repo_owner, repo_name, pr_number, pr_url, pr_state, installation_id FROM github_pr_links WHERE issue_id = $1 ORDER BY created_at ASC`,
     [issueId]
   )
   return result.rows.map((row) => ({
@@ -94,5 +108,6 @@ export async function getLinksForIssue(pool: Pool, issueId: string): Promise<
     prNumber: row.pr_number,
     prUrl: row.pr_url,
     prState: row.pr_state,
+    installationId: row.installation_id,
   }))
 }

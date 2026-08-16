@@ -101,6 +101,11 @@ export type IssueCommentEvent = z.infer<typeof IssueCommentEventSchema>
  */
 const ISSUE_REFERENCE_PATTERN = /\bship#(\d+)\b/gi
 
+/** Postgres `INTEGER` max — a GitHub PR/comment body is free text a human typed, so
+ *  `Ship#99999999999999999999` is a real input this parser must reject rather than pass a
+ *  number that overflows the `documents.ticket_number` column type downstream. */
+const MAX_TICKET_NUMBER = 2_147_483_647
+
 /**
  * Extracts every distinct `Ship#<n>` ticket-number reference from one or more text fields (a
  * PR's title + body, or a PR comment body), returning them as a de-duplicated array of numbers in
@@ -116,7 +121,7 @@ export function extractIssueReferences(...texts: Array<string | null | undefined
     if (!text) continue
     for (const match of text.matchAll(ISSUE_REFERENCE_PATTERN)) {
       const ticketNumber = Number(match[1])
-      if (!Number.isInteger(ticketNumber) || ticketNumber <= 0) continue
+      if (!Number.isInteger(ticketNumber) || ticketNumber <= 0 || ticketNumber > MAX_TICKET_NUMBER) continue
       if (seen.has(ticketNumber)) continue
       seen.add(ticketNumber)
       result.push(ticketNumber)

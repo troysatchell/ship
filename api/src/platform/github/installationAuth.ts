@@ -76,9 +76,18 @@ export function signAppJwt(credentials: GithubAppCredentials, now: number = Math
  * caller decides whether to catch/log or let it propagate, per `postBackService.ts`'s own
  * doc comment on how it handles this).
  */
+/** GitHub's own timeout guidance for API calls doesn't specify a number, so this matches
+ *  `deliverer.ts`'s outbound-HTTP default order of magnitude — long enough for a slow-but-live
+ *  endpoint, short enough that a hung GitHub API can't block the `issue.status_changed` handler
+ *  that calls this indefinitely. */
+const INSTALLATION_TOKEN_TIMEOUT_MS = 10_000
+
 export async function getInstallationAccessToken(
   appJwt: string,
-  installationId: number,
+  // `github_pr_links.installation_id` is BIGINT, which node-postgres reads back as a string
+  // (see linkSyncService.ts's getLinksForIssue) — accept both rather than forcing every caller
+  // to round-trip through Number() for a value only ever used as a URL path segment.
+  installationId: string | number,
   fetchImpl: typeof fetch = fetch
 ): Promise<string> {
   const response = await fetchImpl(`https://api.github.com/app/installations/${installationId}/access_tokens`, {
@@ -88,6 +97,7 @@ export async function getInstallationAccessToken(
       Accept: 'application/vnd.github+json',
       'X-GitHub-Api-Version': '2022-11-28',
     },
+    signal: AbortSignal.timeout(INSTALLATION_TOKEN_TIMEOUT_MS),
   })
 
   if (!response.ok) {
@@ -95,6 +105,15 @@ export async function getInstallationAccessToken(
     throw new Error(`GitHub installation token request failed: ${response.status} ${body.slice(0, 500)}`)
   }
 
-  const data = (await response.json()) as { token: string }
-  return data.token
+  const data: unknown = await response.json()
+  if (
+    typeof data !== 'object' ||
+    data === null ||
+    !('token' in data) ||
+    typeof (data as { token: unknown }).token !== 'string' ||
+    (data as { token: string }).token.length === 0
+  ) {
+    throw new Error('GitHub installation token response did not include a non-empty token string')
+  }
+  return (data as { token: string }).token
 }

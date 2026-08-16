@@ -79,4 +79,23 @@ describe('getInstallationAccessToken', () => {
     const fetchMock = vi.fn<typeof fetch>(async () => new Response('installation not found', { status: 404 }))
     await expect(getInstallationAccessToken('fake-app-jwt', 1, fetchMock)).rejects.toThrow(/404/)
   })
+
+  it('throws rather than returning undefined when the response body has no token field', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ ok: true }), { status: 201 }))
+    await expect(getInstallationAccessToken('fake-app-jwt', 1, fetchMock)).rejects.toThrow(/token/)
+  })
+
+  it('throws when the token field is present but empty', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ token: '' }), { status: 201 }))
+    await expect(getInstallationAccessToken('fake-app-jwt', 1, fetchMock)).rejects.toThrow(/token/)
+  })
+
+  it('passes an AbortSignal so a hung GitHub API cannot block the caller indefinitely', async () => {
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      expect(init?.signal).toBeInstanceOf(AbortSignal)
+      return new Response(JSON.stringify({ token: 'ghs_fake' }), { status: 201 })
+    })
+    await getInstallationAccessToken('fake-app-jwt', 1, fetchMock)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
 })

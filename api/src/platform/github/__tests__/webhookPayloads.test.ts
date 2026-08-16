@@ -26,6 +26,12 @@ describe('extractIssueReferences', () => {
   it('ignores a zero or malformed number', () => {
     expect(extractIssueReferences('Ship#0')).toEqual([])
   })
+
+  it('rejects a ticket number beyond Postgres INTEGER range', () => {
+    expect(extractIssueReferences('Ship#99999999999999999999')).toEqual([])
+    expect(extractIssueReferences('Ship#2147483648')).toEqual([])
+    expect(extractIssueReferences('Ship#2147483647')).toEqual([2147483647])
+  })
 })
 
 describe('derivePrState', () => {

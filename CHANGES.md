@@ -89,6 +89,59 @@ All 36 tests pass; `type-check` clean.
 migration) changes. No env var is required for the rest of the API to keep working — every new
 code path is additive and opt-in.
 
+**CodeRabbit local-CLI triage (post-merge-forward re-run, 15 findings), fixed before opening the
+PR rather than left for a review round-trip:**
+1. **Fixed (critical) — `webhookPayloads.ts`:** `extractIssueReferences` accepted any digit string
+   as a ticket number, including one exceeding Postgres `INTEGER`'s range (`documents.ticket_number`
+   is `INTEGER`, migration 038). A PR body containing `Ship#99999999999999999999` would have
+   produced a number no downstream query could safely use. Bounded to `2_147_483_647`; red-before-
+   green verified (temporarily reverted the bound, confirmed the new test failed, restored, confirmed
+   green) — new test case in `webhookPayloads.test.ts`.
+2. **Fixed (major) — `linkSyncService.ts`:** the `github_pr_links` upsert's `DO UPDATE SET
+   installation_id = EXCLUDED.installation_id` would null out a previously-recorded
+   `installation_id` on any redelivery whose payload happens not to carry an `installation` object.
+   Changed to `COALESCE(EXCLUDED.installation_id, github_pr_links.installation_id)`. New regression
+   test in `linkSyncService.test.ts` (`syncPullRequestLinks` with `installation: undefined` after an
+   earlier call that set it, asserting the value survives).
+3. **Fixed (major) — `postBackService.ts` + `linkSyncService.ts`:** `postStatusChangeComments` ran a
+   second, per-link `SELECT installation_id FROM github_pr_links ...` for data `getLinksForIssue`
+   had already fetched one row earlier for — a real N+1. Extended `getLinksForIssue`'s SELECT/return
+   type to include `installationId`, removed the duplicate query. **Found and fixed a second, latent
+   bug while making this change**: `installation_id` is `BIGINT` (migration 053), which
+   node-postgres returns as a `string`, not a `number` — both `getLinksForIssue`'s prior type
+   annotation and `getInstallationAccessToken`'s parameter were typed `number`, silently wrong but
+   functionally harmless (the value is only ever string-interpolated into a URL). Caught only because
+   the new regression test in item 2 asserted the actual value with `.toBe(42424242)` and got
+   `"42424242"` back — corrected both types to `string | null` / `string | number`, fixed the test's
+   own assertions to expect the string form, confirmed with a clean `type-check`.
+4. **Fixed (major) — `installationAuth.ts`:** `getInstallationAccessToken` type-asserted GitHub's
+   response body as `{ token: string }` rather than validating it, so a malformed/empty response
+   would return `undefined` as if it were a valid token. Now throws with a descriptive error if
+   `token` is missing, non-string, or empty. Two new test cases (`postBackService`'s existing tests
+   already used well-formed fixtures, so this needed dedicated negative cases).
+5. **Fixed (major) — `installationAuth.ts`:** the installation-token exchange `fetch` had no
+   timeout, so an unresponsive GitHub API could hang the `issue.status_changed` handler indefinitely
+   (same class this repo already fixed once for the LLM-provider call, TRO-368). Added
+   `AbortSignal.timeout(10_000)`. New test asserts the `signal` option is present and is an
+   `AbortSignal`.
+6. **Dismissed (major) — `githubWebhook.ts`, "register with OpenAPI":** contradicts a deliberate,
+   already-documented design decision (the route's own header comment explains why: this is a
+   GitHub→Ship inbound integration endpoint, not a `/api/v1/*` third-party-facing surface the
+   `.claude/CLAUDE.md`/PF-203 fitness-walk rule targets). Verified the precedent claim rather than
+   trusting the comment: `grep -n "registerPath\|OpenAPI" integrations/slack/src/server.ts` returns
+   zero hits — Slack's structurally identical webhook receiver is equally unregistered, confirming
+   this is consistent with existing practice, not an oversight.
+7. **Not evaluated — `rate-limit.ts`, `oauth/device.ts` (major, "false scope"):** these findings were
+   produced by a CodeRabbit run against a stale local `main` ref inside this worktree (fast-moving
+   main under concurrent sessions — confirmed via `git merge-base HEAD FETCH_HEAD` after a further
+   merge-forward showed these files have **zero** diff against the true current main). Neither file
+   is touched by this PR; the findings belong to whichever already-merged ticket (TRO-588/TRO-589)
+   actually owns that code.
+8. **Remaining 7 findings** (2 trivial, minor items in test files) not individually itemized here —
+   read, judged non-blocking (doc/comment nits, no behavior risk), left for CodeRabbit's own GitHub
+   review once the fleet-wide rate limit clears rather than fixed speculatively against findings this
+   session couldn't independently re-verify against a clean base the way items 1-6 were.
+
 ---
 
 ## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes

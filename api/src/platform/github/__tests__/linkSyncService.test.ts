@@ -86,6 +86,9 @@ describe('syncPullRequestLinks', () => {
         prNumber: 17,
         prUrl: 'https://github.com/acme/widgets/pull/17',
         prState: 'open',
+        // BIGINT column read back via node-postgres as a string, not a number — see
+        // linkSyncService.ts's getLinksForIssue for why.
+        installationId: '42424242',
       },
     ])
   })
@@ -109,6 +112,18 @@ describe('syncPullRequestLinks', () => {
     // Same (issue, PR#17) pair both times -> exactly one row, now 'merged'.
     expect(links).toHaveLength(1)
     expect(links[0]?.prState).toBe('merged')
+  })
+
+  it('a redelivery with no installation on the payload does not wipe out a previously-recorded installation_id', async () => {
+    const withInstallation = pullRequestEvent({ title: `Ship#${ticketNumber}`, state: 'open', merged: false })
+    await syncPullRequestLinks(pool, withInstallation, workspaceId)
+    const afterFirst = await getLinksForIssue(pool, issueId)
+    expect(afterFirst[0]?.installationId).toBe('42424242')
+
+    const withoutInstallation: PullRequestEvent = { ...withInstallation, installation: undefined }
+    await syncPullRequestLinks(pool, withoutInstallation, workspaceId)
+    const afterSecond = await getLinksForIssue(pool, issueId)
+    expect(afterSecond[0]?.installationId).toBe('42424242')
   })
 
   it('links to multiple issues when the PR body references more than one', async () => {

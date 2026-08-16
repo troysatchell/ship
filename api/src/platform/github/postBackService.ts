@@ -49,12 +49,7 @@ export async function postStatusChangeComments(
 
   for (const link of links) {
     try {
-      const linkedRow = await pool.query<{ installation_id: number | null }>(
-        `SELECT installation_id FROM github_pr_links
-         WHERE issue_id = $1 AND repo_owner = $2 AND repo_name = $3 AND pr_number = $4`,
-        [change.issueId, link.repoOwner, link.repoName, link.prNumber]
-      )
-      const installationId = linkedRow.rows[0]?.installation_id
+      const installationId = link.installationId
       if (!installationId) {
         console.error(
           `github post-back: link ${link.repoOwner}/${link.repoName}#${link.prNumber} has no installation_id — skipping`
