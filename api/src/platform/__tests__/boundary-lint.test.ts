@@ -98,6 +98,23 @@ describe('PF-003: boundary lint — platform/api/v1/** must not import api/src/r
     expect(firstError?.message).toContain('routes');
   }, 30000);
 
+  it('fixture (a2): bare "**/routes" import (no trailing /**) also fails no-restricted-imports (TRO-496)', async () => {
+    // Distinct from fixture (a): that one matches the '**/routes/**' glob arm
+    // via a deep path segment ('routes/documents'). This one imports the
+    // routes barrel/index directly ('../../../../routes') to prove the
+    // config's second glob arm ('**/routes', no trailing '/**') is also
+    // enforced, not just the nested-path form.
+    const result = await lintFixture(
+      'routes-bare-import.ts',
+      "import { foo } from '../../../../routes';\nexport { foo };\n",
+    );
+    const restrictedImportErrors = result.messages.filter((m) => m.ruleId === 'no-restricted-imports');
+    expect(restrictedImportErrors.length).toBeGreaterThan(0);
+    const [firstError] = restrictedImportErrors;
+    expect(firstError).toBeDefined();
+    expect(firstError?.message).toContain('routes');
+  }, 30000);
+
   it('fixture (b): importing from api/src/services/** (a sibling, non-routes path) produces ZERO no-restricted-imports errors', async () => {
     const result = await lintFixture(
       'services-import.ts',
