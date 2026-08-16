@@ -205,6 +205,23 @@ router.post('/:id/rotate', authed(async (req, res): Promise<void> => {
         return;
       }
 
+      // TRO-492: lost the concurrent-rotation race (another /rotate call on
+      // this same app committed first — see appRegistration.ts's
+      // rotateOAuthAppSecret comment). A defined, retry-able 409 — never a
+      // 200 wrapping a secret that's already dead, and never a silent
+      // 500/undefined shape a caller has to guess at.
+      if (result.error === 'conflict') {
+        res.status(HTTP_STATUS.CONFLICT).json({
+          success: false,
+          error: {
+            code: ERROR_CODES.ALREADY_EXISTS,
+            message:
+              'The client secret was rotated by a concurrent request. Retry the rotation to get a new secret.',
+          },
+        });
+        return;
+      }
+
       // result.error === 'public_client_no_secret' — PM triage: 400 with a
       // clear message, not a 404 and not a silently-minted secret.
       res.status(HTTP_STATUS.BAD_REQUEST).json({
