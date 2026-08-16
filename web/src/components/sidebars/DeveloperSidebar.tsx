@@ -6,11 +6,10 @@ import { cn } from '@/lib/cn';
  * Lives inside the existing Icon Rail + Contextual Sidebar, same convention
  * as InboxSidebar.tsx: no fifth panel.
  *
- * Deliberately minimal today (one entry: Apps). PF-503 (TRO-439, in
- * parallel) adds a Webhooks entry here — this list is the shared extension
- * point, kept to a plain array + map specifically so that addition is a
- * one-line diff rather than a structural change either side has to
- * coordinate around.
+ * Started with one entry (Apps, PF-502/TRO-436). PF-503/TRO-439 added the
+ * Webhooks entry below — this list is the shared extension point, kept to a
+ * plain array + map specifically so that addition was a one-line diff
+ * rather than a structural change either side had to coordinate around.
  */
 
 interface DeveloperNavEntry {
@@ -20,6 +19,8 @@ interface DeveloperNavEntry {
 
 const DEVELOPER_NAV: DeveloperNavEntry[] = [
   { to: '/developer/apps', label: 'Apps' },
+  // PF-503 (TRO-439) — delivery log, DLQ, replay, subscription CRUD.
+  { to: '/developer/webhooks', label: 'Webhooks' },
 ];
 
 export function DeveloperSidebar() {

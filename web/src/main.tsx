@@ -51,6 +51,10 @@ const MyWeekPage = React.lazy(() => import('@/pages/MyWeekPage').then((m) => ({ 
 const AdminDashboardPage = React.lazy(() => import('@/pages/AdminDashboard').then((m) => ({ default: m.AdminDashboardPage })));
 const AdminWorkspaceDetailPage = React.lazy(() => import('@/pages/AdminWorkspaceDetail').then((m) => ({ default: m.AdminWorkspaceDetailPage })));
 const WorkspaceSettingsPage = React.lazy(() => import('@/pages/WorkspaceSettings').then((m) => ({ default: m.WorkspaceSettingsPage })));
+// TRO-439 (PF-503) — see DeveloperPortal.tsx's own header for why this
+// mounts at /developer/webhooks inside TRO-436's DeveloperPortalProvider
+// rather than as a new top-level Mode/RailIcon.
+const DeveloperPortalPage = React.lazy(() => import('@/pages/DeveloperPortal').then((m) => ({ default: m.DeveloperPortalPage })));
 const ConvertedDocumentsPage = React.lazy(() => import('@/pages/ConvertedDocuments').then((m) => ({ default: m.ConvertedDocumentsPage })));
 const UnifiedDocumentPage = React.lazy(() => import('@/pages/UnifiedDocumentPage').then((m) => ({ default: m.UnifiedDocumentPage })));
 const StatusOverviewPage = React.lazy(() => import('@/pages/StatusOverviewPage').then((m) => ({ default: m.StatusOverviewPage })));
@@ -296,9 +300,8 @@ function AppRoutes() {
         {/* PF-502 (TRO-436): DeveloperPortalProvider mints the portal's own
           * scoped /api/v1 session token once per mount of this subtree, so
           * every screen under /developer/* (this ticket's Apps pages, and
-          * PF-503/TRO-439's subscriptions/deliveries screens landing
-          * alongside) shares one minted token instead of each re-minting
-          * its own. */}
+          * PF-503/TRO-439's subscriptions/deliveries screens below) shares
+          * one minted token instead of each re-minting its own. */}
         <Route
           path="developer"
           element={
@@ -310,6 +313,13 @@ function AppRoutes() {
           <Route index element={<Navigate to="apps" replace />} />
           <Route path="apps" element={<DeveloperAppsPage />} />
           <Route path="apps/:id" element={<DeveloperAppDetailPage />} />
+          {/* PF-503 (TRO-439): delivery log + DLQ + replay + subscription
+            * CRUD, mounted as a sibling of apps/apps/:id inside the SAME
+            * DeveloperPortalProvider subtree above — was a standalone
+            * /settings/developer placeholder route before TRO-436's real
+            * shell landed; see CHANGES.md's TRO-439 entry for the
+            * reconciliation. */}
+          <Route path="webhooks" element={<DeveloperPortalPage />} />
         </Route>
         {/*
           Catch-all (A11Y-5 / TRO-219). Without this, an unmatched path under
