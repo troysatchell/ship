@@ -79,11 +79,17 @@ CREATE TABLE IF NOT EXISTS github_pr_links (
 
 -- The lookup direction `linkSyncService.ts` actually queries: "given this
 -- repo+PR, which link rows (if any) already exist" — upsert-on-delivery reads
--- by this tuple, not by issue_id (that direction is covered by the UNIQUE
--- constraint's own index for anything that ever needs "all PRs for this
--- issue").
+-- by this tuple, not by issue_id.
 CREATE INDEX IF NOT EXISTS idx_github_pr_links_repo_pr
   ON github_pr_links (repo_owner, repo_name, pr_number);
 
 CREATE INDEX IF NOT EXISTS idx_github_pr_links_workspace
   ON github_pr_links (workspace_id);
+
+-- `getLinksForIssue`'s own query: `WHERE issue_id = $1 ORDER BY created_at
+-- ASC`. The UNIQUE constraint above already gives `issue_id` an indexed
+-- equality lookup (it's the leading column), but not the ORDER BY —
+-- Postgres would still sort the matched rows separately. This composite
+-- index covers both the filter and the sort in one index scan.
+CREATE INDEX IF NOT EXISTS idx_github_pr_links_issue_created
+  ON github_pr_links (issue_id, created_at);

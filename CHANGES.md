@@ -142,6 +142,29 @@ PR rather than left for a review round-trip:**
    review once the fleet-wide rate limit clears rather than fixed speculatively against findings this
    session couldn't independently re-verify against a clean base the way items 1-6 were.
 
+**Second CodeRabbit pass (post-fix re-run, 9 findings — re-review, not incremental) — 2 more real
+findings fixed, 1 deferred, 2 repeats of the already-dismissed OpenAPI item:**
+9. **Fixed (major) — `postBackService.ts`:** the comment-posting `fetch` (distinct from
+   `installationAuth.ts`'s token-exchange `fetch`, fixed in item 5) had no timeout either — same
+   risk, same fix, `AbortSignal.timeout(10_000)`. Missed on the first pass because item 5 only
+   looked at the token exchange, not every outbound call this ticket adds.
+10. **Fixed (minor) — migration `053_github_pr_links.sql`:** added
+    `idx_github_pr_links_issue_created (issue_id, created_at)` — `getLinksForIssue`'s actual query
+    is `WHERE issue_id = $1 ORDER BY created_at ASC`; the existing UNIQUE constraint's index covers
+    the equality filter (issue_id is its leading column) but not the sort, so Postgres would still
+    do a separate sort step. This migration hadn't merged to `main` yet, so the index was added
+    in-place rather than as a follow-up migration; applied directly to this worktree's test DB
+    (`CREATE INDEX`) since the migration tracker doesn't re-run an already-applied file.
+11. **Deferred, not fixed — `linkSyncService.ts`:** batch the per-ticket-number SELECT+upsert loop
+    in `syncPullRequestLinks` into one query/transaction. Real efficiency suggestion, but a PR
+    title/body referencing more than 2-3 `Ship#<n>` tickets is an edge case in practice, not a
+    correctness issue, and batching would add real complexity (transaction handling, diffing
+    resolved-vs-referenced sets) right at a time-box's close. Left as a genuine follow-up rather
+    than fixed under time pressure or silently dropped.
+12. **Dismissed again (major x2) — `app.ts`/`githubWebhook.ts`, "register with OpenAPI":** same
+    finding as item 6, reappearing on re-review (CodeRabbit re-reviews the full diff each run, not
+    incrementally) — same verified reason applies, not re-litigated.
+
 ---
 
 ## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes

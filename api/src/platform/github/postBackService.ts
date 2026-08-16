@@ -38,6 +38,10 @@ export interface IssueStatusChange {
  * than aborting the remaining PRs in the same batch — same "one bad item must not take the rest
  * of the batch down" reasoning `deliverer.ts`'s `enqueueEvent` applies per-subscription.
  */
+/** Same rationale as `installationAuth.ts`'s `INSTALLATION_TOKEN_TIMEOUT_MS` — an unresponsive
+ *  GitHub API must not hang the `issue.status_changed` handler processing the rest of `links`. */
+const COMMENT_POST_TIMEOUT_MS = 10_000
+
 export async function postStatusChangeComments(
   pool: Pool,
   credentials: GithubAppCredentials,
@@ -72,6 +76,7 @@ export async function postStatusChangeComments(
             'Content-Type': 'application/json',
           },
           body: JSON.stringify({ body }),
+          signal: AbortSignal.timeout(COMMENT_POST_TIMEOUT_MS),
         }
       )
       if (!response.ok) {
