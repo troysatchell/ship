@@ -167,6 +167,70 @@ findings fixed, 1 deferred, 2 repeats of the already-dismissed OpenAPI item:**
 
 ---
 
+## TRO-490 — jsonToYaml emitted unparseable/mis-indented openapi.yaml; converter fixed and proven by round-trip
+
+**Observed, on `main`, by reading the tracked artifact directly.** `api/src/swagger.ts`'s hand-rolled
+`jsonToYaml` (the only code that produces `api/openapi.yaml`; `api/openapi.json` is generated
+separately via `JSON.stringify` and was never affected) emits YAML that a real parser rejects or
+silently mangles:
+- `api/openapi.yaml:4873-4874` on main: an empty-object value (`parameters: {}`) came out as
+  `  parameters:` on one line and `{}` alone at column 0 on the next — invalid/ambiguous YAML.
+  Cause: the object branch always emitted `key:\n` followed by a recursive call, and
+  `jsonToYaml({})` returned the bare string `{}` with no indentation of its own.
+- `api/openapi.yaml:4884-4886` on main: array items that are objects came out over-indented — a
+  `- schema:` list marker at 8 spaces followed by its `type`/`enum` children at 22 spaces instead
+  of 12. Cause: the array branch called `jsonToYaml(item, indent + 1)` (already indented relative
+  to the array) and then *also* prefixed every continuation line with an extra `${spaces}  ` —
+  double indentation.
+- Not visible in a spot-check but the same root cause: strings that look like other YAML scalar
+  types (`'true'`, `'123'`, `''`, leading/trailing spaces, strings starting with `*`, `&`, `!`,
+  `[`, `{`, `-`, `?`, `%`, `@`, backtick, or quotes) were emitted bare, so a parser would hand back
+  a boolean/number/null instead of the original string; and object keys containing YAML-special
+  characters (e.g. `/api/issues/{id}`) were emitted unquoted.
+
+**Red before green.** Added a `TRO-490` describe block to `api/src/swagger.test.ts` — full-spec
+round-trip (`parse(jsonToYaml(swaggerSpec))` must equal the spec), the exact empty-object/array-item
+indentation fixture above (asserting the literal output string, not just that it parses), and a
+type-ambiguous-scalar fixture. Run against the pre-fix converter, all three failed with
+`YAMLParseError` (`Missing closing "quote`, `Implicit map keys need to be followed by map values`).
+The four existing TRO-309 tests (backslash-escaping regression coverage) were left untouched and
+stayed green throughout.
+
+**What changed, in `jsonToYaml` only.**
+- Added `needsQuoting(s)`: a string is safe to emit bare only if it matches a narrow "looks like a
+  plain YAML word" shape (starts with a letter/underscore, no leading/trailing space, only
+  `[A-Za-z0-9_ .\/()-]`) *and* isn't one of YAML's reserved boolean/null spellings
+  (`true/false/null/yes/no/on/off/y/n/~`, case-insensitive). Everything else gets quoted.
+- String branch now reuses `JSON.stringify` for quoting (a JSON string literal is a valid YAML
+  double-quoted scalar) instead of a hand-rolled escape — same backslash-then-quote escaping order
+  TRO-309 already required, verified by rerunning its four tests unchanged.
+- Object branch: empty nested object/array values are now emitted inline (`key: {}` / `key: []`)
+  instead of `key:` + a bare `{}`/`[]` on the next line; keys are quoted via the same
+  `needsQuoting` check; entries whose value is `undefined` are skipped (matching
+  `JSON.stringify`'s behavior for object properties).
+- Array branch: object/array items are rendered unindented first (`jsonToYaml(item, 0)`), then
+  every line gets exactly one extra level of indentation added (`${spaces}` on the first line via
+  the `- ` marker, `${spaces}  ` on continuation lines) — removing the double-indentation bug.
+  Empty object/array items render inline (`- {}` / `- []`); `undefined` items render as `- null`.
+
+**Also changed:** `yaml@2.9.0` added as an `api`-only devDependency (`api/package.json`,
+`pnpm-lock.yaml`) — used exclusively by the new test to parse the converter's output with a real
+YAML parser; not a runtime dependency of `swagger.ts` itself, which stays dependency-free by design.
+
+**How to verify.** `pnpm --filter @ship/api vitest run src/swagger.test.ts` — 7 tests (4 TRO-309 +
+3 TRO-490) pass. `pnpm --filter @ship/api openapi:generate` is now idempotent and produces YAML
+that a parser round-trips to the same structure as `api/openapi.json`; observed directly by parsing
+the regenerated `api/openapi.yaml` with the `yaml` package and comparing to `api/openapi.json` —
+both serialized to identical JSON. `api/openapi.json` was not touched by this change (it comes from
+`JSON.stringify`, not `jsonToYaml`).
+
+**Rollback.** `git revert <this-commit-sha>` (single commit: `api/src/swagger.ts`,
+`api/src/swagger.test.ts`, `api/package.json`, `pnpm-lock.yaml`, `api/openapi.yaml`, this entry).
+`api/openapi.json` is unaffected either way — reverting does not reintroduce any JSON regression
+because there wasn't one.
+
+---
+
 ## TRO-491 — OpenAPI scopes enum derived from ScopeRegistry; APIToken.scopes required-nullable
 
 **Observed, not inferred.** `api/openapi.json` (before this change, lines ~3679-3690 and
@@ -215,6 +279,106 @@ this change touches nothing under `sdk/` or `integrations/`. Confirmed by also r
 
 **Rollback.** `git revert <this-commit-sha>` (single commit touching `api/src/openapi/schemas/auth.ts`,
 the new test file, and the regenerated `api/openapi.json`/`api/openapi.yaml`).
+
+---
+
+## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes
+
+**Non-code / CI-config ticket — `terraform validate`-style proof, not vitest** (same disclosed-exception
+class as TRO-488/TF-1..TF-10: no unit test can exercise a GitHub Actions CodeQL config, so the proof is
+static verification of the config plus confirmation against the *live* alerts it addresses).
+
+**What was flagged.** `api/src/platform/oauth/__tests__/device.test.ts:51` defines `introspectionApp`, a
+scratch `express()` instance created purely to mount the real `bearerAuth` middleware and prove it works
+(`GET /scratch-protected`) — never imported by `api/src/app.ts`, never reachable in production. CodeQL's
+`js/missing-rate-limiting` query has no way to distinguish a test fixture from a real route and flagged it
+as an unprotected production endpoint. Same blind-spot class TRO-307 already documented for this query.
+
+**Verified beyond the ticket's own claim, not just trusted.** Pulled the live open alerts via
+`gh api code-scanning/alerts` rather than assuming the ticket's one cited instance was the only one:
+found **5** open alerts rooted in the same "CodeQL treats test helper code as production" pattern, not 1:
+- `#371` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/device.test.ts:51` (the ticket's
+  own citation).
+- `#369` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/token.test.ts:61`, an identical
+  scratch-app pattern the ticket didn't mention.
+- `#4`/`#5` `js/incomplete-multi-character-sanitization` — `web/src/components/editor/lowlight.test.ts:176,191`,
+  a naive `html.replace(/<[^>]*>/g, '')` used only to strip markup for a test assertion, not shipped
+  sanitization logic. Read in full before including in scope.
+- `#6` `js/incomplete-sanitization` — `web/src/lib/radixVersionDedupe.test.ts:47`, a regex parsing
+  `pnpm-lock.yaml` inside a test helper, not user input handling. Also read in full before including.
+
+All five are the same root cause (test/fixture code scanned as if it were production surface), so the fix
+is scoped to test-file paths generally — as the ticket's own suggested fix asked for — rather than only
+the one file it cited, since a file-by-file allowlist would leave every *future* scratch test app hitting
+this again.
+
+**Fix.** New `.github/codeql/codeql-config.yml` (didn't exist before — repo had no CodeQL config file,
+only workflow-inline `init`/`analyze` steps) with `paths-ignore: ['**/__tests__/**', '**/*.test.ts',
+'**/*.test.tsx']`. Wired in via `config-file:` on the existing `Initialize CodeQL` step in
+`.github/workflows/ci.yml` (`codeql` job) — one line added, nothing else in that job changed.
+
+**Verification.**
+- `python3 -c "import yaml; yaml.safe_load(...)"` — both the new config file and the edited
+  `ci.yml` parse as valid YAML.
+- Confirmed the three glob patterns actually match all 5 flagged files (`__tests__/` directory segment
+  or a `.test.ts`/`.test.tsx` suffix) and do not match any production entry point — `api/src/app.ts`
+  mounts none of `bearerAuth`'s test-only callers, confirmed via `grep` for `scratch-protected`/
+  `introspectionApp` returning zero hits outside the test file.
+- Cannot run CodeQL's actual analysis locally (GitHub-hosted action, no local CLI in this repo's
+  toolchain) — the real green/red proof is the next `security scan (CodeQL)` run on this PR's own CI,
+  which analyzes this exact config. Flagging this limitation rather than asserting local verification
+  that didn't happen.
+
+**Scope note.** Did not dismiss alerts `#371`/`#369`/`#4`/`#5`/`#6` via the API (the TRO-587/TRO-492
+precedent for confirmed false positives) — excluding the paths going forward is the ticket's actual ask;
+whether GitHub auto-resolves the existing alert records once the paths stop being analyzed, or whether
+they need a manual dismissal pass, is not yet observed and is worth a fast follow-up if they don't
+clear on their own after this merges.
+
+**Rollback.** Revert this commit — deletes `.github/codeql/codeql-config.yml` and the `config-file:`
+line in `ci.yml`; CodeQL returns to scanning every path, including test fixtures.
+
+---
+
+## TRO-614 — `OrgChartPage.test.tsx`'s "renders each person..." race, confirmed on 2 unrelated CI runs
+
+**What was broken.** `web/src/pages/OrgChartPage.tsx:229-230` sets its default-expanded tree state
+in a *second*, separate `useEffect` that only fires after the fetch-driven first effect has already
+rendered the tree with `expandedIds` empty. `OrgChartPage.test.tsx`'s `"renders each person..."`
+test (line 125) did `const tree = await screen.findByRole('tree', ...)` — correctly async, waits
+for the tree container — then immediately did a **synchronous** `within(tree).getByRole('treeitem',
+{ name: /Grace Hopper/ })`. Grace is a level-2 (nested) child, only present in the flattened rows
+after the second effect auto-expands the tree. `findByRole('tree', ...)` can resolve on the very
+first, collapsed render — before React flushes the second effect — so the synchronous query for
+Grace's row raced it. Confirmed as a real, pre-existing, CI-timing-sensitive defect (not local
+machine contention): two completely unrelated PRs tonight (TRO-589, oauth-only; TRO-488,
+terraform-only — neither touches `web/`) both hit this exact failure on isolated GitHub Actions
+runners, while passing 100% of the time locally. Root-caused via the failing CI run's own
+downloaded `web-tests.json` artifact and captured DOM snapshot (only Ada/Bob rendered, both
+level-1; Grace's `<li>` entirely absent) — not guessed.
+
+**What changed.** `web/src/pages/OrgChartPage.test.tsx` — replaced the synchronous `getByRole` for
+Grace with `await within(tree).findByRole('treeitem', { name: /Grace Hopper/ })`, moved before the
+`ada`/`bob` lookups. Grace is the deepest node under test, so awaiting her presence proves the
+auto-expand effect has already flushed before the rest of the test's synchronous assertions run.
+No product code changed — `OrgChartPage.tsx` itself is untouched; the two-effect split may still be
+worth simplifying later, but the test fix alone resolves the flake.
+
+**Proof.** Can't reproduce GitHub Actions' exact timing locally, so repetition is the best local
+proxy: `cd web && npx vitest run src/pages/OrgChartPage.test.tsx` run **5 times consecutively**,
+5/5 clean (all 5 tests in the file, including the previously-racing one). Full `pnpm --filter
+@ship/web test` also green. **Gate exception, disclosed:** the `regression-test` check looks for a
+newly-added test case; this ticket hardens an *existing* test's timing rather than adding coverage,
+so no new `it(...)` block was added — same class of accepted exception as this project's
+terraform-only tickets (proof is repetition-based, not a new assertion count).
+
+**How to run it.**
+```bash
+cd web && npx vitest run src/pages/OrgChartPage.test.tsx
+```
+
+**Roll back.** Revert this commit — reverts the test to its prior synchronous-query form, which is
+correct but timing-fragile under GitHub Actions specifically (not observed to fail locally).
 
 ---
 
@@ -701,106 +865,6 @@ mode. Unit: `pnpm exec vitest run --config scripts/drill/vitest.config.ts`.
 **Rollback.** Revert the PR. Image mode is opt-in behind `DRILL_TTFE_API_IMAGE`; with it unset every
 existing caller (`gate.sh` G12, both `drill-ttfe` CI jobs, local runs) is on the unchanged tsx path.
 Removing the `drill-ttfe-image` job alone also fully disables the new mode in CI.
-
----
-
-## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes
-
-**Non-code / CI-config ticket — `terraform validate`-style proof, not vitest** (same disclosed-exception
-class as TRO-488/TF-1..TF-10: no unit test can exercise a GitHub Actions CodeQL config, so the proof is
-static verification of the config plus confirmation against the *live* alerts it addresses).
-
-**What was flagged.** `api/src/platform/oauth/__tests__/device.test.ts:51` defines `introspectionApp`, a
-scratch `express()` instance created purely to mount the real `bearerAuth` middleware and prove it works
-(`GET /scratch-protected`) — never imported by `api/src/app.ts`, never reachable in production. CodeQL's
-`js/missing-rate-limiting` query has no way to distinguish a test fixture from a real route and flagged it
-as an unprotected production endpoint. Same blind-spot class TRO-307 already documented for this query.
-
-**Verified beyond the ticket's own claim, not just trusted.** Pulled the live open alerts via
-`gh api code-scanning/alerts` rather than assuming the ticket's one cited instance was the only one:
-found **5** open alerts rooted in the same "CodeQL treats test helper code as production" pattern, not 1:
-- `#371` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/device.test.ts:51` (the ticket's
-  own citation).
-- `#369` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/token.test.ts:61`, an identical
-  scratch-app pattern the ticket didn't mention.
-- `#4`/`#5` `js/incomplete-multi-character-sanitization` — `web/src/components/editor/lowlight.test.ts:176,191`,
-  a naive `html.replace(/<[^>]*>/g, '')` used only to strip markup for a test assertion, not shipped
-  sanitization logic. Read in full before including in scope.
-- `#6` `js/incomplete-sanitization` — `web/src/lib/radixVersionDedupe.test.ts:47`, a regex parsing
-  `pnpm-lock.yaml` inside a test helper, not user input handling. Also read in full before including.
-
-All five are the same root cause (test/fixture code scanned as if it were production surface), so the fix
-is scoped to test-file paths generally — as the ticket's own suggested fix asked for — rather than only
-the one file it cited, since a file-by-file allowlist would leave every *future* scratch test app hitting
-this again.
-
-**Fix.** New `.github/codeql/codeql-config.yml` (didn't exist before — repo had no CodeQL config file,
-only workflow-inline `init`/`analyze` steps) with `paths-ignore: ['**/__tests__/**', '**/*.test.ts',
-'**/*.test.tsx']`. Wired in via `config-file:` on the existing `Initialize CodeQL` step in
-`.github/workflows/ci.yml` (`codeql` job) — one line added, nothing else in that job changed.
-
-**Verification.**
-- `python3 -c "import yaml; yaml.safe_load(...)"` — both the new config file and the edited
-  `ci.yml` parse as valid YAML.
-- Confirmed the three glob patterns actually match all 5 flagged files (`__tests__/` directory segment
-  or a `.test.ts`/`.test.tsx` suffix) and do not match any production entry point — `api/src/app.ts`
-  mounts none of `bearerAuth`'s test-only callers, confirmed via `grep` for `scratch-protected`/
-  `introspectionApp` returning zero hits outside the test file.
-- Cannot run CodeQL's actual analysis locally (GitHub-hosted action, no local CLI in this repo's
-  toolchain) — the real green/red proof is the next `security scan (CodeQL)` run on this PR's own CI,
-  which analyzes this exact config. Flagging this limitation rather than asserting local verification
-  that didn't happen.
-
-**Scope note.** Did not dismiss alerts `#371`/`#369`/`#4`/`#5`/`#6` via the API (the TRO-587/TRO-492
-precedent for confirmed false positives) — excluding the paths going forward is the ticket's actual ask;
-whether GitHub auto-resolves the existing alert records once the paths stop being analyzed, or whether
-they need a manual dismissal pass, is not yet observed and is worth a fast follow-up if they don't
-clear on their own after this merges.
-
-**Rollback.** Revert this commit — deletes `.github/codeql/codeql-config.yml` and the `config-file:`
-line in `ci.yml`; CodeQL returns to scanning every path, including test fixtures.
-
----
-
-## TRO-614 — `OrgChartPage.test.tsx`'s "renders each person..." race, confirmed on 2 unrelated CI runs
-
-**What was broken.** `web/src/pages/OrgChartPage.tsx:229-230` sets its default-expanded tree state
-in a *second*, separate `useEffect` that only fires after the fetch-driven first effect has already
-rendered the tree with `expandedIds` empty. `OrgChartPage.test.tsx`'s `"renders each person..."`
-test (line 125) did `const tree = await screen.findByRole('tree', ...)` — correctly async, waits
-for the tree container — then immediately did a **synchronous** `within(tree).getByRole('treeitem',
-{ name: /Grace Hopper/ })`. Grace is a level-2 (nested) child, only present in the flattened rows
-after the second effect auto-expands the tree. `findByRole('tree', ...)` can resolve on the very
-first, collapsed render — before React flushes the second effect — so the synchronous query for
-Grace's row raced it. Confirmed as a real, pre-existing, CI-timing-sensitive defect (not local
-machine contention): two completely unrelated PRs tonight (TRO-589, oauth-only; TRO-488,
-terraform-only — neither touches `web/`) both hit this exact failure on isolated GitHub Actions
-runners, while passing 100% of the time locally. Root-caused via the failing CI run's own
-downloaded `web-tests.json` artifact and captured DOM snapshot (only Ada/Bob rendered, both
-level-1; Grace's `<li>` entirely absent) — not guessed.
-
-**What changed.** `web/src/pages/OrgChartPage.test.tsx` — replaced the synchronous `getByRole` for
-Grace with `await within(tree).findByRole('treeitem', { name: /Grace Hopper/ })`, moved before the
-`ada`/`bob` lookups. Grace is the deepest node under test, so awaiting her presence proves the
-auto-expand effect has already flushed before the rest of the test's synchronous assertions run.
-No product code changed — `OrgChartPage.tsx` itself is untouched; the two-effect split may still be
-worth simplifying later, but the test fix alone resolves the flake.
-
-**Proof.** Can't reproduce GitHub Actions' exact timing locally, so repetition is the best local
-proxy: `cd web && npx vitest run src/pages/OrgChartPage.test.tsx` run **5 times consecutively**,
-5/5 clean (all 5 tests in the file, including the previously-racing one). Full `pnpm --filter
-@ship/web test` also green. **Gate exception, disclosed:** the `regression-test` check looks for a
-newly-added test case; this ticket hardens an *existing* test's timing rather than adding coverage,
-so no new `it(...)` block was added — same class of accepted exception as this project's
-terraform-only tickets (proof is repetition-based, not a new assertion count).
-
-**How to run it.**
-```bash
-cd web && npx vitest run src/pages/OrgChartPage.test.tsx
-```
-
-**Roll back.** Revert this commit — reverts the test to its prior synchronous-query form, which is
-correct but timing-fragile under GitHub Actions specifically (not observed to fail locally).
 
 ---
 
