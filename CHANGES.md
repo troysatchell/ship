@@ -143,6 +143,71 @@ gitignored and never committed) would need a real value going forward, same as i
 
 ---
 
+## TRO-609 — e2e/program-mode-week-ux.spec.ts: sprint filter test asserted a `<select>` that never existed, cascaded to 30 skipped tests
+
+**What changed.** `e2e/program-mode-week-ux.spec.ts`'s file-scoped `test.describe.configure({mode:
+'serial'})` means one early failure skips every test after it (54 tests, 1 failure, 30 skipped —
+confirmed live before this fix). The one reported failure, `"Issues tab has sprint filter
+dropdown"`, asserted `page.locator('select')`, but the sprint filter (`IssuesList.tsx:1115-1128`)
+is a Radix Popover + cmdk `Combobox` and has never been a native `<select>`, since it was
+introduced (`6adf8f6`, 2026-01-21). Rewrote that test's locators to the real UI
+(`getByRole('combobox', {name: 'Filter issues by week'})` + `[cmdk-item]`, the pattern already
+proven in `e2e/weeks.spec.ts`).
+
+Fixing that one test only advanced the cascade point, so the fix kept going until it stopped
+surfacing failures inside its own root-cause cluster:
+
+- 8 tests asserted bucketed week filters ("Active Week"/"Upcoming Weeks"/"Completed Weeks"/
+  "Backlog (No Week)" as selectable filter values) that have never existed —
+  `sprintOptions` (`IssuesList.tsx:540-552`) is built only from real sprint names on issues, no
+  bucket/category concept anywhere, confirmed via `git log -S` on `web/src` (never introduced) and
+  on the test file (introduced in `ed932c9`, "Eliminate all test skips and fix test failures").
+  Same never-built-UI pattern as TRO-293/TRO-596: deleted, not fixed.
+- "Move to Week" in the bulk action bar (`BulkActionBar.tsx`) is also never a `<select>` — a
+  custom `ActionButton` + `role="menu"` dropdown. 2 tests rewritten to match.
+- The selection-count assertion `getByText(/\d+ issue[s]? selected/)` never matched the actual
+  rendered text (`BulkActionBar.tsx:159`: `{selectedCount} selected`, no "issue(s)" word) — only
+  surfaced once the cascade above stopped hiding it. 3 occurrences fixed to
+  `getByText(/^\d+ selected$/)`.
+- `"bulk \"Move to Week\" updates issues"` waited on `PATCH /api/issues/`, but the real call is
+  `POST /api/issues/bulk` (`useIssuesQuery.ts`'s `bulkUpdateIssuesApi`). Fixed the wait condition
+  and dropped an unverified "or 400" status assumption that doesn't apply to this endpoint.
+
+54 tests → 45 (9 deleted). `test.describe.configure({mode: 'serial'})` was deliberately **not**
+rescoped to per-`describe`-block serial mode — documented inline why: `e2e/fixtures/isolated-env.ts`
+gives each Playwright worker one persistent Postgres container shared across every test that
+worker runs, and several blocks mutate that shared week/sprint data
+(`cleanupExtraSprints()`/creation flows). Under `fullyParallel: true`, un-grouping the file would
+let those mutations race against other blocks' read assertions on the same worker DB. Splitting it
+safely needs a full read/write audit per block — filed as a separate follow-up, not guessed at
+here.
+
+**Not fixed here — filed as TRO-613.** Getting past the fixed cascade point surfaced a *different*,
+unrelated failure next in file order: `"active sprint shows Linear-style progress graph"` (Phase 2
+Continued) asserts `"Scope:"/"Started:"/"Completed:"` text that `WeekProgressGraph.tsx` does not
+appear to render (confirmed via grep — only found in code comments). Different feature, different
+component, same origin commit (`ed932c9`) — out of scope for this ticket, not investigated further
+here. The other 8 tests in that describe block, plus "Phase 2: Empty States" (2) and "Phase 3
+Continued" (1) after it, have still never been reached by any run to date.
+
+**How to verify it.** Every rewritten test verified individually,
+`PLAYWRIGHT_WORKERS=1 pnpm exec playwright test e2e/program-mode-week-ux.spec.ts -g "<test name>"
+--retries=0` (isolated, to rule out the shared-machine resource contention this session hit
+repeatedly while multiple factory sessions ran concurrently — two other unrelated tests
+spuriously failed with `ENOENT`/60s-timeout signatures under that load and passed cleanly in
+isolation; not counted as real failures). Cumulative full-file serial runs reached and passed every
+test through the end of "Phase 4 Continued: Filter Functionality" and the "Integration" test above
+across three independent attempts before hitting TRO-613's separate failure each time.
+
+**Rollback.** Revert this commit on branch
+`troysatchell/tro-609-e2eprogram-mode-week-uxspects-issues-tab-has-sprint-filter` — the only file
+touched is `e2e/program-mode-week-ux.spec.ts` (plus this CHANGES.md entry and a
+`.claude/skills/ship-factory/references/lessons.md` note). No application code changed. Reverting
+restores the original 54-test file with the pre-existing `<select>`-based cascade (1 failure, 30
+skipped) and the never-built bucketed-filter tests.
+
+---
+
 ## TRO-440 — PF-704: Flag matrix in CI + audit-trail proof — the Epic 7 submission evidence
 
 **What was built.** The missing graded proof artifact for Epic 7 (agent-as-platform-citizen). The
