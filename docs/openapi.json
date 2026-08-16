@@ -427,7 +427,8 @@
               "low",
               "medium",
               "high",
-              "urgent"
+              "urgent",
+              "none"
             ]
           },
           "assignee_id": {
