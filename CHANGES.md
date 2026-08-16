@@ -6,6 +6,91 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-453 — PF-804 (STRETCH, time-boxed 1 day): GitHub App — Ship issues ⇄ GitHub PRs
+
+**Preconditions confirmed before starting, per the ticket's own gate.** PF-800/801/802/803
+(TRO-445/447/449/451) are all Linear `Done` — verified live via `mcp__linear__list_issues`, not
+assumed from the ticket text, before any code was written.
+
+**Investigate-tier scope, decided here, documented in full in
+`api/src/platform/github/README.md`'s "Design decisions" section** (short version: a first-party
+`api/src/platform/github/` module rather than a satellite `integrations/github` package, because
+the persistent issue<->PR link table needs direct DB access that `integrations/*`'s
+`@ship/sdk`-only runtime-dependency rule structurally forbids — see migration
+`052_github_pr_links.sql`'s header for the full rationale).
+
+**What was built** (Ship-side code only — see "What a human still needs to do" below for the wall
+this ticket's own brief said only a human can clear):
+- `api/src/db/migrations/052_github_pr_links.sql` — one row per (Ship issue, GitHub PR) pair.
+- `api/src/platform/github/verifySignature.ts` — GitHub's `X-Hub-Signature-256` HMAC-SHA256
+  scheme (constant-time compare), distinct from `@ship/sdk`'s own `Ship-Signature` scheme.
+- `api/src/platform/github/webhookPayloads.ts` — hand-built zod schemas for GitHub's documented
+  `pull_request`/`issue_comment` payload shapes, plus the `Ship#<n>` issue-reference extraction
+  this ticket invented as its own convention (no prior one existed).
+- `api/src/platform/github/linkSyncService.ts` — resolves `Ship#<n>` references against
+  `documents.ticket_number` and upserts `github_pr_links` rows.
+- `api/src/platform/github/installationAuth.ts` — real RS256 JWT signing (hand-rolled via
+  `node:crypto`, no new dependency) + GitHub's documented installation-access-token exchange.
+- `api/src/platform/github/postBackService.ts` + `wirePostBack.ts` — subscribes to Ship's own
+  `issue.status_changed` event (`IEventBus`, PF-300's existing registry) and posts a status-change
+  comment on every linked PR via the GitHub REST API.
+- `api/src/routes/githubWebhook.ts` — `POST /api/github/webhook` receiver, mounted in `app.ts`
+  only when `options.github` is supplied (see `CreateAppOptions.github`'s own doc comment) —
+  `express.raw()` registered on this exact path BEFORE the global `express.json()` call, same
+  reason `integrations/slack/src/server.ts` uses `express.raw()` for its own receiver (the HMAC is
+  computed over the exact signed bytes).
+- `api/src/index.ts` — reads `GITHUB_WEBHOOK_SECRET`/`GITHUB_SHIP_WORKSPACE_ID` (inbound route)
+  and `GITHUB_APP_ID`/`GITHUB_APP_PRIVATE_KEY` (outbound post-back) from env, each direction
+  independently opt-in: unset -> that half is simply not wired, logged once at boot, same
+  fail-partial posture `routes/agent.ts`'s `AGENT_INTERNAL_SECRET` check already establishes.
+
+**Investigated and NOT reused, with the reason recorded:** the ticket's brief suggested the
+existing webhook subscription/delivery pipeline (`deliverer.ts`) might handle the "Ship -> GitHub"
+direction. Investigated: `InMemoryWebhookDeliverer` POSTs a fixed Ship-signed JSON envelope to one
+subscriber URL — the right shape for "notify an external system," wrong shape for GitHub's REST
+API (specific endpoint path + Bearer token + GitHub-shaped body per call). What IS reused is that
+pipeline's *event* side — `IEventBus`/`issue.status_changed`, the same PF-300 registry — which
+`wirePostBack.ts` subscribes to directly, the same pattern `wireDelivererToEventBus` already uses.
+
+**What a human still needs to do (this ticket's own brief: state this plainly, never claim
+"done" for a step that needs one)** — full detail in `api/src/platform/github/README.md`:
+register a real GitHub App at <https://github.com/settings/apps/new> (webhook URL
+`/api/github/webhook`, `Pull requests: Read & write` + `Metadata: Read-only` permissions,
+`Pull request`/`Issue comment` events), install it on the target repo, and set four env vars
+(`GITHUB_WEBHOOK_SECRET`, `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY`, `GITHUB_SHIP_WORKSPACE_ID`) —
+none of which exist as Terraform variables yet either (a follow-up, not done here). Also
+explicitly NOT built in this time-box: any portal/UI surface for linked PRs, label sync (comment
+post-back only), and acting on `issue_comment` events (acknowledged/200'd, not synced — see
+README for why).
+
+**Regression tests.** 36 new tests across 6 files, all against the real test Postgres pool where
+DB access is involved (never a mock for a row assertion), all outbound GitHub HTTP calls via an
+injected `fetchImpl` (no live GitHub App/network access needed):
+`api/src/platform/github/__tests__/verifySignature.test.ts` (8),
+`webhookPayloads.test.ts` (11), `linkSyncService.test.ts` (5, real DB),
+`installationAuth.test.ts` (4 — a real generated RSA keypair proves `signAppJwt`'s output is a
+genuine RS256 signature, not a fixed stub, including a negative test against a different
+keypair), `postBackService.test.ts` (3, real DB link rows + mocked GitHub API),
+`api/src/routes/githubWebhook.test.ts` (5, `createApp()` + supertest end-to-end, real DB).
+
+**How to run/verify.**
+```bash
+source .factory-env
+pnpm --filter @ship/api db:migrate   # applies 052_github_pr_links.sql
+pnpm --filter @ship/api type-check
+pnpm --filter @ship/api exec vitest run src/platform/github src/routes/githubWebhook.test.ts
+```
+All 36 tests pass; `type-check` clean.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit). Drop `api/src/db/migrations/
+052_github_pr_links.sql`'s table with a follow-up migration if a fresh deploy already ran it
+(`DROP TABLE IF EXISTS github_pr_links;`) — nothing outside `api/src/platform/github/`,
+`api/src/routes/githubWebhook.ts`, and the three edited files (`app.ts`, `index.ts`, this
+migration) changes. No env var is required for the rest of the API to keep working — every new
+code path is additive and opt-in.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth

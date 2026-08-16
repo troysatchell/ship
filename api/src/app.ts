@@ -54,6 +54,7 @@ import { initializeCAIA } from './services/caia.js';
 import { v1Router, createV1Router } from './platform/api/v1/router.js';
 import { createPublicApiCors } from './platform/publicCors.js';
 import type { IWebhookDeliverer } from './platform/webhooks/deliverer.js';
+import { createGithubWebhookRouter } from './routes/githubWebhook.js';
 
 // Validate SESSION_SECRET in production
 if (process.env.NODE_ENV === 'production' && !process.env.SESSION_SECRET) {
@@ -243,6 +244,15 @@ export function resolveTrustProxyHops(rawValue: string | undefined): number {
  */
 export interface CreateAppOptions {
   webhookDeliverer?: IWebhookDeliverer;
+  /**
+   * GitHub App webhook receiver config (PF-804 / TRO-453). Omitted -> the route is not mounted
+   * at all (404, not a misleading 401) — matches this deployment's actual state until a human
+   * registers a real GitHub App and sets `GITHUB_WEBHOOK_SECRET`/`GITHUB_SHIP_WORKSPACE_ID` (see
+   * `platform/github/README.md`). `index.ts` is the only caller that passes this when both env
+   * vars are present; every test file either omits it or passes its own fixture secret, the same
+   * shape `webhookDeliverer` above already established.
+   */
+  github?: { webhookSecret: string; shipWorkspaceId: string };
 }
 
 export function createApp(
@@ -365,6 +375,17 @@ export function createApp(
   // point before it; nothing between the old position and this one reads
   // `req.body` (`perSourceIpLimiter`/`perIdentityLimiter` key on IP/session/
   // token, not body).
+  // GitHub App webhook receiver (PF-804 / TRO-453): registered BEFORE the global
+  // `express.json()` call below, on this exact path, for the identical reason
+  // `integrations/slack/src/server.ts` uses `express.raw()` for its own webhook route —
+  // `verifyGithubSignature`'s HMAC is computed over the untouched request bytes, and
+  // `express.json()` would have already parsed (and structurally normalized) the body before the
+  // route ever saw it. Path-scoped so no other route's body parsing is affected. A body-parser
+  // middleware sets an internal `req._body` flag once it succeeds; `express.json()` below checks
+  // that flag and skips re-parsing a body this one already consumed (Express's own body-parser
+  // behavior, not something this file implements).
+  app.use('/api/github/webhook', express.raw({ type: 'application/json', limit: '1mb' }));
+
   app.use(express.json({ limit: '10mb' }));  // Large wiki documents can be several MB
   app.use(express.urlencoded({ extended: true, limit: '10mb' })); // For HTML form submissions
 
@@ -505,6 +526,15 @@ export function createApp(
   app.use('/api/invites', conditionalCsrf, invitesRoutes);
   app.use('/api/api-tokens', conditionalCsrf, apiTokensRoutes);
   app.use('/api/oauth-apps', conditionalCsrf, oauthAppsRoutes);
+
+  // GitHub App webhook receiver (PF-804 / TRO-453). No `conditionalCsrf`, no session auth —
+  // GitHub is an external caller, not a Ship browser session; `createGithubWebhookRouter`'s own
+  // signature check is this route's auth. Mounted only when configured (see `CreateAppOptions.github`'s
+  // own doc comment) — an unconfigured deployment gets a plain 404 here, not a route that exists
+  // but can never pass its own signature check.
+  if (options.github) {
+    app.use('/api/github', createGithubWebhookRouter({ webhookSecret: options.github.webhookSecret, shipWorkspaceId: options.github.shipWorkspaceId }));
+  }
 
   // Claude context routes - read-only GET endpoints for Claude skills
   app.use('/api/claude', claudeRoutes);
