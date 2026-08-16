@@ -19,6 +19,8 @@ import crypto from 'crypto'
 import { createApp } from '../../../app.js'
 import { pool } from '../../../db/client.js'
 import { verifyAppCredentials, rotateOAuthAppSecret } from '../appRegistration.js'
+import { InternalErrorResponseSchema } from '../../../openapi/schemas/common.js'
+import { generateOpenAPIDocument } from '../../../openapi/index.js'
 
 describe('OAuth app registration (PF-102)', () => {
   const app = createApp()
@@ -625,5 +627,59 @@ describe('OAuth app registration (PF-102)', () => {
       await pool.query('DELETE FROM workspace_memberships WHERE user_id = $1', [memberUserId])
       await pool.query('DELETE FROM users WHERE id = $1', [memberUserId])
     }
+  })
+
+  // TRO-493 (PF-102 follow-up): every error response this route emits is
+  // `{success: false, error: {code, message, details?}}` — CodeRabbit found
+  // the route's own OpenAPI registration had been pointing at the wrong
+  // shared schema (`ErrorResponseSchema`, a flat `{error: string, ...}` that
+  // `documents.ts`/`issues.ts` actually return) instead of one that matches
+  // this route's real, and this codebase's dominant, `{success, error:{...}}`
+  // convention. This parses real response bodies from three different error
+  // paths (validation/400, not-found/404, forbidden/403) against the
+  // corrected `InternalErrorResponseSchema` — a schema-shape assertion, not
+  // just a status-code one, which is the class of drift a status-code-only
+  // check can never catch.
+  it('every error response matches InternalErrorResponseSchema (TRO-493)', async () => {
+    const validationRes = await request(app)
+      .post('/api/oauth-apps')
+      .set('Cookie', sessionCookie)
+      .set('x-csrf-token', csrfToken)
+      .send({ client_type: 'confidential' }) // missing required `name`
+    expect(validationRes.status).toBe(400)
+
+    const notFoundRes = await request(app)
+      .get(`/api/oauth-apps/${crypto.randomUUID()}`)
+      .set('Cookie', sessionCookie)
+
+    const noSessionRes = await request(app).get('/api/oauth-apps')
+
+    for (const res of [validationRes, notFoundRes, noSessionRes]) {
+      const parsed = InternalErrorResponseSchema.safeParse(res.body)
+      expect(parsed.success, `status ${res.status} body ${JSON.stringify(res.body)}: ${JSON.stringify(parsed.success ? null : parsed.error.issues)}`).toBe(true)
+    }
+
+    // The validation-error case is the one whose `details` shape actually
+    // varies (zod's own `flatten()`) — assert it concretely rather than
+    // only via the generic schema's `z.record(z.unknown())`.
+    expect(validationRes.body.error.details).toHaveProperty('fieldErrors')
+  })
+
+  // TRO-493: the assertion above proves the *runtime* body matches
+  // InternalErrorResponseSchema, but that alone can't catch this bug's real
+  // shape — the runtime shape never changed; only the OpenAPI *documentation*
+  // pointed at the wrong schema. This checks the generated document's own
+  // `$ref` directly, so reverting oauth-apps.ts's registration back to
+  // `ErrorResponseSchema` fails this test even though every other assertion
+  // in this file would still pass.
+  it("the generated OpenAPI doc references InternalErrorResponse for oauth-apps errors, not the mismatched ErrorResponse (TRO-493)", () => {
+    const doc = generateOpenAPIDocument()
+    const responses = doc.paths?.['/oauth-apps']?.post?.responses as
+      | Record<string, { content?: { 'application/json'?: { schema?: { $ref?: string } } } }>
+      | undefined
+    const ref = responses?.['400']?.content?.['application/json']?.schema?.$ref
+    expect(ref, 'POST /oauth-apps 400 response schema $ref').toBe(
+      '#/components/schemas/InternalErrorResponse'
+    )
   })
 })

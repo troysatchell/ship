@@ -86,6 +86,62 @@ since a migration-less code revert cannot un-hash already-written data.
 
 ---
 
+## TRO-493 — PF-102 follow-up: `oauth-apps.ts` registered the wrong error-response schema
+
+**Root cause.** `api/src/openapi/schemas/oauth-apps.ts` registered every one of its route's error
+responses (11 across 5 handlers — create/list/get/rotate/revoke) against the shared
+`ErrorResponseSchema` (`api/src/openapi/schemas/common.ts`) — a flat `{error: string, message?,
+details?: array<{path,message}>}` shape. But `api/src/routes/oauth-apps.ts` has never returned
+that shape; every error response there is `{success: false, error: {code, message, details?}}`,
+with `details` carrying zod's own `flatten()` output (`{formErrors, fieldErrors}`) on validation
+failures. Surveyed before picking a fix direction, per the ticket's own instruction not to assume
+either side is "correct": `grep -l "success: false" api/src/routes/*.ts` returns 9 files
+(`api-tokens.ts`, `workspaces.ts`, `oauth-apps.ts`, and 6 more) all using this same
+`{success,error:{code,message}}` shape, plus `api/src/middleware/auth.ts` itself — this is the
+dominant, established convention across the internal API, not an outlier. `documents.ts`/
+`issues.ts` are the ones actually close to `ErrorResponseSchema`'s flat shape. `oauth-apps.ts`
+registered the wrong shared schema; the schema itself was never wrong for the routes that
+correctly use it.
+
+**What changed.**
+- `api/src/openapi/schemas/common.ts`: added `InternalErrorResponseSchema` — `{success:
+  z.literal(false), error: {code: z.enum(ERROR_CODES values), message: z.string(), details?:
+  z.record(z.unknown())}}` — describing the real, dominant convention. `ErrorResponseSchema`
+  itself is **untouched**, since `issues.ts` genuinely returns its shape; changing it would have
+  fixed oauth-apps.ts by breaking issues.ts's already-correct registration.
+- `api/src/openapi/schemas/oauth-apps.ts`: all 11 `ErrorResponseSchema` references switched to
+  `InternalErrorResponseSchema`. No route-handler code changed — the runtime behavior was already
+  correct; only the OpenAPI documentation was wrong.
+
+**Regression tests** — `api/src/platform/oauth/__tests__/app-registration.test.ts`, two new cases:
+1. *Shape*: three real response bodies (validation/400, not-found/404, no-session/401) parsed with
+   `InternalErrorResponseSchema.safeParse()`, plus a concrete check that the validation case's
+   `details` carries `fieldErrors`.
+2. *Documentation-drift*: `generateOpenAPIDocument()`'s actual generated doc is inspected directly
+   — `paths['/oauth-apps'].post.responses['400'].content['application/json'].schema.$ref` must
+   equal `'#/components/schemas/InternalErrorResponse'`. **This is the test that actually catches
+   the original bug** — test 1 alone doesn't, because the runtime shape never changed; only the
+   *documentation* did. Verified genuinely red before the fix: reverted `oauth-apps.ts`'s schema
+   references back to `ErrorResponseSchema` and re-ran — test 1 still passed (proving it doesn't
+   catch this bug class), test 2 failed with `expected '#/components/schemas/ErrorResponse' to be
+   '#/components/schemas/InternalErrorResponse'`, then restored and both passed.
+
+**Full `api` suite**: 1427 tests, 2 failures (`files.test.ts`'s file-confirm test,
+`route-fitness.test.ts`'s `/api/v1/issues` 401-check) — both re-run standalone and passed 133/133,
+confirming the documented load-sensitive (TEST-12/TRO-277-class) pattern, not a regression from
+this change (neither touched file is anywhere near `oauth-apps.ts`/`common.ts`).
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/app-registration.test.ts
+```
+
+**Rollback.** `git revert <this commit>` — 3 files (`common.ts`, `oauth-apps.ts`,
+`app-registration.test.ts`), no schema/migration, no route-handler behavior change.
+
+---
+
 ## TRO-552 — v1-exemption boundary predicate now tested at segment edges
 
 **What was built.** `isLegacyLimiterExemptPath` (`api/src/middleware/rate-limit.ts`) — the
