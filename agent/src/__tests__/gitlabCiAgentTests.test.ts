@@ -134,3 +134,28 @@ describe('.gitlab-ci.yml — verify job runs the agent regression suite (TRO-369
     expect(actualCommandWithWhitespace).toMatch(AGENT_TEST_LIST_ENTRY);
   });
 });
+
+/**
+ * TRO-440 (PF-704) — "CI runs agent tests with flag on and off." Asserts
+ * the SECOND invocation exists as a real script list entry with
+ * `AGENT_PLATFORM_MODE=sdk` set, inside the same `verify` job, distinct
+ * from the flag-off invocation above.
+ */
+describe('.gitlab-ci.yml — verify job runs the agent suite a second time with AGENT_PLATFORM_MODE=sdk (TRO-440)', () => {
+  const AGENT_TEST_SDK_MODE_ENTRY = /^\s*-\s+AGENT_PLATFORM_MODE=sdk pnpm --filter @ship\/agent test(?:\s|$)/m;
+
+  it('invokes the agent suite a second time with AGENT_PLATFORM_MODE=sdk as a real script list entry', () => {
+    const yaml = readGitlabCi();
+    const verifyBody = extractJobBody(yaml, 'verify');
+
+    expect(verifyBody).toMatch(AGENT_TEST_SDK_MODE_ENTRY);
+  });
+
+  it('the flag-off invocation (no AGENT_PLATFORM_MODE) still exists alongside the flag-on one — both, not a replacement', () => {
+    const yaml = readGitlabCi();
+    const verifyBody = extractJobBody(yaml, 'verify');
+
+    expect(verifyBody).toMatch(AGENT_TEST_LIST_ENTRY);
+    expect(verifyBody).toMatch(AGENT_TEST_SDK_MODE_ENTRY);
+  });
+});
