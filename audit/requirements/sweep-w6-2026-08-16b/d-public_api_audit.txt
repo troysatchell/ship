@@ -1,0 +1,19 @@
+                           Table "public.public_api_audit"
+    Column     |           Type           | Collation | Nullable |      Default      
+---------------+--------------------------+-----------+----------+-------------------
+ id            | uuid                     |           | not null | gen_random_uuid()
+ request_id    | text                     |           | not null | 
+ app_client_id | text                     |           |          | 
+ user_id       | uuid                     |           |          | 
+ method        | text                     |           | not null | 
+ route         | text                     |           | not null | 
+ scope_used    | text                     |           |          | 
+ status        | integer                  |           | not null | 
+ latency_ms    | integer                  |           | not null | 
+ created_at    | timestamp with time zone |           | not null | now()
+Indexes:
+    "public_api_audit_pkey" PRIMARY KEY, btree (id)
+    "idx_public_api_audit_app_client_id" btree (app_client_id)
+    "idx_public_api_audit_created_at_id" btree (created_at DESC, id DESC)
+    "idx_public_api_audit_user_id" btree (user_id)
+

@@ -1,0 +1,280 @@
+
+> ship@0.0.0 test:agent /Users/troy/repos/GAUNTLET/Ship
+> pnpm --filter @ship/agent test
+
+
+> @ship/agent@0.0.0 test /Users/troy/repos/GAUNTLET/Ship/agent
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv4.0.17 [39m[90m/Users/troy/repos/GAUNTLET/Ship/agent[39m
+
+[90mstderr[2m | src/__tests__/server.test.ts[2m > [22m[2mPOST /chat[2m > [22m[2mreturns 502 (never a hang or a raw stack trace) when the graph invocation itself throws
+[22m[39m[agent] /chat graph invocation failed: Error: Ship unreachable mid-expansion
+    at [90m/Users/troy/repos/GAUNTLET/Ship/agent/[39msrc/__tests__/server.test.ts:167:55
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:145:11
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:915:26
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1209:10)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:12)
+
+[90mstderr[2m | src/__tests__/server.test.ts[2m > [22m[2mPOST /chat[2m > [22m[2mreturns 504 (never an unbounded hang) when graph.invoke does not settle within chatHandlerTimeoutMs, and actually aborts the SAME signal it passed to the graph
+[22m[39m[agent] /chat timed out after 20ms waiting on graph.invoke — the underlying node call may still be running server-side; see this handler's own comment.
+
+[90mstderr[2m | src/__tests__/server.test.ts[2m > [22m[2mPOST /accept-draft[2m > [22m[2mreturns 502 (never a hang or a raw stack trace) when the Ship write itself fails
+[22m[39m[agent] /accept-draft failed: Error: Ship unreachable
+    at [90m/Users/troy/repos/GAUNTLET/Ship/agent/[39msrc/__tests__/server.test.ts:570:54
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:145:11
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:915:26
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1209:10)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:12)
+
+ [32m✓[39m src/__tests__/server.test.ts [2m([22m[2m40 tests[22m[2m)[22m[33m 17754[2mms[22m[39m
+     [33m[2m✓[22m[39m with the production defaults (8s timeout, 1 retry), a fully-hung call settles well within chatHandlerTimeoutMs (25s default) [33m 17173[2mms[22m[39m
+     [33m[2m✓[22m[39m a request that never retries (maxRetries: 0) makes exactly one attempt and settles near its own single timeout [33m 503[2mms[22m[39m
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mread-heavy turn: app-identity Client Credentials reads (documents/issues/sprints) each land an audit row attributed to ship_app_fleetgraph, never to any user
+[22m[39m[api/v1] request_id=cb4b4b78-21c6-4eee-8350-3abaf94237d2 GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mread-heavy turn: app-identity Client Credentials reads (documents/issues/sprints) each land an audit row attributed to ship_app_fleetgraph, never to any user
+[22m[39m[api/v1] request_id=10c29bf0-c4a5-46a4-b769-2b8d1e2ac782 GET /api/v1/issues
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mread-heavy turn: app-identity Client Credentials reads (documents/issues/sprints) each land an audit row attributed to ship_app_fleetgraph, never to any user
+[22m[39m[api/v1] request_id=476bf38b-0aca-4e21-a7f4-f3fe9fab6c61 GET /api/v1/sprints
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mone accepted draft write: the human write token lands an audit row attributed to the human user, never to ship_app_fleetgraph
+[22m[39m[api/v1] request_id=9fdd8fe3-01ed-4a30-92c9-3dd7538bacb6 GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mone accepted draft write: the human write token lands an audit row attributed to the human user, never to ship_app_fleetgraph
+[22m[39m[api/v1] request_id=020a5fbd-6e8f-4a61-b97b-ee6c23475530 POST /api/v1/documents
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mone accepted draft write: the human write token lands an audit row attributed to the human user, never to ship_app_fleetgraph
+[22m[39m[api/v1] request_id=7f106d26-833c-4f29-88cb-86d5b70530f7 PATCH /api/v1/documents/6cca78fd-486c-44cd-bcba-7a42487b2f15
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mrate-limit headers were present on the app-identity credential this turn used
+[22m[39m[api/v1] request_id=a7b14144-39c8-4653-a759-61c8d997291c GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/auditTrailProof.liveServer.test.ts[2m > [22m[2mTRO-440 (PF-704): a real sdk-mode agent turn (app-identity reads + one human-identity write) leaves an audit trail proving every action went through /api/v1, against a real running Ship API + the seeded worktree DB[2m > [22m[2mPROOF ARTIFACT: the audit rows themselves, printed for the ticket/PR (this ticket's own AC)
+[22m[39m[TRO-440/PF-704] Epic 7 submission proof — public_api_audit rows for this agent turn:
+SELECT id, user_id, app_client_id, route, method, scope_used, status, created_at FROM public_api_audit WHERE (app_client_id = 'ship_app_fleetgraph' OR user_id = 'c4c799fd-5a1d-4577-8574-903ded53e7fc') AND created_at > NOW() - INTERVAL '1 minute' ORDER BY created_at ASC;
+[
+  {
+    "id": "68ffc3f9-5f3b-4bd7-a7bd-e87e159c6a74",
+    "user_id": null,
+    "app_client_id": "ship_app_fleetgraph",
+    "route": "/api/v1/documents",
+    "method": "GET",
+    "scope_used": "documents:read",
+    "status": 200,
+    "created_at": "2026-08-16T13:41:37.767Z"
+  },
+  {
+    "id": "064389ba-ba4b-4152-9b00-ef7468cc110b",
+    "user_id": null,
+    "app_client_id": "ship_app_fleetgraph",
+    "route": "/api/v1/issues",
+    "method": "GET",
+    "scope_used": "issues:read",
+    "status": 200,
+    "created_at": "2026-08-16T13:41:37.771Z"
+  },
+  {
+    "id": "49d40d85-6446-4476-8406-dff70107a37c",
+    "user_id": null,
+    "app_client_id": "ship_app_fleetgraph",
+    "route": "/api/v1/sprints",
+    "method": "GET",
+    "scope_used": "sprints:read",
+    "status": 200,
+    "created_at": "2026-08-16T13:41:37.774Z"
+  },
+  {
+    "id": "f22174b3-f5fe-4bf1-aca0-52c273630ae7",
+    "user_id": "c4c799fd-5a1d-4577-8574-903ded53e7fc",
+    "app_client_id": null,
+    "route": "/api/v1/me",
+    "method": "GET",
+    "scope_used": null,
+    "status": 200,
+    "created_at": "2026-08-16T13:41:37.794Z"
+  },
+  {
+    "id": "aaf81f65-a0f9-4453-8c53-9707702723fa",
+    "user_id": "c4c799fd-5a1d-4577-8574-903ded53e7fc",
+    "app_client_id": null,
+    "route": "/api/v1/documents",
+    "method": "POST",
+    "scope_used": "documents:write",
+    "status": 201,
+    "created_at": "2026-08-16T13:41:37.801Z"
+  },
+  {
+    "id": "eeeb1bfb-71e9-402b-b342-a66de5eeb9bc",
+    "user_id": "c4c799fd-5a1d-4577-8574-903ded53e7fc",
+    "app_client_id": null,
+    "route": "/api/v1/documents/6cca78fd-486c-44cd-bcba-7a42487b2f15",
+    "method": "PATCH",
+    "scope_used": "documents:write",
+    "status": 200,
+    "created_at": "2026-08-16T13:41:37.805Z"
+  },
+  {
+    "id": "2fd8c369-e12d-492c-9c60-7b3f370b8761",
+    "user_id": null,
+    "app_client_id": "ship_app_fleetgraph",
+    "route": "/api/v1/documents",
+    "method": "GET",
+    "scope_used": "documents:read",
+    "status": 200,
+    "created_at": "2026-08-16T13:41:37.809Z"
+  }
+]
+
+ [32m✓[39m src/__tests__/auditTrailProof.liveServer.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 129[2mms[22m[39m
+[90mstderr[2m | src/__tests__/composeAnswerAbortPropagation.test.ts[2m > [22m[2mPOST /chat — composeAnswer forwards the handler AbortSignal to ANY conforming AnthropicModel (TRO-379)[2m > [22m[2maborts the in-flight model request once the handler times out, even though the model call only started AFTER most of the budget was already spent on resolveSeed
+[22m[39m[agent] /chat timed out after 500ms waiting on graph.invoke — the underlying node call may still be running server-side; see this handler's own comment.
+
+ [32m✓[39m src/__tests__/composeAnswerAbortPropagation.test.ts [2m([22m[2m1 test[22m[2m)[22m[33m 4522[2mms[22m[39m
+     [33m[2m✓[22m[39m aborts the in-flight model request once the handler times out, even though the model call only started AFTER most of the budget was already spent on resolveSeed [33m 4521[2mms[22m[39m
+ [32m✓[39m src/__tests__/graph.test.ts [2m([22m[2m67 tests[22m[2m)[22m[32m 230[2mms[22m[39m
+[90mstdout[2m | src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts[2m > [22m[2mthe human-in-the-loop write boundary, against a real running Ship API + the seeded worktree DB (TRO-321 / FG-8)
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts[2m > [22m[2mthe human-in-the-loop write boundary, against a real running Ship API + the seeded worktree DB (TRO-321 / FG-8)[2m > [22m[2msdk mode — the same write-boundary proof, routed through /api/v1/*, plus human-attribution evidence in public_api_audit[2m > [22m[2mapplyIssueTransition (sdk mode) moves document_history + issue state identically to internal mode, attributed to the human — never the agent, never the app
+[22m[39m[api/v1] request_id=c699e136-e940-4aef-92cc-d8ba32215aff PATCH /api/v1/issues/5012a9ef-4a16-4a51-b61b-be94b433e7a4
+
+[90mstdout[2m | src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts[2m > [22m[2mthe human-in-the-loop write boundary, against a real running Ship API + the seeded worktree DB (TRO-321 / FG-8)[2m > [22m[2msdk mode — the same write-boundary proof, routed through /api/v1/*, plus human-attribution evidence in public_api_audit[2m > [22m[2macceptDraft (sdk mode) posts a real standup document via /api/v1/documents, attributed to the human in public_api_audit for BOTH the create and the content write
+[22m[39m[api/v1] request_id=375a231e-b2b5-4f1a-95fa-921d5e1a2993 GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts[2m > [22m[2mthe human-in-the-loop write boundary, against a real running Ship API + the seeded worktree DB (TRO-321 / FG-8)[2m > [22m[2msdk mode — the same write-boundary proof, routed through /api/v1/*, plus human-attribution evidence in public_api_audit[2m > [22m[2macceptDraft (sdk mode) posts a real standup document via /api/v1/documents, attributed to the human in public_api_audit for BOTH the create and the content write
+[22m[39m[api/v1] request_id=91ae84ea-6331-4a39-94c9-d7353e4843fa POST /api/v1/documents
+
+[90mstdout[2m | src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts[2m > [22m[2mthe human-in-the-loop write boundary, against a real running Ship API + the seeded worktree DB (TRO-321 / FG-8)[2m > [22m[2msdk mode — the same write-boundary proof, routed through /api/v1/*, plus human-attribution evidence in public_api_audit[2m > [22m[2macceptDraft (sdk mode) posts a real standup document via /api/v1/documents, attributed to the human in public_api_audit for BOTH the create and the content write
+[22m[39m[api/v1] request_id=3c5d247d-c89e-4a65-874b-283a972549ef PATCH /api/v1/documents/9f5977dc-6229-4f94-a697-4931a99abb10
+
+ [32m✓[39m src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 174[2mms[22m[39m
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetDocument(): parity on id/document_type/title/properties; documented divergence on content/visibility/created_by
+[22m[39m[api/v1] request_id=e4425d41-22ea-4736-8a3b-b6bfb1af466b GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetPeople(): identical people arrays (field-renamed camelCase, same values)
+[22m[39m[api/v1] request_id=19b776ea-fb3b-4e51-9226-c17ea46919db GET /api/v1/people
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetAssociations(): identical forward edges, with and without a type filter
+[22m[39m[api/v1] request_id=cf1ad095-af93-4198-a7e1-e5e6dbf453d7 GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d/associations
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetAssociations(): identical forward edges, with and without a type filter
+[22m[39m[api/v1] request_id=614c492f-ed91-4d0f-ac36-a3d760bfc6e6 GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d/associations
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetAssociations(): identical forward edges, with and without a type filter
+[22m[39m[api/v1] request_id=6dbce9e4-7b65-4e76-8a8d-b39d160fc373 GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d/associations
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetReverseAssociations(): identical reverse edges, with and without a type filter
+[22m[39m[api/v1] request_id=f9953aed-d62e-4ff0-af18-634c6dd2eca8 GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d/reverse-associations
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetBacklinks(): identical backlink entries, including display_id for the linking issue
+[22m[39m[api/v1] request_id=707f32b9-a358-4700-90ee-51f2e061d1bc GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d/backlinks
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetComments(): identical comment entries (id/content/author/timestamps), order-independent
+[22m[39m[api/v1] request_id=b082818e-1730-469a-9511-3e0f0771f9ff GET /api/v1/documents/d8c2da6f-e182-4884-ba56-7e769689678d/comments
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetIssuesByAssignee(): identical issue summaries for the seeded assignee
+[22m[39m[api/v1] request_id=8f4de08b-aa9f-48f3-8b63-ac9c7ec97883 GET /api/v1/issues
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mlistDocuments(): identical document-list items for type "person"
+[22m[39m[api/v1] request_id=1bb72e41-19fb-4f0f-85ba-68fae8716678 GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetWeekDates(): identical calendar date (internal returns a full ISO datetime, v1 a bare YYYY-MM-DD — see module docstring in shipClient.ts; the only real consumer, retroDraft.ts's computeWeekWindow, already slices to the first 10 chars, so this is a disclosed, functionally-inert format difference)
+[22m[39m[api/v1] request_id=ce852b22-bf16-4d27-b1a1-2428f7b9a562 GET /api/v1/sprints/c7fbad18-bde8-481d-9bb6-4532c20709e7
+
+[90mstdout[2m | src/__tests__/shipClientParity.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB[2m > [22m[2mgetChangeFeed(): identical documents/history/comments entries for the seeded fixtures (both re-tag the same three arrays from different wire shapes)
+[22m[39m[api/v1] request_id=00036ab0-493b-4f88-804d-f26a41522a15 GET /api/v1/changes
+
+ [32m✓[39m src/__tests__/shipClientParity.liveServer.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 158[2mms[22m[39m
+[90mstderr[2m | src/__tests__/costTracking.test.ts[2m > [22m[2mgraph.ts wiring: real model usage is captured per invocation (TRO-339)[2m > [22m[2mdoes not let a throwing CostTracker.record() fail the graph response
+[22m[39m[agent] cost tracker failed to record a "respond" invocation (non-fatal): Error: simulated disk write failure
+    at Object.record [90m(/Users/troy/repos/GAUNTLET/Ship/agent/[39msrc/__tests__/costTracking.test.ts:353:15[90m)[39m
+    at recordInvocation [90m(/Users/troy/repos/GAUNTLET/Ship/agent/[39msrc/graph.ts:1217:19[90m)[39m
+    at RunnableCallable.func [90m(/Users/troy/repos/GAUNTLET/Ship/agent/[39msrc/graph.ts:1349:13[90m)[39m
+
+ [32m✓[39m src/__tests__/costTracking.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 52[2mms[22m[39m
+ [32m✓[39m src/__tests__/shipClient.test.ts [2m([22m[2m22 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/__tests__/proactive.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+[90mstdout[2m | src/__tests__/check-readiness-and-rollback.test.ts[2m > [22m[2mrunReadinessCheck (the wired trigger: poll -> evaluate -> decide -> act)[2m > [22m[2mon a sustained failure with --execute and a key, actually calls Render to redeploy the previous live deploy
+[22m[39mRolling back srv-agent-123 to previous live deploy dep-good (commit good-sha)...
+
+[90mstdout[2m | src/__tests__/check-readiness-and-rollback.test.ts[2m > [22m[2mrunReadinessCheck (the wired trigger: poll -> evaluate -> decide -> act)[2m > [22m[2mon a sustained failure with --execute and a key, actually calls Render to redeploy the previous live deploy
+[22m[39mRollback deploy triggered successfully.
+
+[90mstdout[2m | src/__tests__/check-readiness-and-rollback.test.ts[2m > [22m[2mrunReadinessCheck (the wired trigger: poll -> evaluate -> decide -> act)[2m > [22m[2mcalls onEvaluated exactly once, before any Render call, on a sustained failure with --execute
+[22m[39mRolling back srv-agent-123 to previous live deploy dep-good (commit good-sha)...
+
+[90mstdout[2m | src/__tests__/check-readiness-and-rollback.test.ts[2m > [22m[2mrunReadinessCheck (the wired trigger: poll -> evaluate -> decide -> act)[2m > [22m[2mcalls onEvaluated exactly once, before any Render call, on a sustained failure with --execute
+[22m[39mRollback deploy triggered successfully.
+
+ [32m✓[39m src/__tests__/check-readiness-and-rollback.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/__tests__/inboxHrefRoutes.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/__tests__/resilientClient.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/__tests__/deployReadiness.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/__tests__/planChangeDraft.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/__tests__/graphWriteBoundary.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+ [32m✓[39m src/__tests__/fleetgraphCostFigures.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/__tests__/health.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/__tests__/expansion.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/__tests__/draftStore.test.ts [2m([22m[2m20 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/__tests__/itemStore.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+[90mstderr[2m | src/__tests__/gate.test.ts[2m > [22m[2macceptDraft — draft survival recording (TRO-338 / FG-20)[2m > [22m[2ma tracker that throws does not fail the accept — the Ship write already succeeded
+[22m[39m[agent] draft survival tracker failed to record draft standup-draft:user-a:2026-08-04 (non-fatal): Error: disk full
+    at [90m/Users/troy/repos/GAUNTLET/Ship/agent/[39msrc/__tests__/gate.test.ts:266:41
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:145:11
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:915:26
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1209:10)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:12)
+
+ [32m✓[39m src/__tests__/gate.test.ts [2m([22m[2m23 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/__tests__/draftSurvival.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/__tests__/proactivePoll.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/__tests__/retroDraft.test.ts [2m([22m[2m18 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+ [32m✓[39m src/__tests__/standupDraft.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/__tests__/blockerFanout.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/__tests__/circuitBreaker.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/__tests__/config.test.ts [2m([22m[2m21 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/__tests__/ciFailureRollbackWorkflow.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/__tests__/roles.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/__tests__/gitlabCiAgentTests.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/__tests__/agentRollbackWorkflow.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/mentions.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/__tests__/goldenSet.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/rateLimiter.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/golden-set-compare.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/personDirectory.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/textSimilarity.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/cost-report.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/__tests__/visibility.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m40 passed[39m[22m[90m (40)[39m
+[2m      Tests [22m [1m[32m544 passed[39m[22m[90m (544)[39m
+[2m   Start at [22m 08:41:18
+[2m   Duration [22m 30.53s[2m (transform 976ms, setup 0ms, import 3.67s, tests 23.29s, environment 2ms)[22m
+

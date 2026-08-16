@@ -588,6 +588,10 @@ jobs:
           # README) and is the fastest/simplest option that still fully
           # analyzes web/, api/, shared/, and e2e/.
           build-mode: none
+          # TRO-590: excludes test files (scratch Express apps that mount
+          # real middleware for proof-of-behavior only, never reachable in
+          # production) from queries like js/missing-rate-limiting.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@a2983b8bed1923f44751c5c43237f479442827b3 # v3.37.4
