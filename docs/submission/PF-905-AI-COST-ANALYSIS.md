@@ -64,8 +64,7 @@ credentials are unavailable (`ai-analysis.ts`'s `getClient()` catches init failu
 
 ### 2.1 LLM spend during Epic 7 (cost-ledger before/after)
 
-> TODO(TRO-434): pull real numbers from `docs/submission/PF-704-COST-LEDGER-DELTA.md` once PR #263
-> (TRO-440/PF-704) merges — do not fill this in from estimates.
+> TODO(TRO-434): pull real numbers from docs/submission/PF-704-COST-LEDGER-DELTA.md once PR #263 (TRO-440/PF-704) merges — do not fill this in from estimates.
 
 **Verified before writing this section:** PR #263 (`feat/pf-704-flag-matrix-audit-proof`,
 "TRO-440/PF-704: Flag matrix in CI + audit-trail proof") is **OPEN, unmerged**

@@ -49,6 +49,20 @@ during Epic 7" sub-section is a `TODO(TRO-434)` pointing at
 the branch that produces it) was confirmed OPEN and unmerged (`gh pr view 263`) before writing this
 doc. No E7 before/after token-volume numbers are estimated or fabricated.
 
+**Regression test.** Added `api/src/__tests__/pf905CostAnalysisDocSections.test.ts` — a structural
+presence lint over the doc (same pattern as `architectureDocSections.test.ts` / TRO-424 and
+`epicWriteupsAndDiscoveries.test.ts` / TRO-437): asserts the required dev-cost-tracking subsections
+exist, the three mandated assumptions (webhook fanout ratio, agent active rate, retention window)
+are named explicitly, every figure carries an OBSERVED/DERIVED/ASSUMED/TODO tag, the Epic-7 TODO
+placeholder matches the ticket's mandated text exactly, the doc does not collide with the earlier
+`AI-COST-ANALYSIS.md`, and a citation-density floor. 15 assertions, all real. **Red before green,
+genuinely produced twice while writing this suite:** (1) a `REPO_ROOT` path computed with one `..`
+too many resolved outside the worktree entirely, throwing on every test; (2) once fixed, the
+exact-match assertion on the mandated TODO line caught that the doc had wrapped the file path in
+backticks and line-wrapped it across two lines — a stylistic deviation from the ticket's verbatim
+mandated text. Both were fixed for real (the test's path arithmetic corrected; the doc's TODO line
+rewritten to the literal mandated text) rather than by loosening either check.
+
 **How to run it.** This is a doc ticket; "running" it means re-gathering the same evidence to check
 it hasn't drifted:
 - TTFE CI timing: `gh run list --workflow=ci.yml --limit 20 --json databaseId,headBranch` then
@@ -64,9 +78,11 @@ it hasn't drifted:
   derived (not measured) size holds.
 - Once PR #263 merges: fill in §2.1 from the real `docs/submission/PF-704-COST-LEDGER-DELTA.md`,
   replacing the TODO.
+- Presence-lint suite: `pnpm --filter @ship/api exec vitest run src/__tests__/pf905CostAnalysisDocSections.test.ts`.
 
-**Rollback.** Delete `docs/submission/PF-905-AI-COST-ANALYSIS.md` and revert this CHANGES.md entry.
-No code changes, no migrations, no schema touched.
+**Rollback.** Delete `docs/submission/PF-905-AI-COST-ANALYSIS.md` and
+`api/src/__tests__/pf905CostAnalysisDocSections.test.ts`, revert this CHANGES.md entry. No
+migrations, no schema touched, no existing behavior changed.
 
 ---
 
