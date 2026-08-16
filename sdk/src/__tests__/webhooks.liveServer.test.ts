@@ -22,15 +22,17 @@
  * (flaky, slow, and address-dependent) or mocking the attempt away
  * (which would stop this from being a genuine round trip).
  *
- * Every row this suite reads through the SDK is seeded directly via SQL,
- * unchanged by TRO-455/PF-603's fix to `createSubscription()`'s request body
- * (`sdk/src/resources/webhooks.ts`'s header) — that fix is proven separately,
- * live, by `scripts/drill/ttfe.ts` (the TTFE drill actually calls
- * `webhooks.createSubscription()` against a real server). Direct SQL seeding
- * here keeps this file focused on what it exists to prove: the RESPONSE
- * shapes (`listSubscriptions`/`getSubscription`/`rotateSecret`/
- * `listDeliveries`/`replayDelivery` — every read/action method whose request
- * needs no body beyond an id).
+ * Prior to TRO-607: `createSubscription()`'s REQUEST body was a disclosed,
+ * NOT-fixed gap that would 400 against this real server if used, so seeding
+ * the row directly via SQL was the only way to test the RESPONSE shapes
+ * (`listSubscriptions`/`getSubscription`/`rotateSecret`/`listDeliveries`/
+ * `replayDelivery`). TRO-607 fixes that REQUEST body bug (the same fix
+ * TRO-455/PF-603's TTFE drill independently needed — `scripts/drill/ttfe.ts`
+ * proves it again, live, via the drill's own `webhooks.createSubscription()`
+ * call), so this suite now includes a REAL `createSubscription()` call that
+ * proves the corrected body shape works end-to-end against a real server.
+ * The initially-seeded subscription (and its deliveries) remain, tested via
+ * the same read/action methods as before.
  *
  * DB SAFETY: own isolated workspace/user/oauth_app/api_token/webhook rows in
  * `beforeAll`, deleted in `afterAll`; does not touch `pnpm db:seed`'s
@@ -297,6 +299,52 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
     expect(rotated.secret.startsWith('whsec_')).toBe(true);
     expect(typeof rotated.warning).toBe('string');
     expect(rotated.warning.length).toBeGreaterThan(0);
+  });
+
+  it('createSubscription() (TRO-607) creates a real subscription with the corrected request body shape and returns EXACTLY CreatedWebhookSubscription', async () => {
+    // Regression test: TRO-607 fixes the REQUEST body bug. Before this fix,
+    // `CreateWebhookSubscriptionBody` declared `url`/plural `events`, which
+    // would 400 against the real server schema expecting `app_id`/singular
+    // `event_type`/`target_url`. This call proves the fix works end-to-end:
+    // a real HTTP POST against a real running server, using the corrected
+    // body shape, creating a real row in the database.
+    expect(oauthAppId, 'oauthAppId must be set in beforeAll').toBeDefined();
+    if (!oauthAppId) return;
+
+    const client = new ShipClient({ token, baseUrl });
+
+    const created = await client.webhooks.createSubscription({
+      app_id: oauthAppId,
+      event_type: 'issue.created',
+      target_url: targetUrl,
+    });
+
+    try {
+      // Verify the response shape (same as rotateSecret's return type)
+      expect(actualKeys(created)).toEqual(CREATED_WEBHOOK_SUBSCRIPTION_KEYS);
+      expect(created.app_id).toBe(oauthAppId);
+      expect(created.event_type).toBe('issue.created');
+      expect(created.target_url).toBe(targetUrl);
+      expect(created.active).toBe(true);
+      expect(created.secret.startsWith('whsec_')).toBe(true);
+      expect(typeof created.warning).toBe('string');
+      expect(created.warning.length).toBeGreaterThan(0);
+
+      // Verify the row was actually created in the database by fetching it
+      const retrieved = await client.webhooks.getSubscription(created.id);
+      expect(actualKeys(retrieved)).toEqual(WEBHOOK_SUBSCRIPTION_KEYS);
+      expect(retrieved).toMatchObject({
+        id: created.id,
+        app_id: oauthAppId,
+        event_type: 'issue.created',
+        target_url: targetUrl,
+        active: true,
+      });
+    } finally {
+      // Cleanup runs even if an assertion above throws, so this row never
+      // leaks into a later test in this suite (CodeRabbit, TRO-607 review).
+      await pool.query('DELETE FROM webhook_subscriptions WHERE id = $1', [created.id]);
+    }
   });
 
   it("listDeliveries() returns EXACTLY WebhookDelivery's real fields, and the real 'dead' status literal (not the old guessed 'dead_letter')", async () => {
