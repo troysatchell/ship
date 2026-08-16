@@ -4,7 +4,7 @@
  * ticket's own instruction: "0600 permissions — this is a real security
  * requirement, not decorative; verify the mode bits in a test."
  */
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { promises as fs } from 'fs';
 import os from 'os';
 import path from 'path';
@@ -143,5 +143,73 @@ describe('FileTokenStore', () => {
     const stats = await fs.stat(filePath);
     expect(stats.mode & 0o777).toBe(0o600);
     expect(await store.get()).toEqual({ accessToken: 'ship_at_rotated' });
+  });
+
+  // TRO-600: `set()` used to write `filePath` directly via
+  // `fs.writeFile(this.filePath, data, { mode: 0o600 })` — not atomic. A
+  // crash or power loss mid-write (or a concurrent `get()` racing it) could
+  // observe/leave a truncated file. The fix serializes to a unique temp file
+  // in the SAME directory, then `fs.rename()`s it over `filePath` — POSIX
+  // `rename(2)` is atomic on the same filesystem, so a reader always sees
+  // either the complete old file or the complete new one.
+  describe('set() atomicity (TRO-600)', () => {
+    it('writes to a uniquely-named temp file in the same directory and renames it into place, rather than writing filePath directly', async () => {
+      const store = new FileTokenStore(filePath);
+
+      const writeFileSpy = vi.spyOn(fs, 'writeFile');
+      const renameSpy = vi.spyOn(fs, 'rename');
+
+      await store.set(SAMPLE);
+
+      // The write must never target filePath directly -- that's exactly the
+      // truncate-in-place hazard this fix removes.
+      expect(writeFileSpy).toHaveBeenCalledTimes(1);
+      const [writtenPath] = writeFileSpy.mock.calls[0]!;
+      expect(writtenPath).not.toBe(filePath);
+      expect(path.dirname(String(writtenPath))).toBe(path.dirname(filePath));
+
+      // The rename must move that exact temp file onto filePath -- the
+      // atomic "publish" step.
+      expect(renameSpy).toHaveBeenCalledTimes(1);
+      const [renameFrom, renameTo] = renameSpy.mock.calls[0]!;
+      expect(renameFrom).toBe(writtenPath);
+      expect(renameTo).toBe(filePath);
+
+      writeFileSpy.mockRestore();
+      renameSpy.mockRestore();
+
+      // And the end result is still a normal, valid, 0600 file at filePath.
+      expect(await store.get()).toEqual(SAMPLE);
+      const stats = await fs.stat(filePath);
+      expect(stats.mode & 0o777).toBe(0o600);
+      // No orphaned temp file left behind in the directory.
+      const entries = await fs.readdir(dir);
+      expect(entries).toEqual(['credentials.json']);
+    });
+
+    it('an interrupted write (rename fails, simulating a crash mid-publish) leaves the prior valid file readable, never truncated or partial', async () => {
+      const store = new FileTokenStore(filePath);
+      await store.set(SAMPLE); // establish a valid baseline file on disk
+
+      const renameSpy = vi
+        .spyOn(fs, 'rename')
+        .mockRejectedValueOnce(new Error('simulated crash: rename never completed'));
+
+      const wouldBeUpdate: TokenSet = { accessToken: 'ship_at_should_never_land' };
+      await expect(store.set(wouldBeUpdate)).rejects.toThrow('simulated crash');
+
+      renameSpy.mockRestore();
+
+      // filePath must still hold the OLD, complete, valid content -- never
+      // truncated, never partially overwritten, and the failed update must
+      // not have landed.
+      expect(await store.get()).toEqual(SAMPLE);
+      const raw = await fs.readFile(filePath, 'utf8');
+      expect(() => JSON.parse(raw)).not.toThrow();
+
+      // The failed attempt's temp file must not be left behind either.
+      const entries = await fs.readdir(dir);
+      expect(entries).toEqual(['credentials.json']);
+    });
   });
 });
