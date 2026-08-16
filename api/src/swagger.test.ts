@@ -16,7 +16,8 @@
  * sending it as the response body.
  */
 import { describe, it, expect } from 'vitest';
-import { jsonToYaml } from './swagger.js';
+import { parse } from 'yaml';
+import { jsonToYaml, swaggerSpec } from './swagger.js';
 
 describe('TRO-309: jsonToYaml backslash escaping', () => {
   it('leaves a plain string (no quoting trigger) untouched', () => {
@@ -43,5 +44,63 @@ describe('TRO-309: jsonToYaml backslash escaping', () => {
   it('escapes multiple backslashes and a quote together', () => {
     const result = jsonToYaml('path: C:\\Users\\"name"');
     expect(result).toBe('"path: C:\\\\Users\\\\\\"name\\""');
+  });
+});
+
+/**
+ * TRO-490 — `jsonToYaml`'s output must parse as valid YAML and round-trip
+ * back to the same structure. Two concrete defects observed in
+ * `api/openapi.yaml` on main before this fix:
+ *
+ *  - An empty-object value was emitted as `key:` followed by `{}` on its
+ *    own line at column 0 (invalid/ambiguous), because the object branch
+ *    always emitted `key:\n` + a recursive call, and `jsonToYaml({})`
+ *    returned `{}` with no indentation of its own.
+ *  - Array items that are objects came out over-indented, because the
+ *    array branch called `jsonToYaml(item, indent + 1)` (already indented
+ *    relative to the array) and then ALSO prefixed every continuation line
+ *    with an extra `${spaces}  ` — double indentation.
+ *
+ * A third class (not visible in a spot-check but the same root cause):
+ * strings that look like other YAML scalar types (`'true'`, `'123'`, `''`,
+ * leading/trailing spaces, strings starting with `*`, `&`, `!`, `[`, `{`,
+ * `-`, `?`, `%`, `@`, backtick, quotes) were emitted bare, so a real parser
+ * hands back a boolean/number/null instead of the original string.
+ */
+describe('TRO-490: jsonToYaml output round-trips through a real YAML parser', () => {
+  it('full swagger spec round-trips', () => {
+    expect(parse(jsonToYaml(swaggerSpec))).toEqual(JSON.parse(JSON.stringify(swaggerSpec)));
+  });
+
+  it('empty object values are inline and array-of-object items are indented once', () => {
+    const fixture = {
+      parameters: {},
+      tags: [],
+      list: [{ schema: { type: 'string', enum: ['a', 'b'] } }],
+    };
+    const out = jsonToYaml(fixture);
+    expect(parse(out)).toEqual(fixture);
+    expect(out).toBe(
+      'parameters: {}\ntags: []\nlist:\n  - schema:\n      type: string\n      enum:\n        - a\n        - b'
+    );
+  });
+
+  it('type-ambiguous scalars stay strings', () => {
+    const fixture = {
+      a: 'true',
+      b: '123',
+      c: '',
+      d: ' lead',
+      e: 'trail ',
+      f: 'x: y',
+      g: 'multi\nline',
+      h: '- dash',
+      i: '*star',
+      j: 'yes',
+      k: 'null',
+      '200': 'code',
+      '/api/issues/{id}': 'path',
+    };
+    expect(parse(jsonToYaml(fixture))).toEqual(fixture);
   });
 });
