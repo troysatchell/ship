@@ -30,6 +30,11 @@
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
 
+// TRO-618 — runtime mirrors of the `IssueState`/`IssuePriority` unions
+// (`as const`), for callers that need to iterate/validate the members
+// (CLI flag choices, form selects) without re-typing them.
+export { ISSUE_STATES, ISSUE_PRIORITIES } from './types.js';
+
 export type {
   Me,
   MeUser,
