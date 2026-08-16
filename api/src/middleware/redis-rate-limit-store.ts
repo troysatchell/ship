@@ -214,3 +214,12 @@ export const REDIS_KEY_PREFIX_LOGIN = 'rl:login:';
  * `/api/*` flood from the same source IP can't exhaust each other's budget.
  */
 export const REDIS_KEY_PREFIX_SPA_STATIC = 'rl:spa:';
+/**
+ * TRO-588: the `/oauth/*` limiter (`createOAuthRateLimiter` in
+ * `rate-limit.ts`) gets its own prefix — a separate bucket from
+ * `REDIS_KEY_PREFIX_SOURCE_IP`, same reasoning as the SPA-static prefix
+ * above: an `/oauth/token` device-polling loop and an unrelated `/api/*`
+ * flood from the same source IP shouldn't be able to exhaust each other's
+ * budget.
+ */
+export const REDIS_KEY_PREFIX_OAUTH = 'rl:oauth:';

@@ -1,0 +1,43 @@
+✓ a request that never retries (maxRetries: 0) makes exactly one attempt and settles near its own single timeout  503ms
+✓ aborts the in-flight model request once the handler times out, even though the model call only started AFTER most of the budget was already spent on resolveSeed  4521ms
+✓ src/__tests__/agentRollbackWorkflow.test.ts (6 tests) 2ms
+✓ src/__tests__/auditTrailProof.liveServer.test.ts (4 tests) 129ms
+✓ src/__tests__/blockerFanout.test.ts (8 tests) 4ms
+✓ src/__tests__/check-readiness-and-rollback.test.ts (18 tests) 23ms
+✓ src/__tests__/ciFailureRollbackWorkflow.test.ts (9 tests) 5ms
+✓ src/__tests__/circuitBreaker.test.ts (10 tests) 5ms
+✓ src/__tests__/composeAnswerAbortPropagation.test.ts (1 test) 4522ms
+✓ src/__tests__/config.test.ts (21 tests) 4ms
+✓ src/__tests__/cost-report.test.ts (2 tests) 1ms
+✓ src/__tests__/costTracking.test.ts (21 tests) 52ms
+✓ src/__tests__/deployReadiness.test.ts (10 tests) 14ms
+✓ src/__tests__/draftStore.test.ts (20 tests) 10ms
+✓ src/__tests__/draftSurvival.test.ts (9 tests) 5ms
+✓ src/__tests__/expansion.test.ts (26 tests) 11ms
+✓ src/__tests__/fleetgraphCostFigures.test.ts (6 tests) 11ms
+✓ src/__tests__/gate.test.ts (23 tests) 8ms
+✓ src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts (5 tests) 174ms
+✓ src/__tests__/gitlabCiAgentTests.test.ts (12 tests) 5ms
+✓ src/__tests__/golden-set-compare.test.ts (7 tests) 2ms
+✓ src/__tests__/goldenSet.test.ts (3 tests) 2ms
+✓ src/__tests__/graph.test.ts (67 tests) 230ms
+✓ src/__tests__/graphWriteBoundary.test.ts (10 tests) 9ms
+✓ src/__tests__/health.test.ts (4 tests) 12ms
+✓ src/__tests__/inboxHrefRoutes.test.ts (8 tests) 19ms
+✓ src/__tests__/itemStore.test.ts (12 tests) 9ms
+✓ src/__tests__/mentions.test.ts (13 tests) 3ms
+✓ src/__tests__/personDirectory.test.ts (7 tests) 2ms
+✓ src/__tests__/planChangeDraft.test.ts (27 tests) 13ms
+✓ src/__tests__/proactive.test.ts (16 tests) 22ms
+✓ src/__tests__/proactivePoll.test.ts (5 tests) 5ms
+✓ src/__tests__/rateLimiter.test.ts (5 tests) 2ms
+✓ src/__tests__/resilientClient.test.ts (16 tests) 15ms
+✓ src/__tests__/retroDraft.test.ts (18 tests) 6ms
+✓ src/__tests__/roles.test.ts (15 tests) 3ms
+✓ src/__tests__/server.test.ts (40 tests) 17754ms
+✓ src/__tests__/shipClient.test.ts (22 tests) 26ms
+✓ src/__tests__/shipClientParity.liveServer.test.ts (10 tests) 158ms
+✓ src/__tests__/standupDraft.test.ts (16 tests) 7ms
+✓ src/__tests__/textSimilarity.test.ts (8 tests) 2ms
+✓ src/__tests__/visibility.test.ts (4 tests) 1ms
+✓ with the production defaults (8s timeout, 1 retry), a fully-hung call settles well within chatHandlerTimeoutMs (25s default)  17173ms

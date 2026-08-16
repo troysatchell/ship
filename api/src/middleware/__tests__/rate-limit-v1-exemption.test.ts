@@ -137,6 +137,50 @@ async function hammer(
   return responses
 }
 
+/**
+ * TRO-552: `isLegacyLimiterExemptPath` (`rate-limit.ts`) is already
+ * segment-boundary-correct (`path === '/v1' || path.startsWith('/v1/')`), per
+ * its own top-of-file doc — but nothing before this ticket mounted a route
+ * that LOOKS like `/v1` under a naive substring match without actually being
+ * it, and asserted it is NOT exempted. A regression to a bare
+ * `path.startsWith('/v1')` (dropping the exact-match branch and the trailing
+ * `/` boundary check) would pass every AC-1..AC-3b case above unchanged —
+ * none of them ever requests a path that only a substring match would
+ * wrongly admit — so the boundary behavior was asserted only in comments,
+ * never by a test.
+ */
+const NON_V1_LOOKALIKE_TEST_CAP = 3;
+/** One past `NON_V1_LOOKALIKE_TEST_CAP`. */
+const REQUESTS_PAST_NON_V1_LOOKALIKE_LIMIT = NON_V1_LOOKALIKE_TEST_CAP + 1;
+
+/**
+ * Same prefix-mount shape as `buildProdShapedApp` (both legacy limiters at
+ * `/api/`), but with BOTH `identityLimit` and `sourceIpLimit` driven down to
+ * `NON_V1_LOOKALIKE_TEST_CAP` via `limitOverrides` (TRO-494) — sequentially
+ * driving either production ceiling (600 / 6,000) to prove a lookalike path
+ * throttles is impractical, and unlike AC-3a/AC-3b this app doesn't care
+ * which of the two limiters trips first, so both are overridden rather than
+ * isolating one.
+ *
+ * `/api/v10/example` and `/api/v1foo/example` stand in for any real route
+ * whose mount-relative path (`/v10/...`, `/v1foo/...`) shares the `/v1`
+ * prefix as a plain string but is a different segment — exactly the shape a
+ * bare `startsWith('/v1')` would wrongly admit.
+ */
+function buildNonV1LookalikeApp(): Express {
+  const app = express()
+  const [perSourceIpLimiter, perIdentityLimiter] = createApiRateLimiters(
+    { NODE_ENV: 'production' },
+    undefined,
+    { identityLimit: NON_V1_LOOKALIKE_TEST_CAP, sourceIpLimit: NON_V1_LOOKALIKE_TEST_CAP }
+  )
+  app.use('/api/', perSourceIpLimiter)
+  app.use('/api/', perIdentityLimiter)
+  app.get('/api/v10/example', (_req, res) => res.status(200).json({ ok: true }))
+  app.get('/api/v1foo/example', (_req, res) => res.status(200).json({ ok: true }))
+  return app
+}
+
 describe('PF-004 / TRO-401: /api/v1 exemption from the legacy /api/ limiters', () => {
   it('AC-1: v1 requests bypass both legacy limiters past the prod identity cap', async () => {
     const app = buildProdShapedApp()
@@ -213,5 +257,43 @@ describe('PF-004 / TRO-401: /api/v1 exemption from the legacy /api/ limiters', (
     expect(responses[throttledIndex]?.body).toEqual({
       error: 'Too many requests from this network. Please slow down.',
     })
+  }, 30_000)
+
+  it('AC-4a (TRO-552): /api/v10/example is NOT exempted — it throttles past the configured cap', async () => {
+    const app = buildNonV1LookalikeApp()
+    const sessionId = sessionIdLike('5')
+
+    const responses = await hammer(
+      app,
+      '/api/v10/example',
+      sessionId,
+      REQUESTS_PAST_NON_V1_LOOKALIKE_LIMIT
+    )
+
+    const throttledIndex = responses.findIndex((r) => r.status === 429)
+    expect(
+      throttledIndex,
+      `never saw a 429 in ${responses.length} requests to /api/v10/example against a cap of ${NON_V1_LOOKALIKE_TEST_CAP} — a bare startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom`
+    ).not.toBe(-1)
+    expect(throttledIndex + 1).toBe(REQUESTS_PAST_NON_V1_LOOKALIKE_LIMIT)
+  }, 30_000)
+
+  it('AC-4b (TRO-552): /api/v1foo/example is NOT exempted — it throttles past the configured cap', async () => {
+    const app = buildNonV1LookalikeApp()
+    const sessionId = sessionIdLike('6')
+
+    const responses = await hammer(
+      app,
+      '/api/v1foo/example',
+      sessionId,
+      REQUESTS_PAST_NON_V1_LOOKALIKE_LIMIT
+    )
+
+    const throttledIndex = responses.findIndex((r) => r.status === 429)
+    expect(
+      throttledIndex,
+      `never saw a 429 in ${responses.length} requests to /api/v1foo/example against a cap of ${NON_V1_LOOKALIKE_TEST_CAP} — a bare startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom`
+    ).not.toBe(-1)
+    expect(throttledIndex + 1).toBe(REQUESTS_PAST_NON_V1_LOOKALIKE_LIMIT)
   }, 30_000)
 })

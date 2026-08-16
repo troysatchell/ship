@@ -1,0 +1,32 @@
+# Real CLI stdout, captured 2026-08-16 against commit b68da413 (see docs/submission/PLUGFORGE-DEMO-SCRIPT.md, 'Provenance of the captures').
+# One line edited by hand: the 'Credentials saved to' path (a scratch SHIP_CLI_CREDENTIALS_PATH override during capture) — annotated inline.
+
+$ export SHIP_API_BASE_URL=http://127.0.0.1:3376
+$ export SHIP_CLI_CLIENT_ID=ship_cli_demo_msvwr1xp
+$ ship login --scope "documents:read documents:write webhooks:manage"
+To authorize this CLI, open: http://127.0.0.1:1/oauth-device-verify
+And enter the code: RZUB-W6R6
+Waiting for authorization...
+Logged in as Troy Satchell <plugforge-demo-msvwr1xp@ship.local> via app "PlugForge Demo CLI" (ship_cli_demo_msvwr1xp) — scopes: documents:read, documents:write, webhooks:manage.
+Credentials saved to /Users/troy/.ship/credentials.json  (SHIP_CLI_CREDENTIALS_PATH override during capture; path shortened here).
+(exit 0)
+
+$ ship whoami
+Troy Satchell <plugforge-demo-msvwr1xp@ship.local> via app "PlugForge Demo CLI" (ship_cli_demo_msvwr1xp) — scopes: documents:read, documents:write, webhooks:manage
+
+$ ship webhooks tail
+Listening on http://127.0.0.1:58153/ for "document.created" deliveries.
+Registered subscription 80ccc745-4d3a-4854-a31f-725285b84704 (target_url: http://127.0.0.1:58153/).
+Waiting for deliveries. Press Ctrl+C to stop and clean up.
+✓ verified  2026-08-16T14:36:24.396Z  document.created
+Cleaning up...
+
+$ ship docs create --title "PlugForge demo"
+Created document.
+id: c60c1d80-618e-4c07-9c74-ddaa0e82cad0
+title: PlugForge demo
+document_type: wiki
+created_at: 2026-08-16T14:36:24.130Z
+updated_at: 2026-08-16T14:36:24.130Z
+properties: {}
+(exit 0)

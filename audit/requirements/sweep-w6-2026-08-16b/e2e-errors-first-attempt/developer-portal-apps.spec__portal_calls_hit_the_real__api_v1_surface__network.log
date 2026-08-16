@@ -1,0 +1,16 @@
+Test: developer-portal-apps.spec.ts
+Title: portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)
+Duration: 840ms
+
+--- Errors ---
+Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+Expected: [32mtrue[39m
+Received: [31mfalse[39m
+
+--- Stack ---
+Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+Expected: [32mtrue[39m
+Received: [31mfalse[39m
+    at /Users/troy/repos/GAUNTLET/Ship/e2e/developer-portal-apps.spec.ts:119:66

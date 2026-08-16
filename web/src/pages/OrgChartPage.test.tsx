@@ -129,9 +129,18 @@ describe('OrgChartPage (TEST-8 / TRO-230)', () => {
 
     const tree = await screen.findByRole('tree', { name: 'Organization chart' });
 
+    // TRO-614: the tree renders collapsed on its first paint (`expandedIds`
+    // starts empty) and only auto-expands in a SECOND useEffect once the
+    // fetched data settles. `findByRole('tree', ...)` above can resolve on
+    // that first, collapsed render — before React flushes the auto-expand
+    // effect — so a synchronous query for a nested row can race it. Grace
+    // is the deepest node under test, so awaiting her presence here proves
+    // the auto-expand effect has already flushed before the rest of this
+    // test's synchronous assertions run.
+    const grace = await within(tree).findByRole('treeitem', { name: /Grace Hopper/ });
+
     const ada = within(tree).getByRole('treeitem', { name: /Ada Lovelace/ });
     const bob = within(tree).getByRole('treeitem', { name: /Bob Chen/ });
-    const grace = within(tree).getByRole('treeitem', { name: /Grace Hopper/ });
 
     // Roots render at depth 1 (aria-level is 1-based: depth 0 -> level 1).
     expect(ada).toHaveAttribute('aria-level', '1');

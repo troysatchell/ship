@@ -2,6 +2,13 @@
 
 *What works, what's left, what changed. Append-style updates with dates; newest section first.*
 
+## 2026-08-16 ~13:56Z — 4th concurrent session (usage-limited): TRO-490 + TRO-491 built, gates pending
+
+- Resumed from ship-38's 13:35Z handoff; ship-38 confirmed it owns the merge queue + TRO-500/549 — no duplication. Claim collision on TRO-590 with ship-16 resolved by yielding (they had the worktree).
+- **TRO-490** (swagger `jsonToYaml`): defects confirmed by reading `api/openapi.yaml:4873-4874` / `:4884-4886` on main (observed). Sonnet applier: `needsQuoting()` + `JSON.stringify` quoting (keeps TRO-309 tests byte-identical), inline `{}`/`[]`, single re-indent for array items, `yaml@2.9.0` devDep + round-trip regression tests. Commit `30788e6d`. gate.sh failed twice on `tests:api` only — 3 different tests across the 2 runs, all passed standalone, load avg ~10 → TRO-277 load class. 1 retry left.
+- **TRO-491** (OpenAPI scopes enum): decided option (a) as PM; applier commit `a7dbcece`; gate not yet run.
+- Neither pushed / PR'd yet — see activeContext.md handoff section for exact next actions.
+
 ## Status board
 
 | Workstream | Status |
@@ -110,6 +117,39 @@ Dispatched per Troy's explicit "work autonomously overnight, no check-ins expect
 | **TRO-609 — e2e serial-mode cascade (sprint filter, never-built bucket filters)** | ✅ **done, merged 2026-08-16 ~07:10Z** — PR #266 (`47bf0801`), 6-round merge-forward convoy, both remotes SHA-verified. 54→46 tests, 8 never-built deleted, 4 fixed, 1 regression test added, root cause traced to `ed932c9`. TRO-613 filed (unfixed, separate failure deeper in the same file) as the queued next pickup. |
 
 ## Log
+
+### 2026-08-16 (~13:20–13:52Z) — TRO-590 built + PR'd; found and fixed a real GitHub/GitLab divergence
+
+Fourth+ concurrent session this window (alongside ship-38/ship-1c/ship-61/ship-90). Coordinated via
+SendMessage before touching the merge queue; independently confirmed ship-38's finding that CodeRabbit
+is fleet-wide rate-limited (raw PR comment on #272/#278 is the literal "Review limit reached" template,
+not a real review, despite the check-run showing SUCCESS) — stood down from merging any ticket-content
+PR pending that window.
+
+**TRO-590** (CodeQL `js/missing-rate-limiting` blind spot on test-only Express apps): verified the
+ticket's own claim by reading `device.test.ts` directly (confirmed `introspectionApp` is a scratch
+`express()` never imported by `api/src/app.ts`), then went further — pulled live open alerts via
+`gh api code-scanning/alerts` instead of trusting the ticket's single citation, and found 5 alerts
+sharing the same root cause across 2 rules (not 1). Scoped the fix generally (`.github/codeql/codeql-config.yml`,
+`paths-ignore` for test-file globs, wired via `config-file:` on `ci.yml`'s CodeQL init step) rather than
+per-file. Gate `pass-with-disclosed-exception` (CI-config change, no vitest regression test applies —
+same class as TRO-488). Hit and fixed a real structural CHANGES.md lint failure along the way (TRO-371's
+`changesLogSections.test.ts` requires a recognized run/verify heading; `**Proof.**` doesn't match,
+`**Verification.**` does) — documented as a standing fact for future entries. PR #283 open, not yet
+merge-requested (CodeRabbit-blocked, same as the rest of the queue).
+
+**GitHub/GitLab divergence, found and fixed, not just noticed.** Merged PR #279 (memory-bank/audit docs)
+to GitHub, then closed #280/#281 as apparently redundant — checked their diff against a stale cached
+`origin/main` ref and saw zero difference, which was wrong: GitLab's actual current main had genuinely
+newer memory-bank content (the backlog-tail wave entry, the GitHub-rate-limit note) that #279 hadn't
+carried over, because GitHub and GitLab had silently diverged before this session started (`git
+merge-base --is-ancestor` confirmed neither tip was an ancestor of the other). Reconciled with a real
+`git merge` (0 conflicts, verified the result is a strict superset of both sides' content) via a new PR
+#282, merged on gate+CI-green (non-ticket-content exception). Both remotes verified identical at
+`a3ef8ee7` by direct `git ls-remote` on both, not trusted from either merge's self-report.
+
+Session rolled over cleanly here per `.claude/CLAUDE.md`'s session-hygiene rule — ticket built and
+gated, PRs settled, no work left mid-flight beyond what Linear/PR state already shows.
 
 ### 2026-08-16 (~05:24–07:10Z) — TRO-609 merged after a 6-round merge-forward convoy
 

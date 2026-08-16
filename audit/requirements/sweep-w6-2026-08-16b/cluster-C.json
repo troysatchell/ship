@@ -1,0 +1,302 @@
+{
+  "cluster": "C — E3 webhooks pipeline",
+  "rows": [
+    {
+      "id": "W6-R22",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-419", "TRO-501"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/events.ts", "line": 110, "note": "EVENT_TYPES const array begins; lines 111-118 list exactly the 8 named types (document.created/updated/deleted, issue.created/assigned/status_changed, sprint.started/completed) — moved from prior line 99" },
+        { "file": "api/src/platform/webhooks/events.ts", "line": 248, "note": "EVENT_DEFINITIONS map typed { [K in EventType]: EventDefinition } — one Zod schema per type via eventSchema(...) — moved from prior line 237" },
+        { "file": "api/src/platform/webhooks/__tests__/events.test.ts", "line": 170, "note": "test: 'exposes exactly the 8 named event types, no more/fewer'" },
+        { "file": "api/src/platform/webhooks/__tests__/events.test.ts", "line": 207, "note": "new since prior sweep: issue.created schema accepts priority 'none' (TRO-501, PR #276)" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/events.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:18272", "result_excerpt": "✓ src/platform/webhooks/__tests__/events.test.ts (23 tests) 205ms" },
+      "plain_english": "The brief asks for a fixed list of 8 webhook event types, each with a Zod validation schema. api/src/platform/webhooks/events.ts defines exactly those 8 as data plus one schema each (TRO-419), and the unit test file for it passed this sweep (23 tests, one more than the prior sweep because TRO-501 added a priority:'none' case). Nothing missing.",
+      "notes": "TRO-419 implements; TRO-501 (Done, PR #276) hardened the issue.created schema (widened IssuePriority to include 'none') — that is why events.test.ts grew from 22 to 23 tests. events.ts line numbers drifted by +11 since the prior matrix.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; evidence re-pointed (line drift: EVENT_TYPES 99→110, EVENT_DEFINITIONS 237→248); TRO-501 added as hardening ticket"
+    },
+    {
+      "id": "W6-R23",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-426"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/eventBus.ts", "line": 48, "note": "export interface IEventBus { publish(...); subscribe(...) }" },
+        { "file": "api/src/platform/webhooks/eventBus.ts", "line": 62, "note": "export class InProcessEventBus implements IEventBus — the in-process must-ship implementation" },
+        { "file": "api/src/services/documentService.ts", "line": 13, "note": "file header: publish() (via IEventBus) is called ONLY from this file — never from a route handler" },
+        { "file": "api/src/services/documentService.ts", "line": 451, "note": "bus.publish('document.created', ...) — an actual publish call in the domain write path (others at 425, 460, 477, 498, 508, 549, 556)" },
+        { "file": "api/src/services/documentService.ts", "line": 82, "note": "states the collab-server Yjs persistence exclusion from event publication, pointing to docs/architecture.md" },
+        { "file": "api/src/platform/webhooks/__tests__/publish-boundary.test.ts", "line": 70, "note": "grep-based test: api/src/routes/**/*.ts (excluding *.test.ts) contains zero publish()/getEventBus() call sites" },
+        { "file": "api/src/platform/webhooks/__tests__/publish-boundary.test.ts", "line": 88, "note": "positive control: documentService.ts DOES call publish() (regex not vacuous)" },
+        { "file": "docs/architecture.md", "line": 369, "note": "'Collab-persist events excluded from webhook publication (PF-301, landed TRO-426)' — defended exclusion" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/publish-boundary.test.ts", "api/src/platform/webhooks/eventBus.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:18226 and :18251; plus grep -rn 'publish(' api/src/routes/ run this sweep", "result_excerpt": "✓ publish-boundary.test.ts (3 tests); ✓ eventBus.test.ts (6 tests); grep: only hit in api/src/routes/ is a comment in issues.test.ts:514 — zero publish()/getEventBus() in non-test route files" },
+      "plain_english": "The brief asks for an event-bus interface where only the domain (business-logic) layer, never HTTP route handlers, publishes events. api/src/platform/webhooks/eventBus.ts has the IEventBus interface and an in-process implementation; every publish() call lives in api/src/services/documentService.ts (TRO-426), and a unit test greps the route folders to prove there are none there. Both the test and my own grep this sweep confirm zero route-layer publishes. Nothing missing.",
+      "notes": "TRO-426 (Done) implements. Only the in-process bus exists — the brief's queue-backed variant is described as an optional Liskov drop-in, not must-ship, and IEventBus is the substitution seam. My own grep this sweep: `grep -rn 'publish(' api/src/routes/` → only api/src/routes/issues.test.ts:514 (a comment); `getEventBus` hits in routes are all in *.test.ts files (issues.test.ts, programs.test.ts) subscribing to observe events, not publishing. Disclosed exclusions (collab-server Yjs autosave, weeks.ts sprint routes) are documented at documentService.ts:78-85 and docs/architecture.md:369.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded (added eventBus.ts:62 impl, documentService.ts:13/451 actual publish sites, publish-boundary positive control :88)"
+    },
+    {
+      "id": "W6-R24",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-431", "TRO-599", "TRO-607"],
+      "evidence": [
+        { "file": "api/src/db/migrations/047_webhook_subscriptions.sql", "line": 47, "note": "CREATE TABLE webhook_subscriptions — app_id (49), event_type (50), target_url (51), signing_secret_ciphertext (54), active (55), created_at (63)" },
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 331, "note": "export function createWebhooksRouter(...) — POST / (336), GET / (407), GET /:id (809), DELETE /:id (843), POST /:id/rotate (881); every route stacks requireScope('webhooks:manage') at lines 340/411/486/624/813/847/885" },
+        { "file": "api/src/platform/scopes/registry.ts", "line": 82, "note": "name: 'webhooks:manage' — the scope is registered" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 357, "note": "POST / creates a subscription, returns the plaintext secret once, and encrypts it at rest" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 521, "note": "AC: list/get responses never carry the secret, in any form, after the create response is gone" },
+        { "file": "docs/architecture.md", "line": 354, "note": "Documented Deviations: 'Signing secret: encrypted, not hashed (§2.2 note)' — defends AES-256-GCM-at-rest vs the brief's literal 'hashed'" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "api/src/platform/webhooks/__tests__/secretEncryption.test.ts"],
+      "e2e_specs_bearing": ["e2e/developer-portal-dlq-replay.spec.ts"],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17225 and :18278; migrate.log this sweep", "result_excerpt": "✓ resources/__tests__/webhooks.test.ts (34 tests) 413ms; ✓ secretEncryption.test.ts (7 tests); migrate.log: '047_webhook_subscriptions.sql applied' against a fresh scratch DB, \\d dump shows app_id/event_type/target_url/signing_secret_ciphertext/active/created_at" },
+      "plain_english": "The brief asks for per-app, per-event-type webhook subscriptions (URL, secret, on/off flag) managed through /api/v1/webhooks behind the webhooks:manage permission. Migration 047 creates the table, api/src/platform/api/v1/resources/webhooks.ts provides create/list/get/delete/rotate all gated on that scope (TRO-431), and the 34-test suite passed this sweep including 'the secret is never returned after creation'. The brief says 'hashed' secret; the repo deliberately encrypts instead (a hash cannot be reversed to sign) and docs/architecture.md:354 defends that. Nothing missing.",
+      "notes": "TRO-431 (Done) implements. TRO-599 and TRO-607 (both Done) hardened the SDK-side request/response shapes for subscriptions — related, not implementing. The 'hashed' → encrypted-at-rest deviation is explicit in migration 047's header (lines 13-25) and docs/architecture.md 'Documented Deviations' (line 352 heading, 354 paragraph). Migration state observed this sweep: audit sweep dir's d-webhook_subscriptions.txt (not citable as evidence, but read) matches migration 047's column set.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence re-pointed (webhooks.ts route citation 336→331 factory line + per-route lines; architecture.md 352→354 to the deviation paragraph itself; test 520→521 to the it() line) and scope-registry line added"
+    },
+    {
+      "id": "W6-R25",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-433"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/signer.ts", "line": 121, "note": "export function sign(rawBody, secret, clock) → returns `t=<unix-seconds>,v1=<hex>` (line 125)" },
+        { "file": "api/src/platform/webhooks/signer.ts", "line": 144, "note": "export function verify(...) with toleranceSeconds default DEFAULT_TOLERANCE_SECONDS (148)" },
+        { "file": "api/src/platform/webhooks/signer.ts", "line": 30, "note": "export const DEFAULT_TOLERANCE_SECONDS = 300" },
+        { "file": "api/src/platform/webhooks/signer.ts", "line": 34, "note": "SHIP_SIGNATURE_HEADER_NAME = 'Ship-Signature'" },
+        { "file": "api/src/platform/webhooks/__tests__/signer.test.ts", "line": 71, "note": "positive case: verifies a freshly signed signature" },
+        { "file": "api/src/platform/webhooks/__tests__/signer.test.ts", "line": 82, "note": "tamper case: rejects a different body" },
+        { "file": "api/src/platform/webhooks/__tests__/signer.test.ts", "line": 91, "note": "expired case: rejects outside tolerance window" },
+        { "file": "api/src/platform/webhooks/__tests__/signer.test.ts", "line": 100, "note": "missing-v1 case: rejects header with no v1 component" },
+        { "file": "api/src/platform/webhooks/__tests__/signer.test.ts", "line": 185, "note": "boundary: accepts exactly at 300s (inclusive); line 193 rejects one second past" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/signer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:18274", "result_excerpt": "✓ src/platform/webhooks/__tests__/signer.test.ts (20 tests) 223ms" },
+      "plain_english": "The brief asks for a Stripe-style signature header (timestamp + HMAC) with a 5-minute freshness window. api/src/platform/webhooks/signer.ts produces and checks exactly that header with a 300-second default (TRO-433), and its 20-test suite (positive, tampered body, expired, missing v1, boundary) passed this sweep. Per ruling I-04 the SDK-side verifier is counted under W6-R33, not here. Nothing missing.",
+      "notes": "Interpretation I-04 applied: signer suite alone satisfies R25; SDK verifyWebhook is W6-R33's scope. Note for the main session: sdk tests did NOT run this sweep (pnpm test's `&&` chain stopped after the api package failed on activity.test.ts), so W6-R33's sdk/src/verifyWebhook.test.ts has no run this sweep — irrelevant to R25 under I-04 but flagged for whoever owns R33.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded to per-case it() lines"
+    },
+    {
+      "id": "W6-R26",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-438"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 109, "note": "RETRY_SCHEDULE_MS = [1_000, 4_000, 16_000, 60_000, 300_000, 1_800_000] — 1s, 4s, 16s, 1m, 5m, 30m" },
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 744, "note": "delayMs = baseDelayMs + this.random() * baseDelayMs — full jitter on top of the base schedule" },
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 849, "note": "response.status >= 500 → kind 'retryable'; 4xx falls through to 'permanent' (852-854); fetch rejection/timeout → 'retryable' (855-859)" },
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 707, "note": "'permanent' outcome (4xx) → status='dead' immediately, no retry row (705-713)" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 229, "note": "500x3 then 200 succeeds on attempt 4, waits boundary-checked at 999/1000, 3999/4000, 15999/16000 ms via injected clock" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 319, "note": "applies jitter on top of the base schedule" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 393, "note": "a 4xx response dead-letters immediately on attempt 1 — no retry is ever scheduled" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17792", "result_excerpt": "✓ src/platform/webhooks/__tests__/deliverer.test.ts (13 tests) 210ms" },
+      "plain_english": "The brief asks for retries at 1s/4s/16s/1m/5m/30m with random jitter, retrying on server errors or timeouts but giving up immediately on client (4xx) errors. api/src/platform/webhooks/deliverer.ts hard-codes that schedule, adds jitter, and branches exactly that way (TRO-438); the deterministic-clock test file covering the schedule, jitter, and 4xx-vs-5xx passed this sweep. Nothing missing against the stated acceptance evidence.",
+      "notes": "TRO-438 (Done) implements. Two honest caveats, neither a gap against the acceptance evidence ('schedule and 4xx/5xx branching'): (1) the timeout→retry branch (deliverer.ts:855-859, fetch rejection incl. the per-attempt timeout) is code-traced only — no dedicated deliverer.test.ts case drives a timeout (grep 'timeout' in that file hits only the header comment); (2) the 30m sixth schedule entry is unreachable at MAX_ATTEMPTS=6 (5 waits between 6 attempts) — deliverer.ts:41-49 documents this deliberately.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded (branching lines 849/707, jitter test 319)"
+    },
+    {
+      "id": "W6-R27",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": ["TRO-438", "TRO-446", "TRO-439", "TRO-603"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 112, "note": "MAX_ATTEMPTS = 6; line 719-725: retryable outcome at attemptNumber >= MAX_ATTEMPTS → status='dead'" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 353, "note": "6 consecutive failures land in webhook_deliveries with status = dead — deterministic clock" },
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 621, "note": "POST '/deliveries/:id/replay' route; 574-582 comment: re-runs with the SAME idempotency_key read off the original row; 698 passes original.idempotency_key into the new row; 774 idempotencyKey: original.idempotency_key into attemptNow()" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 1156, "note": "replays a dead (DLQ) delivery successfully — the graded replay-after-DLQ scenario" },
+        { "file": "web/src/pages/DeveloperPortal.tsx", "line": 127, "note": "status filter option { value: 'dead', label: 'Dead (DLQ)' } — DLQ visible in portal" },
+        { "file": "web/src/pages/DeveloperPortal.tsx", "line": 391, "note": "<button ... aria-label=`Replay delivery ...`> calling handleReplay() (296) which POSTs /webhooks/deliveries/:id/replay (299)" },
+        { "file": "web/src/pages/DeveloperPortal.test.tsx", "line": 152, "note": "jsdom test: shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the original Idempotency-Key" },
+        { "file": "e2e/developer-portal-dlq-replay.spec.ts", "line": 169, "note": "Playwright: dead-lettered-after-6 visible in DLQ view; replay against healthy target succeeds, Idempotency-Key preserved (216-220 select 'dead' filter, assert row)" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts", "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "web/src/pages/DeveloperPortal.test.tsx"],
+      "e2e_specs_bearing": ["e2e/developer-portal-dlq-replay.spec.ts"],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17792 and :17225 (backend half only)", "result_excerpt": "✓ deliverer.test.ts (13 tests); ✓ resources/__tests__/webhooks.test.ts (34 tests). Web package tests did NOT run this sweep (pnpm test's && chain stopped after api's activity.test.ts failure), so DeveloperPortal.test.tsx has no run; e2e spec is not wired into CI (ci.yml e2e-agent job runs only two agent specs)." },
+      "plain_english": "The brief asks that after 6 failed attempts a delivery goes to a dead-letter queue the developer portal shows, with a manual replay that keeps the original idempotency key. The backend half (deliverer dead-letters at attempt 6, replay route reuses the original key — TRO-438/TRO-446/TRO-603) passed its unit tests this sweep. The portal half exists in web/src/pages/DeveloperPortal.tsx (TRO-439) with a jsdom test and a Playwright spec, but neither ran this sweep, so the portal-visibility half is traced from source only.",
+      "notes": "TRO-438 implements DLQ-at-6; TRO-446 implements replay-with-original-key; TRO-439 implements portal DLQ view + Replay button (PR #260 — CHANGES.md:1090-1104 records both e2e tests passing on first attempt at merge time, an observed-then claim, not this sweep); TRO-603 (Done) hardened replay by injecting the app's shared deliverer so retry siblings of a replay are drained (webhooks.test.ts:1317). Held at IMPLEMENTED-UNVERIFIED because the web-tier test that would upgrade it (web/src/pages/DeveloperPortal.test.tsx:152) did not execute this sweep — main session can upgrade to VERIFIED if it runs `pnpm --filter @ship/web test` (or the e2e spec) and it passes.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; evidence re-pointed from whole-file portal citation (line 1) to the actual DLQ filter/Replay button lines (127, 391) and the jsdom test (DeveloperPortal.test.tsx:152, not cited before); e2e spec citation moved to the test() line 169"
+    },
+    {
+      "id": "W6-R28",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-442", "TRO-438", "TRO-439", "TRO-599", "TRO-602"],
+      "evidence": [
+        { "file": "api/src/db/migrations/048_webhook_deliveries.sql", "line": 38, "note": "CREATE TABLE webhook_deliveries — subscription_id (40), event_id (44), attempt_number (65), response_status (67), response_excerpt (68), latency_ms (69)" },
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 483, "note": "GET '/deliveries' — workspace-scoped via oauth_apps join, filter by subscription_id/status (query schema at 211-216), cursor-paginated" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 670, "note": "describe 'PF-305: GET /api/v1/webhooks/deliveries (Linear TRO-442)'" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 770, "note": "lists attempts for a subscription with attempt_number/response_status/latency_ms present, newest first" },
+        { "file": "web/src/pages/DeveloperPortal.tsx", "line": 257, "note": "portal DeliveriesTab fetches /webhooks/deliveries — the per-app portal query path" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "api/src/platform/webhooks/__tests__/deliverer.test.ts"],
+      "e2e_specs_bearing": ["e2e/developer-portal-dlq-replay.spec.ts"],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17225; migrate.log this sweep", "result_excerpt": "✓ resources/__tests__/webhooks.test.ts (34 tests); migrate.log: '048_webhook_deliveries.sql applied' (and 050/051 replayed_from_id) on a fresh scratch DB; \\d dump shows all six named columns" },
+      "plain_english": "The brief asks for a table logging every webhook delivery attempt with specific columns, queryable per app. Migration 048 creates webhook_deliveries with all six named columns, and GET /api/v1/webhooks/deliveries in api/src/platform/api/v1/resources/webhooks.ts lists them filtered by subscription and status (TRO-442); the API tests passed this sweep and the portal reads the same endpoint (TRO-439). Nothing missing.",
+      "notes": "TRO-442 (Done) implements the API; TRO-438 (Done) writes every attempt row; TRO-439 (Done) is the portal read path (web tier not run this sweep — API half is what carries the verdict). Hardening: TRO-599 (SDK response type drift for WebhookDelivery), TRO-602 (shared cursor pagination precision fix) — both Done. Nuance on 'queryable per app': the list is workspace-scoped (a.workspace_id predicate) with a subscription_id filter; there is no explicit app_id query param — per-app querying works via subscription (subscriptions belong to one app) rather than a direct app filter. Not treated as a gap against the acceptance evidence (migration + API tests).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence re-pointed (route 482→483 path-string line) and portal read path added"
+    },
+    {
+      "id": "W6-R29",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-446", "TRO-603", "TRO-447"],
+      "evidence": [
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 621, "note": "route path '/deliveries/:id/replay' (POST at 620)" },
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 578, "note": "comment: re-runs through the deliverer with the SAME idempotency_key the original delivery used (read off the row, never regenerated)" },
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 774, "note": "attemptNow({... idempotencyKey: original.idempotency_key ...}) — original key on the wire" },
+        { "file": "api/src/platform/api/v1/resources/webhooks.ts", "line": 331, "note": "createWebhooksRouter(injectedDeliverer?) — TRO-603 fix, real shared deliverer used at 764" },
+        { "file": "api/src/index.ts", "line": 119, "note": "production constructs the singleton InMemoryWebhookDeliverer; 134 wires it to the event bus, 135 .start()" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 1071, "note": "replays a successful delivery: reaches the subscriber with the ORIGINAL Idempotency-Key, records a NEW row, leaves the original untouched" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 1317, "note": "TRO-603 FIX: real shared deliverer injected — retry sibling drained by its own processDue()" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 1503, "note": "PF-801/TRO-447: fresh delivery and its replay carry the SAME Idempotency-Key on the wire; reference subscriber dedupes" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/resources/__tests__/webhooks.test.ts"],
+      "e2e_specs_bearing": ["e2e/webhook-idempotency-key-drill.spec.ts", "e2e/developer-portal-dlq-replay.spec.ts"],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17225", "result_excerpt": "✓ src/platform/api/v1/resources/__tests__/webhooks.test.ts (34 tests) 413ms" },
+      "plain_english": "The brief asks for a replay endpoint that re-sends a logged webhook while keeping its original Idempotency-Key so receivers can spot duplicates. POST /api/v1/webhooks/deliveries/:id/replay in api/src/platform/api/v1/resources/webhooks.ts does exactly that (TRO-446, hardened by TRO-603), and the API tests asserting the original key reaches the subscriber passed this sweep. Nothing missing.",
+      "notes": "TRO-446 (Done) implements; TRO-603 (Done) hardens (shared deliverer injection so replay retry siblings are not orphaned); TRO-447 (Done) is the e2e dedupe drill that consumes this contract (e2e/webhook-idempotency-key-drill.spec.ts — not run this sweep, listed as bearing only). Prior 08-16 citation of webhooks.ts:578 still points at the intended comment (no drift).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded (route path line 621, attemptNow key line 774, PF-801 test 1503); TRO-447 added as related"
+    },
+    {
+      "id": "W6-R47",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-438"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 229, "note": "it('500x3 then 200 succeeds on attempt 4, with waits correctly >= 1s/4s/16s per the injected clock — fast and deterministic')" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 276, "note": "clock.advance(999) → processDue()=0, then advance(1) → 1 (attempt 2 at exactly >=1s); same pattern at 284-287 (4s) and 292-295 (16s)" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 301, "note": "expects statuses ['failed','failed','failed','success'] and response_status [500,500,500,200] (302) — fourth attempt records success in the delivery log" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17792", "result_excerpt": "✓ src/platform/webhooks/__tests__/deliverer.test.ts (13 tests) 210ms" },
+      "plain_english": "The brief's graded scenario: a receiver fails three times then succeeds; the retry waits must be at least 1s/4s/16s and the fourth attempt must be logged as success. api/src/platform/webhooks/__tests__/deliverer.test.ts:229 is exactly that test, driven by a hand-advanced clock (TRO-438), and it passed this sweep. Nothing missing.",
+      "notes": "TRO-438 (Done) implements. Test uses randomSource: () => 0 so jitter is zero and the >= boundary is checked exactly at 999→1000 ms etc.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded to the boundary-advance and success-assertion lines"
+    },
+    {
+      "id": "W6-R48",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": ["TRO-438", "TRO-446", "TRO-439", "TRO-603"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 353, "note": "6 consecutive failures → status='dead'; 379-380 assert attempt_numbers 1..6 and statuses failed×5 + dead" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 1156, "note": "replays a dead (DLQ) delivery successfully — graded replay-after-DLQ scenario" },
+        { "file": "web/src/pages/DeveloperPortal.tsx", "line": 163, "note": "'Deliveries & DLQ' tab; 127 'Dead (DLQ)' filter option; 391-399 the Replay button" },
+        { "file": "web/src/pages/DeveloperPortal.test.tsx", "line": 152, "note": "jsdom: shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the original Idempotency-Key" },
+        { "file": "e2e/developer-portal-dlq-replay.spec.ts", "line": 169, "note": "Playwright: seeds a 6-row dead chain (123-154), filters to 'dead' (216), asserts DLQ row visible (218-220), clicks Replay against a healthy reference subscriber, asserts original idempotency key preserved (226-229)" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts", "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "web/src/pages/DeveloperPortal.test.tsx"],
+      "e2e_specs_bearing": ["e2e/developer-portal-dlq-replay.spec.ts"],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17792 and :17225 (backend half only)", "result_excerpt": "✓ deliverer.test.ts (13 tests); ✓ resources/__tests__/webhooks.test.ts (34 tests). Web tests and the Playwright spec did not run this sweep." },
+      "plain_english": "The brief's graded scenario: force 6 failures, see the delivery in the portal's dead-letter list, click Replay against a now-healthy receiver, and confirm the original idempotency key survives. The backend pieces (6-failure DLQ, replay with original key) passed unit tests this sweep; the 'click Replay in the portal' half exists in web/src/pages/DeveloperPortal.tsx with a jsdom test and a Playwright spec (TRO-439), but those did not run this sweep, so that half is traced from source only.",
+      "notes": "Same split as W6-R27: TRO-438/TRO-446/TRO-603 backend VERIFIED-tier; TRO-439 portal half IMPLEMENTED-UNVERIFIED because web/src/pages/DeveloperPortal.test.tsx did not execute this sweep (pnpm test aborted after api's activity.test.ts failure) and e2e/developer-portal-dlq-replay.spec.ts is not in any CI job. Note the e2e spec seeds the 6-row dead chain via SQL rather than driving 6 real failures through the deliverer (its header explains why: no wall-clock retries); the 'force 6 failures' part of the scenario is proven only at the unit tier (deliverer.test.ts:353). Upgrade path: run `pnpm --filter @ship/web test` and/or the e2e spec.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; evidence re-pointed from portal whole-file (line 1) to concrete UI lines and the jsdom test; e2e citation moved to test() line 169"
+    },
+    {
+      "id": "W6-R52",
+      "verdict": "PARTIAL",
+      "tickets": ["TRO-438", "TRO-455"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 694, "note": "latencyMs = Math.max(0, this.clock.now() - startedAtMs) — measured per attempt; persisted to latency_ms at 699-701 (success), 711-713 (4xx dead), 723-725 (exhausted), 763-765 (failed/retry)" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 770, "note": "lists attempts with attempt_number/response_status/latency_ms present" },
+        { "file": "scripts/drill/ttfe.ts", "line": 498, "note": "stages.push({ name: 'wait_for_delivery', ms: ... }) — the drill times document-create → first signed POST received (first-attempt delivery latency, subscriber-perceived)" },
+        { "file": "scripts/drill/ttfe.config.json", "line": 9, "note": "\"wait_for_delivery\": 15000 — the only ceiling asserted on that stage is 15 s, NOT 2 s; line 10 'verify_webhook: 2000' is a different metric (local HMAC verify)" },
+        { "file": "scripts/drill/thresholds.ts", "line": 18, "note": "header: only totalBudgetMs (60s) and per-stage ceilings are asserted — no P95 aggregation and no 2 s delivery-latency check exists in this file" },
+        { "file": ".github/workflows/ci.yml", "line": 418, "note": "drill-ttfe job — runs the drill on every PR (single run per CI job, no cross-run P95)" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts", "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "scripts/drill/__tests__/thresholds.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "grep -rn -i 'p95|2000|2_000|first-attempt' scripts/drill/ e2e/ api/src/platform/webhooks/ (this sweep); gh run view --job 95172637326 --log (run 31949732432 on main, 2026-08-16T13:24Z)", "result_excerpt": "No assertion of first-attempt webhook delivery latency < 2 s (or any P95) exists on main. Observed single CI run: 'wait_for_delivery: 690ms', 'verify_webhook: 0ms', 'total: 3988ms / 60000ms budget', 'verdict: pass' — one observation under 2 s, not an asserted P95." },
+      "plain_english": "The brief sets a target that 95% of first webhook delivery attempts complete in under 2 seconds. The repo records per-attempt latency in the delivery log (TRO-438) and the CI drill measures the first-delivery wait on every run (TRO-455) — the latest main run measured 690 ms — but nothing asserts a 2-second bound: the drill's ceiling on that stage is 15 seconds, and no percentile is computed across runs. Measurement exists; the target itself is unasserted.",
+      "notes": "DOWNGRADE with correction: the prior 08-16 row said 'P95<2s first-delivery-latency assertion now lives on main (scripts/drill/thresholds.ts)'. I read thresholds.ts (pure budget evaluator, no latency-specific logic) and ttfe.config.json (wait_for_delivery: 15000; verify_webhook: 2000). The 2000 figure belongs to the HMAC-verify stage (W6-R58's metric), not first-attempt delivery latency. So the prior VERIFIED over-credited; the 08-15 verdict (PARTIAL: latency recorded, target unasserted) was the accurate one and remains so. What IS present: latency_ms per attempt (deliverer.ts:694, tested at webhooks.test.ts:770), and the drill's wait_for_delivery timing observed at 690 ms in CI run 31950529207's predecessor 31949732432 (job 95172637326). Downstream: W6-R46 (not my cluster) carries a similar note ('signed POST arrives within 2s') — its cited drill has the same 15 s ceiling; the main session may want to re-check that row too.",
+      "suggested_scope": "Assert the target: lower ttfe.config.json's wait_for_delivery stage ceiling to 2000 ms (a per-run max — strictly stronger than P95 — noting the deliverer's 1 s poll interval sits inside that stage), or add a dedicated first_delivery_latency_ms check; optionally aggregate wait_for_delivery across recent drill-ttfe CI runs to report an actual P95. Small ticket, scripts/drill/ only.",
+      "assumption": "Traced under the assumption that a per-run CI ceiling on the drill's wait_for_delivery stage would count as asserting the P95 target (max ≤ 2 s over accumulated runs implies P95 ≤ 2 s). Under either reading (per-run ceiling vs aggregated P95) the current repo asserts neither, so the PARTIAL verdict does not depend on the ruling — only the suggested_scope does.",
+      "needs_ruling": "Does a per-run CI ceiling of 2000 ms on the TTFE drill's wait_for_delivery stage (max over accumulated runs) satisfy 'webhook first-attempt latency P95 < 2 s', or must an aggregated P95 over a population of ≥20 drill runs be computed and asserted?",
+      "delta_vs_prior": "downgraded because the prior VERIFIED rested on a claim (P95<2s assertion in scripts/drill/thresholds.ts) that the file does not contain — only a 15 s stage ceiling and a 60 s total budget exist; latency is measured (690 ms observed in the latest main CI run) but never asserted at 2 s"
+    },
+    {
+      "id": "W6-R53",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-438", "TRO-603"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 229, "note": "transient 500×3 → 200 on attempt 4, within the 1s/4s/16s schedule; delivery log ends 'success' (301)" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 353, "note": "6 consecutive failures → terminal 'dead' with next_attempt_at NULL and nothing further scheduled (382-385) — no silent drops" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 612, "note": "rehydrate() restores a pending attempt into a fresh deliverer after a simulated crash — retries survive restarts" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts", "line": 1317, "note": "TRO-603: replay retry siblings drained by the shared deliverer — closes the orphaned-retry hole" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts", "api/src/platform/api/v1/resources/__tests__/webhooks.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17792 and :17225", "result_excerpt": "✓ deliverer.test.ts (13 tests); ✓ resources/__tests__/webhooks.test.ts (34 tests)" },
+      "plain_english": "The brief targets 100% eventual success for webhooks that hit a temporary server error, within the retry schedule. The deterministic-clock tests in api/src/platform/webhooks/__tests__/deliverer.test.ts show a transient-failure delivery succeeding on the retry and an exhausted one ending in a recorded dead state (never dropped), plus crash-recovery of pending retries (TRO-438, hardened by TRO-603); all passed this sweep. Nothing missing.",
+      "notes": "TRO-438 (Done) implements; TRO-603 (Done) hardens (replay retry siblings previously orphaned in the no-injection path — webhooks.test.ts:1243 documents the pre-fix behaviour, :1317 the fix). '100%' is a rate over a population; in-repo evidence is the deterministic branch tests, which is what the inventory's acceptance evidence asks for ('retry tests + delivery-log evidence').",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded (rehydrate 612, TRO-603 test 1317); TRO-603 added as hardening ticket"
+    },
+    {
+      "id": "W6-R68",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-438"],
+      "evidence": [
+        { "file": "api/src/platform/webhooks/clock.ts", "line": 44, "note": "export class ManualClock implements Clock — advance(ms) at 59, now() at 51; never auto-ticks" },
+        { "file": "api/src/platform/webhooks/deliverer.ts", "line": 54, "note": "deliverer reads the injected Clock (clock.ts), never Date.now(), for latency and scheduling" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 11, "note": "header '── Zero real-time waits (this ticket's hard AC) ──': every test drives an injected ManualClock via advance() and calls processDue() directly; no real setTimeout/sleep" },
+        { "file": "api/src/platform/webhooks/__tests__/deliverer.test.ts", "line": 242, "note": "const clock = new ManualClock(0) injected into InMemoryWebhookDeliverer (representative; also 330, 360, 400, 430)" }
+      ],
+      "test_files_bearing": ["api/src/platform/webhooks/__tests__/deliverer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (api) — this sweep, test.log:17792; grep -c setTimeout api/src/platform/webhooks/__tests__/deliverer.test.ts (this sweep)", "result_excerpt": "✓ deliverer.test.ts (13 tests) 210ms; grep: 1 hit, at line 13 inside the header comment — zero setTimeout calls in test control flow" },
+      "plain_english": "The brief forbids timing-based (sleep/setTimeout) webhook retry tests and requires an injectable clock. api/src/platform/webhooks/clock.ts provides a hand-advanced ManualClock and every deliverer test uses it (TRO-438); the only 'setTimeout' in the test file is a comment saying not to use one, and the file passed this sweep in 210 ms. Nothing missing.",
+      "notes": "TRO-438 (Done) implements. The requirement's phrase 'real queue-backed deliverer' — the shipped deliverer is InMemoryWebhookDeliverer (in-process queue over webhook_deliveries rows); it is the real production deliverer (api/src/index.ts:119) and it is what the deterministic-clock tests exercise. Production code deliverer.ts:822-827 does use setTimeout for the per-attempt HTTP timeout — that is runtime behaviour, not a test wait, and is injectable (clearTimeoutImpl) per the file header.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence expanded (deliverer.ts:54 clock usage, representative ManualClock injection line 242)"
+    }
+  ],
+  "commands_run": [
+    { "command": "tail -30 audit/requirements/sweep-w6-2026-08-16b/test.log; grep for each webhook test file", "result": "test.log complete: 'Test Files 1 failed | 124 passed (125)', 'Tests 1 failed | 1468 passed (1469)' — the one failure is src/__tests__/activity.test.ts (unrelated to this cluster). events.test.ts 23 ✓ (:18272), publish-boundary.test.ts 3 ✓ (:18226), eventBus.test.ts 6 ✓ (:18251), signer.test.ts 20 ✓ (:18274), deliverer.test.ts 13 ✓ (:17792), secretEncryption.test.ts 7 ✓ (:18278), resources/__tests__/webhooks.test.ts 34 ✓ (:17225). Because root `pnpm test` is `test:api && test:web && test:agent && test:sdk && test:cli` and api exited 1, web/agent/sdk/cli suites did NOT run this sweep.", "bears_on": ["W6-R22", "W6-R23", "W6-R24", "W6-R25", "W6-R26", "W6-R27", "W6-R28", "W6-R29", "W6-R47", "W6-R48", "W6-R53", "W6-R68"] },
+    { "command": "cat audit/requirements/sweep-w6-2026-08-16b/verify-run.log; tail typecheck.log", "result": "migrate exit=0 (56 applied), typecheck exit=0 (api/web/agent/integrations/slack all Done), test exit=1", "bears_on": ["W6-R24", "W6-R28", "W6-R27", "W6-R48"] },
+    { "command": "grep -n '04[78]\\|05[01]' audit/requirements/sweep-w6-2026-08-16b/migrate.log; head d-webhook_subscriptions.txt d-webhook_deliveries.txt", "result": "047, 048, 050, 051 each '✅ applied' on the fresh scratch DB; \\d webhook_subscriptions shows app_id/event_type/target_url/signing_secret_ciphertext/active/created_at; \\d webhook_deliveries shows subscription_id/event_id/attempt_number/response_status/response_excerpt/latency_ms/idempotency_key/replayed_from_id (schema_migrations.txt itself is an ERROR — wrong column name in the dump query — so migrate.log is the source)", "bears_on": ["W6-R24", "W6-R28", "W6-R29"] },
+    { "command": "grep -rn 'publish(' api/src/routes/ ; grep -rn getEventBus api/src/routes/ ; grep -rn -E '\\.publish\\(|getEventBus\\(\\)' api/src --include='*.ts' | grep -v test", "result": "routes: only api/src/routes/issues.test.ts:514 (comment) for publish(; getEventBus only in *.test.ts (issues.test.ts, programs.test.ts — subscribers, not publishers). Non-test publish call sites: api/src/services/documentService.ts only (lines 425, 451, 460, 477, 498, 508, 549, 556); api/src/index.ts:134 wires the deliverer as a subscriber.", "bears_on": ["W6-R23"] },
+    { "command": "sed -n / grep -n on every cited line (events.ts 110/248; eventBus.ts 48/62; documentService.ts 13/82/451; publish-boundary.test.ts 70/88; architecture.md 354/369; 047 sql 47; webhooks.ts 211/331/336-340/407/483/578/621/774/809/843/881; scopes/registry.ts 82; webhooks.test.ts 357/521/670/770/1071/1156/1317/1503; signer.ts 30/34/121/144; signer.test.ts 71/82/91/100/185/193; deliverer.ts 54/109/112/694/707/744/849/855; deliverer.test.ts 11/229/242/276/301/319/353/393/612; clock.ts 44; index.ts 119/134/135; DeveloperPortal.tsx 127/163/257/391; DeveloperPortal.test.tsx 152; e2e/developer-portal-dlq-replay.spec.ts 169/216-229; ttfe.ts 491/498; ttfe.config.json 9-10; thresholds.ts 18; ci.yml 418; .gitlab-ci.yml 244)", "result": "every line opened and matches its note; drift vs prior matrix: events.ts +11 (99→110, 237→248); webhooks.ts route citations moved to the path-string/factory lines; portal citations moved from whole-file line 1 to concrete lines", "bears_on": ["W6-R22", "W6-R23", "W6-R24", "W6-R25", "W6-R26", "W6-R27", "W6-R28", "W6-R29", "W6-R47", "W6-R48", "W6-R52", "W6-R53", "W6-R68"] },
+    { "command": "grep -c setTimeout api/src/platform/webhooks/__tests__/deliverer.test.ts; grep -n -i timeout api/src/platform/webhooks/__tests__/deliverer.test.ts", "result": "1 hit, line 13 (header comment). No dedicated timeout-branch test in the file.", "bears_on": ["W6-R68", "W6-R26"] },
+    { "command": "grep -rn -i -E 'p95|2 ?s.*latenc|< ?2000|2_000|first-attempt' scripts/drill/ e2e/*.ts api/src/platform/webhooks/ sdk/src/__tests__/webhooks.liveServer.test.ts docs/architecture.md PLUGFORGE.MD CHANGES.md", "result": "Only hits: thresholds.test.ts:41 and ttfe.config.json 'verify_webhook: 2_000/2000' (HMAC verify stage), thresholds.ts:18 'TTFE CI P95 < 60s', PKCE 3s notes, PLUGFORGE.MD:321 target table. No first-attempt webhook latency < 2s assertion anywhere on main.", "bears_on": ["W6-R52"] },
+    { "command": "gh run list --repo troysatchell/ship --workflow=ci.yml --branch main --limit 5; gh run view 31949732432 --json jobs; gh run view --job 95172637326 --log | grep stage timings", "result": "Latest completed main run 31949732432 (sha 9d744017, 2026-08-16T13:24Z) success; drill-ttfe job 95172637326: install_sdk 3193ms, device_login 75ms, webhook_create 16ms, document_create 14ms, wait_for_delivery 690ms, verify_webhook 0ms, total 3988ms/60000ms, verdict pass. Run 31950529207 (sha a3ef8ee7 — not origin/main's 08505d2d) was in_progress.", "bears_on": ["W6-R52"] },
+    { "command": "grep -n developer-portal-dlq-replay .github/ .gitlab-ci.yml scripts/ package.json; grep -n -E 'e2e-agent|playwright test' .github/workflows/ci.yml", "result": "The portal e2e spec is not referenced by any CI job; ci.yml's only Playwright job (e2e-agent) runs e2e/agent-detection-latency.spec.ts and e2e/agent-chat-grounded-response.spec.ts.", "bears_on": ["W6-R27", "W6-R48"] },
+    { "command": "sed -n 1090,1104p CHANGES.md (TRO-439 entry)", "result": "Records both developer-portal-dlq-replay e2e tests 'passed on the first attempt' at PR #260 time — historical, not this sweep.", "bears_on": ["W6-R27", "W6-R48"] }
+  ]
+}

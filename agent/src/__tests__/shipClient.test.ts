@@ -45,6 +45,42 @@ describe('ShipClient', () => {
     expect(result).toEqual(doc);
   });
 
+  // TRO-620: sdk mode passes content/visibility/created_by/completed_at
+  // straight through from the SDK Document (TRO-605 widened the v1
+  // serializer) — before this it returned null/synthesized values.
+  it('getDocument (sdk mode) passes content/visibility/created_by/completed_at through from the SDK Document', async () => {
+    const sdkDoc = {
+      id: 'doc-1',
+      document_type: 'wiki',
+      title: 'Test',
+      properties: { note: 'x' },
+      content: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'hello' }] }] },
+      visibility: 'workspace',
+      created_by: 'u1',
+      completed_at: '2026-02-01T00:00:00.000Z',
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:00.000Z',
+    };
+    const sdk = { documents: { get: vi.fn().mockResolvedValue(sdkDoc) } };
+    const client = fakeClient(new Response('should not be called', { status: 500 }));
+    const ship = new ShipClient({ baseUrl: 'https://ship.example.gov', token: 'tok', client, sdk: sdk as never });
+
+    const result = await ship.getDocument('doc-1');
+
+    expect(sdk.documents.get).toHaveBeenCalledWith('doc-1');
+    expect(client.get).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      id: 'doc-1',
+      document_type: 'wiki',
+      title: 'Test',
+      properties: { note: 'x' },
+      content: sdkDoc.content,
+      visibility: 'workspace',
+      created_by: 'u1',
+      completed_at: '2026-02-01T00:00:00.000Z',
+    });
+  });
+
   it('getPeople fetches /api/team/people', async () => {
     const people = [{ id: 'p1', user_id: 'u1', name: 'Alice Chen', email: null, isArchived: false, isPending: false, reportsTo: null, role: null }];
     const client = fakeClient(new Response(JSON.stringify(people), { status: 200 }));

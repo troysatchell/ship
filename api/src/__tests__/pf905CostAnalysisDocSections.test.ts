@@ -68,13 +68,26 @@ describe('PF-905-AI-COST-ANALYSIS.md — required sections and provenance discip
     expect(doc).toContain('api/src/services/ai-analysis.ts')
   })
 
-  it('leaves the Epic-7 cost-ledger section as the exact mandated TODO placeholder, not an estimate', () => {
-    // Exact-match, not toContain-only: a paraphrase or a "close enough"
-    // rewrite would defeat the point of a literal, copy-pasted placeholder
-    // the ticket brief specified verbatim.
-    const mandated =
+  it('fills the Epic-7 cost-ledger section (§2.1) with the TRO-620 measured numbers, not the old TODO placeholder or an estimate', () => {
+    // TRO-620 replaced the literal TODO(TRO-434) placeholder with real
+    // ledger rows. Assert the measured content is present AND that the
+    // placeholder line itself is gone (a doc that carries both is a doc
+    // that was appended to, not corrected).
+    const oldPlaceholder =
       '> TODO(TRO-434): pull real numbers from docs/submission/PF-704-COST-LEDGER-DELTA.md once PR #263 (TRO-440/PF-704) merges — do not fill this in from estimates.'
-    expect(doc).toContain(mandated)
+    expect(doc).not.toContain(oldPlaceholder)
+    expect(doc).toContain('### 2.1 LLM spend during Epic 7 (cost-ledger before/after)')
+    expect(doc).toMatch(/MEASURED \(TRO-620/)
+    // The three committed ledgers the numbers come from.
+    expect(doc).toContain('docs/submission/cost-ledger/tro-620-{internal,sdk,sdk-before-fix}.jsonl')
+    // The headline numbers, as recorded (3 turns each): identical input
+    // tokens internal vs post-fix sdk, and the pre-fix sdk collapse.
+    expect(doc).toMatch(/`AGENT_PLATFORM_MODE=internal`.*\|\s*1274\s*\|\s*637\s*\|/)
+    expect(doc).toMatch(/`AGENT_PLATFORM_MODE=sdk`, after TRO-620.*\|\s*1274\s*\|\s*619\s*\|\s*\*\*0\.0%\*\*/)
+    expect(doc).toMatch(/`AGENT_PLATFORM_MODE=sdk`, before TRO-620.*\|\s*197\s*\|\s*323\s*\|\s*\*\*−84\.5%\*\*/)
+    // The boundary of what was measured stays explicit.
+    expect(doc).toContain('composeStandupDraft')
+    expect(doc).toMatch(/were not run/)
   })
 
   it('confirms PR #263 was checked as open/unmerged rather than assumed', () => {

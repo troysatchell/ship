@@ -1133,6 +1133,55 @@ describe('/oauth/token (PF-104)', () => {
       expect(row?.revoked_at ?? null).toBeNull();
     });
 
+    // TRO-598 (PF-800 follow-up) — a focused unit test for the additive
+    // machine-readable discriminator, isolated from
+    // refresh-rotation-stolen-token.test.ts's own narrated "stolen token"
+    // story (which asserts the reuse case specifically, in the context of
+    // its own end-to-end scenario). This one hits all three reasons the
+    // ticket scopes, back to back, with nothing narrated around them.
+    it('error_details.reason distinguishes unknown / expired / reused — additive, RFC error/error_description unchanged', async () => {
+      const unknownRes = await postToken(
+        refreshTokenBody({ refreshToken: 'ship_rt_does-not-exist-598', clientId: publicApp.client_id })
+      );
+      expect(unknownRes.status).toBe(400);
+      const unknownBody = unknownRes.body as { error?: string; error_details?: { reason?: string } };
+      expect(unknownBody.error).toBe('invalid_grant');
+      expect(unknownBody.error_details?.reason).toBe('token_unknown');
+
+      const expiredPair = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      await pool.query(
+        `UPDATE oauth_tokens SET refresh_token_expires_at = now() - interval '1 minute'
+         WHERE refresh_token_hash = $1`,
+        [crypto.createHash('sha256').update(expiredPair.refresh_token).digest('hex')]
+      );
+      const expiredRes = await postToken(
+        refreshTokenBody({ refreshToken: expiredPair.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(expiredRes.status).toBe(400);
+      const expiredBody = expiredRes.body as { error?: string; error_details?: { reason?: string } };
+      expect(expiredBody.error).toBe('invalid_grant');
+      expect(expiredBody.error_details?.reason).toBe('token_expired');
+
+      const reusedPair = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
+      const rotated = await postToken(
+        refreshTokenBody({ refreshToken: reusedPair.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(rotated.status).toBe(200);
+      const reusedRes = await postToken(
+        refreshTokenBody({ refreshToken: reusedPair.refresh_token, clientId: publicApp.client_id })
+      );
+      expect(reusedRes.status).toBe(400);
+      const reusedBody = reusedRes.body as { error?: string; error_details?: { reason?: string } };
+      expect(reusedBody.error).toBe('invalid_grant');
+      expect(reusedBody.error_details?.reason).toBe('token_reused');
+
+      // Additive, not a replacement: every case above still carries a real
+      // error_description string, the original RFC 6749 §5.2 signal.
+      expect(requireTokenErrorBody(unknownRes.body).error_description.length).toBeGreaterThan(0);
+      expect(requireTokenErrorBody(expiredRes.body).error_description.length).toBeGreaterThan(0);
+      expect(requireTokenErrorBody(reusedRes.body).error_description.length).toBeGreaterThan(0);
+    });
+
     it('client_id mismatch (a different, validly-registered client) -> 400 invalid_grant', async () => {
       const initial = await mintInitialTokenPair(publicApp, PUBLIC_REDIRECT_URI, ['documents:read']);
 
