@@ -117,27 +117,28 @@
  * own header for why it is scoped to webhooks specifically rather than
  * generalized to every SDK resource in this same ticket.
  *
- * UPDATE — TRO-607 (found while verifying TRO-599, explicitly OUT OF SCOPE
- * for that ticket which targeted only the two RESPONSE types):
- * `CreateWebhookSubscriptionBody` below (`createSubscription()`'s request
- * body) has been FIXED. Was `url`/plural `events`; is now `app_id`/singular
- * `event_type`/`target_url`, matching the real `POST /api/v1/webhooks` route's
- * `CreateWebhookSubscriptionRequestSchema` (`platform/api/v1/resources/webhooks.ts`,
- * verified by reading that file in full). All three fields are required. A
- * regression test added to `sdk/src/__tests__/webhooks.liveServer.test.ts`
- * calls the method against a real server with the corrected body shape,
- * confirming the fix end-to-end.
+ * UPDATE — TRO-607, TRO-452 (`ship webhooks tail`, PF-602), and TRO-455
+ * (PF-603, the TTFE drill) independently found and fixed this same gap
+ * ("STILL NOT FIXED" as of TRO-599) at the same time: `CreateWebhookSubscriptionBody`
+ * now declares `app_id`/singular `event_type`/`target_url`, matching
+ * `CreateWebhookSubscriptionRequestSchema`
+ * (`platform/api/v1/resources/webhooks.ts`) field-for-field, replacing the
+ * old `url`/plural-`events` shape that would 400 on every real call.
+ * TRO-452 hit this as a blocking dependency — `ship webhooks tail` has to
+ * call `createSubscription()` to register its own listener. TRO-455's TTFE
+ * drill hit the same blocker for its own literal AC ("`webhooks.create`"
+ * against a real running server) — see `scripts/drill/ttfe.ts`'s live use
+ * of this method for that drill's own round-trip proof.
+ * `createSubscription()` itself needed no signature change (it already
+ * forwards `body` as-is) in any of the three. All three branches updated
+ * `sdk/src/resources/__tests__/webhooks.test.ts`'s request-shape case and
+ * added a real-server round-trip case to
+ * `sdk/src/__tests__/webhooks.liveServer.test.ts`; both survive the merge
+ * (see that file's own header).
  *
- * UPDATE — TRO-455 (PF-603, the TTFE drill), landed independently and
- * converging on the same fix above (verified against the same
- * `CreateWebhookSubscriptionRequestSchema`,
- * `platform/api/v1/resources/webhooks.ts:158-165`): this shape was a
- * confirmed blocker for the drill's own literal AC ("`webhooks.create`"
- * against a real running server) — the drill could not create a
- * subscription through this method before TRO-607's fix landed.
- * `createSubscription()` itself needed no change (it already forwards
- * `body` as-is); see `scripts/drill/ttfe.ts`'s live use of this method for
- * the drill's own round-trip proof.
+ * Previously documented here as "STILL NOT FIXED ... explicitly OUT OF
+ * SCOPE for TRO-599 ... see CHANGES.md's TRO-599 entry ... a follow-up
+ * ticket" — TRO-607/TRO-452/TRO-455 are that follow-up.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -205,13 +206,16 @@ export interface CreatedWebhookSubscription extends WebhookSubscription {
 }
 
 /**
- * `createSubscription()`'s request body. VERIFIED (TRO-607) against
- * `CreateWebhookSubscriptionRequestSchema` (`platform/api/v1/resources/webhooks.ts`),
- * which requires `app_id` (uuid), singular `event_type`, and `target_url`.
- * All three fields are required (never optional). The subscription belongs to
- * an `app_id` (`oauth_apps`, migration 047), not directly to a workspace or
- * user — the caller supplies it in every create request. Also the exact
- * shape TRO-455 (PF-603)'s TTFE drill needed — see this file's header.
+ * `createSubscription()`'s request body. **FIXED by TRO-607/TRO-452/TRO-455**
+ * (previously disclosed as out of TRO-599's scope — see this file's header
+ * for the full history). Matches the real `POST /api/v1/webhooks` route's
+ * `CreateWebhookSubscriptionRequestSchema`
+ * (`platform/api/v1/resources/webhooks.ts`) field-for-field: `app_id` (a
+ * UUID that must reference an `oauth_apps` row in the caller's own
+ * workspace — checked server-side, not expressible here), singular
+ * `event_type`, and `target_url` (must be an http/https URL, all three
+ * required, never optional). Replaces the old `url`/plural-`events` shape
+ * (PF-401's pre-PF-302 guess), which would 400 on every real call.
  */
 export interface CreateWebhookSubscriptionBody {
   readonly app_id: string;

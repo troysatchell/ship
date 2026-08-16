@@ -106,6 +106,148 @@ change. Removing the Developer rail icon and routes fully reverts the user-visib
 
 ---
 
+## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
+
+**What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
+a local HTTP listener (`--port`, default an OS-assigned free port), registers a webhook
+subscription targeting it (`app_id` resolved from the current token via `GET /api/v1/me`, or
+`--app-id`; `--event-type`, default `document.created`), streams every delivery to stdout with a
+live `verifyWebhook()` check (`✓ verified  <timestamp>  <event type>` / `✗ rejected  <timestamp>`),
+and deactivates the subscription on exit (SIGINT/SIGTERM handler, best-effort `finally`). Wired
+into `integrations/cli/src/bin.ts` as `webhooks tail`, following the exact conventions PF-600/
+PF-601 already established (`docs.ts`/`login.ts`'s "thin command, real behavior in `@ship/sdk`"
+shape, the same `Io`/`formatError`/`config.ts` seams).
+
+**Design decisions:**
+- **One subscription, one event type**, matching the AC's own wording ("registers *a* subscription")
+  and the real server schema (`CreateWebhookSubscriptionRequestSchema` takes a single `event_type`,
+  never a list). `--event-type` selects it; default `document.created` is the simplest event the
+  five-line demo story triggers (`ship docs create`).
+- **The listener's signing secret is mutable, set after `listen()`.** The real port has to exist
+  before the subscription (and therefore its secret) can be created, so `createTailListener()`
+  returns a `setSecret()` method rather than taking the secret at construction. Proven safe by
+  construction, not just by convention — see `TailListener.setSecret`'s own doc comment in
+  `webhooksTail.ts` for why no real delivery can ever observe an unset secret.
+- **Remote/tunnel path is `--target-url` + `--port`, not a bundled tunnel client.** The AC says
+  "document the tunnel requirement" for remote instances, not solve it — no ngrok/cloudflared
+  dependency was added (PLUGFORGE.MD §2.1's CLI dependency allowlist doesn't include one). Documented
+  in the command's own `--help` description.
+
+**Blocking dependency found and fixed while implementing this ticket** (disclosed per this repo's
+claim-provenance rule, not silently worked around): `sdk/src/resources/webhooks.ts`'s
+`CreateWebhookSubscriptionBody` declared the pre-PF-302 guessed shape (`url`/plural `events`),
+which 400s against the real `POST /api/v1/webhooks` route (`CreateWebhookSubscriptionRequestSchema`
+requires `app_id`/singular `event_type`/`target_url`) — a previously-disclosed, not-yet-fixed gap
+(TRO-599's own CHANGES.md entry, `webhooks.ts`'s header). `ship webhooks tail` cannot register its
+own subscription without a working `createSubscription()`, so this ticket fixes it: the interface
+now matches the real schema field-for-field. Updated the mocked request-shape test
+(`sdk/src/resources/__tests__/webhooks.test.ts`) to the corrected body, and added a real-server
+round-trip case to `sdk/src/__tests__/webhooks.liveServer.test.ts` (`createSubscription()` against
+a live `createApp()` + seeded DB, asserting the exact `CreatedWebhookSubscription` field set).
+
+**Known duplicate-work overlap, disclosed rather than hidden.** While finishing this fix, a
+separate, already-open PR (**#255, Linear TRO-607**, branch `fix/tro-607-create-subscription-
+request-shape`) turned out to fix the identical `CreateWebhookSubscriptionBody` bug, independently
+discovered from the same TRO-599 disclosure. TRO-607's fix is effectively the same interface change
+this entry describes. This PR keeps its own copy (TRO-452 cannot ship a working demo without it —
+dropping it would leave `createSubscription()` broken in this branch), but the overlap is flagged on
+the TRO-607 Linear ticket and in this PR's own body: whichever PR merges first should make the
+other's overlapping hunk a near-no-op on merge (the two diffs converge on the same resulting code),
+not a real conflict to fight.
+
+**Regression test.** `integrations/cli/src/commands/webhooksTail.test.ts` — two groups, per this
+ticket's own brief ("test the listener/verification/cleanup logic as an importable module with a
+fake delivery POST, separate from the CLI entrypoint's process lifecycle"):
+- `createTailListener` (5 cases): a REAL local HTTP POST (via `node:http`, no `@ship/sdk`, no
+  server, no database) with a hand-computed `Ship-Signature` header, exercising verified/rejected/
+  missing-header/unset-secret/non-POST paths directly against the listener.
+- `runWebhooksTail` (7 cases): `fetch` mocked for the three `@ship/sdk` calls
+  (`GET /api/v1/me`, `POST /api/v1/webhooks`, `DELETE /api/v1/webhooks/:id`), but the listener
+  itself is real and receives a real local delivery signed with the mocked response's own secret —
+  proving port -> target_url -> secret -> verify actually holds together end to end. Covers:
+  the full verify+cleanup round trip, `--app-id` override skipping `me()`, the "no app on token"
+  error path, fail-fast on an invalid `--event-type`, "not logged in", `createSubscription()`
+  failure (listener closed, no hang), and best-effort cleanup surviving a failed `DELETE`.
+
+**Confirmed red before green, three separate ways:**
+1. `webhooksTail.test.ts`'s main round-trip case: commented out the `listener.setSecret(...)` call
+   — the ✓-verified assertion failed with `expected 401 to be 200` (a real signature-verification
+   failure, not an import/typo error). Restored; 12/12 pass.
+2. `sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody`: reverted to the old `url`/
+   `events` shape — `pnpm --filter @ship/sdk type-check` failed
+   (`TS2353: Object literal may only specify known properties, and 'app_id' does not exist in type
+   'CreateWebhookSubscriptionBody'`). Restored; clean.
+3. `sdk/src/resources/webhooks.ts`'s `createSubscription()` implementation: temporarily hardcoded it
+   to send the OLD wrong body shape at runtime (bypassing the type system) and ran the new
+   `webhooks.liveServer.test.ts` case against the real running API — it failed with a REAL
+   `ShipSdkError: The request could not be validated.` (HTTP 400) from the live server, exactly the
+   failure the file's own header predicted. Restored; the same test then passed against the real
+   server.
+
+**The real local demo, end to end** (this ticket's own proof obligation — not just claimed, run and
+observed in this worktree against `pnpm dev`'s equivalent local instance on port 3033):
+
+```
+$ ship login --client-id ship_app_... --scope "documents:read documents:write webhooks:manage"
+To authorize this CLI, open: http://localhost:5206/oauth-device-verify
+And enter the code: LXCP-GJJR
+Waiting for authorization...
+Logged in as Dev User <dev@ship.local> via app "TRO-452 CLI Demo" (ship_app_...) — scopes: documents:read, documents:write, webhooks:manage.
+Credentials saved to .../credentials.json.
+
+$ ship webhooks tail
+Listening on http://127.0.0.1:60674/ for "document.created" deliveries.
+Registered subscription 014511c9-509b-406b-a96d-ae82e16f5e51 (target_url: http://127.0.0.1:60674/).
+Waiting for deliveries. Press Ctrl+C to stop and clean up.
+
+# in a second terminal:
+$ ship docs create --title "TRO-452 webhooks tail demo doc"
+Created document.
+id: 7cea05a8-48e1-4f27-8ce2-307939b04fe6
+...
+
+# back in the first terminal, within ~1s (real deliverer poll, no fixed sleep):
+✓ verified  2026-08-15T23:22:33.548Z  document.created
+
+# Ctrl+C:
+Cleaning up...
+```
+
+Cleanup verified by re-fetching the subscription after exit:
+`GET /api/v1/webhooks/014511c9-...` -> `"active": false` (the API's documented deactivate-not-
+delete DELETE semantics) — the subscription really is gone, not just claimed gone.
+
+**Not verified.** The `--target-url`/tunnel path (a remote/deployed Ship instance) — no tunnel
+client or remote deployment was available in this worktree to exercise; the `--help` text and this
+entry document the requirement per the AC ("document the tunnel requirement"), but the tunnel path
+itself was not run end-to-end.
+
+**How to run it.**
+```bash
+ship login --client-id <id> --scope "documents:read documents:write webhooks:manage"
+ship webhooks tail                                  # local/containerized Ship
+ship webhooks tail --target-url https://<tunnel>/ --port <local-port>   # remote, via a tunnel
+```
+Regression tests:
+```bash
+source .factory-env
+pnpm --filter @ship/cli exec vitest run src/commands/webhooksTail.test.ts
+pnpm --filter @ship/sdk exec vitest run src/resources/__tests__/webhooks.test.ts src/__tests__/webhooks.liveServer.test.ts
+```
+
+**Rollback.** Revert this commit. Changes are localized to:
+- `integrations/cli/src/commands/webhooksTail.ts` (new), `integrations/cli/src/commands/
+  webhooksTail.test.ts` (new), `integrations/cli/src/bin.ts` (adds the `webhooks tail` subcommand
+  — revert to remove it)
+- `sdk/src/resources/webhooks.ts` (`CreateWebhookSubscriptionBody` + header comments),
+  `sdk/src/resources/__tests__/webhooks.test.ts`, `sdk/src/__tests__/webhooks.liveServer.test.ts`
+  (new `createSubscription()` case)
+- `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` (status-table row only)
+
+No migrations, no server-side route changes, no database schema changes.
+
+---
+
 ## TRO-455 — TTFE drill in CI (PF-603)
 
 **What this is.** `pnpm drill ttfe` — a narrated, timed proof of PLUGFORGE.MD §4's TTFE (Time To
