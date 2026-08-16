@@ -2,6 +2,22 @@
 
 *What works, what's left, what changed. Append-style updates with dates; newest section first.*
 
+## 2026-08-16 (~14:11–16:57Z) — Fresh session: cleared the 6-PR merge queue, found+fixed the ship-agent Render outage
+
+Resumed from ship-38's ~14:05Z usage-limit handoff. Ground-truthed everything live rather than trusting the handoff's stale state (GitHub API rate limit had cleared; CodeRabbit's fleet-wide rate limit was confirmed still real by reading each PR's actual comment body, not the check-run).
+
+**Merged 11 PRs across 2 waves**, each requiring 3-7 merge-forward rounds as `main` advanced under 4-5 concurrent sessions: #268 (TRO-493), #269 (TRO-588), #272 (TRO-589), #274 (TRO-598), #277 (TRO-591), #278 (TRO-614), #283 (TRO-590), #284 (docs sync — committed pending non-ticket content a prior session left uncommitted directly on `main`), #285 (TRO-500), #286 (TRO-549), #301 (see below). All merged on gate-pass + CI-green per SKILL.md's standing CodeRabbit-rate-limit exception, no new authorization needed.
+
+**Coordinated live with 4 peer sessions** (ship-61, ship-16, ship-90, ship-1c — the last unreachable, SendMessage failed 3x) via SendMessage/ListAgents: negotiated a "main quiet" window so ship-61 could land TRO-490/TRO-491 (#287/#288) without extra convoy rounds, relayed ship-90's file-overlap announcement, told ship-16 which tickets were safe to claim (TRO-496/TRO-453).
+
+**Troy said at ~15:20Z he had ~1 hour left and to prioritize closing out in-flight work over anything new.** Broadcast "merge-only, no new dispatch" to all 3 reachable peers immediately; this shaped the rest of the session — no new tickets were claimed or dispatched after that point.
+
+**Found and fixed a real, undetected 2-day production outage.** Troy asked live why `ship-agent`'s Render builds were failing. Checked `render deploys list srv-d9otunmgekts73eqs0h0` directly instead of guessing "instance out of date": every deploy back to 2026-08-16 05:36Z was `build_failed`. `render logs` showed the real error — `agent/src/shipClient.ts` importing `@ship/sdk` (added PF-702/PF-703, 2026-08-14) but `agent/Dockerfile` never copying/building the `sdk` workspace package, so `tsc` failed `TS2307` on every build since. Fixed in PR #301: build stage now copies `sdk/package.json` + source and runs `pnpm --filter @ship/sdk build` before the agent build; runtime stage copies `sdk/package.json` + `sdk/dist`. **Verified with a real `docker build -f agent/Dockerfile .` + `docker run`** before pushing — container booted, logged `[agent] listening on :3100`, no module errors. Post-merge, confirmed the Render deploy went `live` and `GET /health` returns `200`. This bug was invisible to `gate.sh`/`ci.yml` (neither builds the agent-specific Dockerfile) and had sat unnoticed through ~2 days of active `agent/` work by other sessions.
+
+**End-of-session housekeeping:** restored branch protection `strict=true` (had been relaxed 13:50Z-16:55Z to survive the convoy), synced GitLab to GitHub's tip (`e6e4bbaf`, verified via `git ls-remote` on both), rewrote `activeContext.md` to drop ~3 layers of stale header text that had accumulated across sessions.
+
+**Not done:** ship-16's #298 (TRO-453)/#299 (TRO-496) were still open, gate-clean, mid-CI at session end — left for them to finish per their own report. Troy's stated deadline (~16:20Z per "1 hour left") has passed as of this write; next session should confirm with Troy whether to continue the backlog rather than assume.
+
 ## 2026-08-16 (~13:35–16:20Z) — 4th concurrent orchestrator: TRO-490 + TRO-491 shipped
 
 - Resumed from ship-38's 13:35Z handoff; ship-38 kept the merge queue + TRO-500/549, ship-16 took TRO-590 after a claim collision (yielded, they had the worktree). Claimed TRO-490 and TRO-491; both apply-tier, dispatched as sonnet appliers with fully specified briefs (red-before-green captured in both).
