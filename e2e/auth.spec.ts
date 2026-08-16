@@ -49,8 +49,9 @@ test.describe('Authentication', () => {
     await page.locator('#password').fill('admin123')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
 
-    // Should redirect to app (not /login)
-    await expect(page).not.toHaveURL('/login', { timeout: 5000 })
+    // Should redirect to the authenticated landing route (not just "away
+    // from /login" - a transient error route would also satisfy that).
+    await expect(page).toHaveURL('/docs', { timeout: 5000 })
 
     // Should show Documents page (default landing after login)
     await expect(page.locator('h1', { hasText: 'Documents' })).toBeVisible({ timeout: 5000 })
@@ -63,8 +64,10 @@ test.describe('Authentication', () => {
     await page.locator('#password').fill('admin123')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
 
-    // Wait for app to load
-    await expect(page).not.toHaveURL('/login', { timeout: 5000 })
+    // Wait for app to load - assert the actual authenticated landing route,
+    // not just "not /login" (TRO-549: that would also pass on a transient
+    // error route).
+    await expect(page).toHaveURL('/docs', { timeout: 5000 })
 
     // Click user avatar (logout button) - it's the button with user's initial
     const logoutButton = page.locator('button').filter({ hasText: /^[A-Z]$/ }).last()
@@ -90,8 +93,9 @@ test.describe('Authentication', () => {
     await page.locator('#password').fill('admin123')
     await page.getByRole('button', { name: 'Sign in', exact: true }).click()
 
-    // Should redirect to app (not /login) - login succeeds despite different case
-    await expect(page).not.toHaveURL('/login', { timeout: 5000 })
+    // Should redirect to the authenticated landing route - login succeeds
+    // despite different case
+    await expect(page).toHaveURL('/docs', { timeout: 5000 })
 
     // Should show Documents page (default landing after login)
     await expect(page.locator('h1', { hasText: 'Documents' })).toBeVisible({ timeout: 5000 })

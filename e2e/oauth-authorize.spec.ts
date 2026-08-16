@@ -119,7 +119,10 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     await page.locator('#email').fill('dev@ship.local');
     await page.locator('#password').fill('admin123');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await expect(page).not.toHaveURL('/login', { timeout: 5000 });
+    // Assert the actual authenticated landing route (TRO-549), not just
+    // "not /login" - matching e2e/auth.spec.ts's pattern for the same login
+    // flow.
+    await expect(page).toHaveURL('/docs', { timeout: 5000 });
 
     // Step 2: navigate directly to the API's own authorization endpoint —
     // this is what a real third-party OAuth client redirects the browser
@@ -175,7 +178,10 @@ test.describe('OAuth authorize + consent (PF-103)', () => {
     await page.locator('#email').fill('dev@ship.local');
     await page.locator('#password').fill('admin123');
     await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-    await expect(page).not.toHaveURL('/login', { timeout: 5000 });
+    // Assert the actual authenticated landing route (TRO-549), not just
+    // "not /login" - matching e2e/auth.spec.ts's pattern for the same login
+    // flow.
+    await expect(page).toHaveURL('/docs', { timeout: 5000 });
 
     const authorizeUrl = new URL('/oauth/authorize', apiServer.url);
     authorizeUrl.searchParams.set('client_id', clientId);
