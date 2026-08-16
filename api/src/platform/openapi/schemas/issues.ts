@@ -20,9 +20,12 @@ import { ApiErrorSchema, BEARER_SECURITY } from './common.js';
 
 /** `shared/src/types/document.ts`'s `IssueState`/`IssuePriority` unions,
  * verbatim — the same source `resources/issues.ts`'s own header comment
- * cites as this resource's property-name provenance. */
+ * cites as this resource's property-name provenance. `IssuePriority`
+ * includes `'none'` ("No Priority" — TRO-501): `serializeIssue()` can
+ * return it for any issue whose `properties.priority` is `'none'`, so the
+ * documented response shape has to allow it too. */
 const IssueStateSchema = z.enum(['triage', 'backlog', 'todo', 'in_progress', 'in_review', 'done', 'cancelled']);
-const IssuePrioritySchema = z.enum(['low', 'medium', 'high', 'urgent']);
+const IssuePrioritySchema = z.enum(['low', 'medium', 'high', 'urgent', 'none']);
 
 /** Matches `serializeIssue()`'s return shape in
  * `platform/api/v1/resources/issues.ts` exactly. */
