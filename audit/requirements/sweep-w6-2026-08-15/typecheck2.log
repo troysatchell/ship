@@ -1,0 +1,21 @@
+
+> ship@0.0.0 type-check /Users/troy/repos/GAUNTLET/Ship
+> pnpm --recursive run type-check
+
+Scope: 8 of 9 workspace projects
+sdk type-check$ tsc --noEmit
+shared type-check$ tsc --noEmit
+shared type-check: Done
+sdk type-check: Done
+agent type-check$ tsc --noEmit
+api type-check$ tsc --noEmit
+integrations/browser-demo type-check$ tsc --noEmit
+integrations/cli type-check$ tsc --noEmit
+integrations/browser-demo type-check: Done
+integrations/slack type-check$ tsc --noEmit
+integrations/cli type-check: Done
+web type-check$ tsc --noEmit && tsc --noEmit -p tsconfig.node.json
+agent type-check: Done
+integrations/slack type-check: Done
+api type-check: Done
+web type-check: Done
