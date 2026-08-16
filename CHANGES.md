@@ -6,6 +6,86 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-589 — Device-grant `user_code` stored plaintext, not hashed
+
+**Root cause.** `oauth_device_codes.device_code_hash` (the machine-held device_code) has always
+been SHA-256-hashed at rest (`hashDeviceCode`/`hashToken`, `api/src/platform/oauth/device.ts`).
+`user_code` — the human-typed 8-char verification code, same table, same migration (043) — was
+written to the database as plaintext: `createDeviceCode`'s `INSERT` bound the raw generated code
+directly, and `lookupDeviceCodeByUserCode`'s `SELECT ... WHERE user_code = $1` compared against it
+directly. Found by TRO-425's own landing agent's security self-review. Low severity as-found:
+device codes expire in `DEVICE_CODE_TTL_MS` (10 min), and a leaked `user_code` alone cannot
+complete the flow without a live, session-authenticated `/oauth/device/verify` approval — but it
+didn't satisfy a "hashed or not trivially guessable from DB" bar.
+
+**The fix.** `api/src/platform/oauth/device.ts` — mirrors the existing `device_code_hash` pattern
+exactly:
+
+- New `hashUserCode(raw): string` (SHA-256 hex via the same `hashToken` from `token.ts` that
+  `hashDeviceCode` already uses) — deterministic, so a lookup by the value a human typed still
+  works, it just hashes first.
+- `createDeviceCode`'s `INSERT` now binds `hashUserCode(userCode)` instead of the raw `userCode`.
+  The function's RETURN VALUE is unchanged — the caller (and the human who reads/types the code)
+  still sees the real plaintext code. Nothing about what the user sees or types changed; only what
+  lands in the database changed.
+- `lookupDeviceCodeByUserCode` now hashes its input (the already-`normalizeUserCode`-normalized
+  plaintext from `decideDeviceCode`) before the `SELECT ... WHERE user_code = $1` comparison.
+- `DeviceCodeRow.user_code`'s doc comment updated to state it now holds a hash, not plaintext,
+  despite the unchanged column name (see below).
+
+**Migration: none needed.** `oauth_device_codes.user_code` is `TEXT NOT NULL`
+(`api/src/db/migrations/043_oauth_tokens_and_codes.sql:99`) — no `VARCHAR(N)` length constraint.
+**Observed**, not assumed: queried `information_schema.columns` directly against this worktree's
+own database (`data_type: 'text'`, `character_maximum_length: null`), and separately confirmed
+migrations 043 and 046 are both applied (`schema_migrations` has both version rows) — so this
+database's `oauth_device_codes` shape matches the migration file read. A 64-char SHA-256 hex
+digest fits a `TEXT` column with no widening required. The existing `idx_oauth_device_codes_user_code`
+unique index is unaffected — it still enforces uniqueness, just over hash values instead of
+plaintext values, which is exactly as meaningful (SHA-256 collisions are not a realistic concern
+at this table's scale, same posture already accepted for `device_code_hash`'s own unique index).
+
+**Deliberately NOT done: renaming the `user_code` column to `user_code_hash`.** Would be the more
+self-documenting name (matching `device_code_hash`'s own naming), but renaming an existing column
+requires its own migration (`ALTER TABLE ... RENAME COLUMN`) and isn't required to close this
+finding — the severity was already low, and the ticket's own scope was "hash the value," not
+"rename the column." Documented at length in-code (`device.ts`'s `hashUserCode` and
+`DeviceCodeRow.user_code` doc comments) so a future reader isn't misled by the column name alone.
+If a future ticket wants the rename for consistency, it's a small, isolated follow-up.
+
+**Regression test.** `api/src/platform/oauth/__tests__/device.test.ts`, new `describe('TRO-589:
+user_code is hashed at rest')` block: issues a real device code via `POST /oauth/device/code`,
+then queries `oauth_device_codes` directly by `device_code_hash` (bypassing this module's own
+lookup helpers, which would trivially "pass" either way) and asserts the stored `user_code`
+column value (a) is not equal to the plaintext code returned to the client, (b) is exactly
+`sha256(plaintext).hex()`, and (c) is a 64-char hex string — then proves the hash still resolves
+correctly by submitting the plaintext code to `/oauth/device/verify` and confirming a real
+`approved` redirect.
+
+**Observed red-before-green, not assumed:** reverted only `device.ts` to its pre-fix `HEAD` state
+(`git checkout -- api/src/platform/oauth/device.ts`, leaving the new test in place) and ran the
+test — it failed with `AssertionError: expected 'H9GR-7BL8' not to be 'H9GR-7BL8'` (the DB
+literally held the human-readable code). Re-applied the fix; the same test then passed, along with
+all 9 pre-existing tests in the file (10/10) and all 7 pre-existing tests in
+`api/src/db/__tests__/migrations-042-043.test.ts` (index-shape assertions unaffected by content
+change).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/device.test.ts
+```
+
+**Roll back.** Revert this commit. No migration was added, so there is no down-path to run —
+reverting `api/src/platform/oauth/device.ts` and the test file returns `user_code` storage to
+plaintext with no schema cleanup needed (the column's `TEXT` type and unique index are unchanged
+either way). Any rows written while this fix was live will have hashed `user_code` values; a
+revert makes those existing hashed rows permanently unusable for the (already-consumed-or-expired,
+10-minute-TTL) verify lookup — not a concern in practice given the TTL, but noted for completeness
+since a migration-less code revert cannot un-hash already-written data.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
