@@ -50,6 +50,43 @@ components:
           description: Validation error details
       required:
         - error
+    InternalErrorResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+          enum:
+            - false
+          description: Always false on an error response
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum:
+                - VALIDATION_ERROR
+                - NOT_FOUND
+                - UNAUTHORIZED
+                - FORBIDDEN
+                - INTERNAL_ERROR
+                - INVALID_CREDENTIALS
+                - SESSION_EXPIRED
+                - ALREADY_EXISTS
+              description: Machine-readable error code
+            message:
+              type: string
+              description: Human-readable error message
+            details:
+              type: object
+              additionalProperties:
+                nullable: true
+              description: "Additional context, shape varies by error — e.g. a validation error carries zod's flatten() output ({formErrors, fieldErrors})."
+          required:
+            - code
+            - message
+      required:
+        - success
+        - error
     BelongsToEntry:
       type: object
       properties:
@@ -8909,13 +8946,13 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "403":
           description: Workspace admin access required
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
     get:
       tags:
         - OAuth Apps
@@ -8933,7 +8970,7 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
   "/oauth-apps/{id}":
     get:
       tags:
@@ -8961,13 +8998,13 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "404":
           description: OAuth app not found
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
     delete:
       tags:
         - OAuth Apps
@@ -8994,19 +9031,19 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "404":
           description: OAuth app not found
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "409":
           description: OAuth app already revoked
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
   "/oauth-apps/{id}/rotate":
     post:
       tags:
@@ -9034,25 +9071,25 @@ paths:
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "403":
           description: Workspace admin access required
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "404":
           description: OAuth app not found
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
         "409":
           description: "Lost a race against a concurrent rotation of the same app (TRO-492) — retry the request."
           content:
             application/json:
               schema:
-                "$ref": "#/components/schemas/ErrorResponse"
+                "$ref": "#/components/schemas/InternalErrorResponse"
   "/oauth/authorize":
     get:
       tags:
