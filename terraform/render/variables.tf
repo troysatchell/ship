@@ -191,6 +191,22 @@ variable "langsmith_api_key" {
   description = "LangSmith API key for trace ingestion (TRO-313 / FG-2 — tracing on from the first invocation). Sensitive, no default."
   type        = string
   sensitive   = true
+
+  # TRO-488: same gap CodeRabbit flagged on agent_internal_secret (TRO-347) —
+  # an empty or copy-pasted-placeholder value here deploys an agent whose
+  # tracing silently no-ops (or, depending on the SDK, fails closed) while
+  # `terraform apply` still reports success. `length(trimspace(...)) > 0`
+  # rather than `!= ""` so whitespace-only input (a copy-paste artifact) is
+  # also caught. Also rejects the literal terraform.tfvars.example
+  # placeholder so copying that file unedited fails loudly instead of
+  # deploying a value every reader of this repo already knows.
+  validation {
+    condition = (
+      length(trimspace(var.langsmith_api_key)) > 0 &&
+      var.langsmith_api_key != "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"
+    )
+    error_message = "langsmith_api_key must not be empty (or whitespace-only), and must not be the terraform.tfvars.example placeholder value."
+  }
 }
 
 variable "langchain_project" {
@@ -215,6 +231,21 @@ variable "ship_api_token" {
   EOT
   type        = string
   sensitive   = true
+
+  # TRO-488: same gap CodeRabbit flagged on agent_internal_secret (TRO-347) —
+  # this token authenticates every agent -> Ship call as a real user
+  # (FLEETGRAPH.MD "Deployment model"); an empty or placeholder value here
+  # deploys an agent that fails every internal API call while `terraform
+  # apply` still reports success. `length(trimspace(...)) > 0` rather than
+  # `!= ""` so whitespace-only input is also caught. Also rejects the literal
+  # terraform.tfvars.example placeholder.
+  validation {
+    condition = (
+      length(trimspace(var.ship_api_token)) > 0 &&
+      var.ship_api_token != "REPLACE_WITH_A_REAL_SHIP_API_TOKEN"
+    )
+    error_message = "ship_api_token must not be empty (or whitespace-only), and must not be the terraform.tfvars.example placeholder value."
+  }
 }
 
 # --- Agent/api shared secret + wiring (TRO-347) -----------------------------
@@ -331,6 +362,20 @@ variable "secret_encryption_key" {
   EOT
   type        = string
   sensitive   = true
+
+  # TRO-488 (PF-900 follow-up, CodeRabbit on PR #174/TRO-411): same shape as
+  # agent_internal_secret's existing validation (TRO-347) — an empty or
+  # placeholder value here would encrypt every webhook signing secret with a
+  # key everyone reading this repo already knows, while `terraform apply`
+  # still reports success. `length(trimspace(...)) > 0` rather than `!= ""`
+  # so whitespace-only input is also caught.
+  validation {
+    condition = (
+      length(trimspace(var.secret_encryption_key)) > 0 &&
+      var.secret_encryption_key != "REPLACE_WITH_A_REAL_ENCRYPTION_KEY"
+    )
+    error_message = "secret_encryption_key must not be empty (or whitespace-only), and must not be the terraform.tfvars.example placeholder value."
+  }
 }
 
 variable "fleetgraph_oauth_client_secret" {
@@ -350,6 +395,22 @@ variable "fleetgraph_oauth_client_secret" {
   EOT
   type        = string
   sensitive   = true
+
+  # TRO-488 (PF-900 follow-up, CodeRabbit on PR #174/TRO-411): same shape as
+  # agent_internal_secret's existing validation (TRO-347) — an empty or
+  # placeholder value here means `ship`'s PF-701 seed hashes a secret every
+  # reader of this repo already knows, and the agent's own Client
+  # Credentials grant (once PF-702 flips AGENT_PLATFORM_MODE to `sdk`) fails
+  # closed against the mismatched hash, while `terraform apply` still
+  # reports success. `length(trimspace(...)) > 0` rather than `!= ""` so
+  # whitespace-only input is also caught.
+  validation {
+    condition = (
+      length(trimspace(var.fleetgraph_oauth_client_secret)) > 0 &&
+      var.fleetgraph_oauth_client_secret != "REPLACE_WITH_A_REAL_FLEETGRAPH_CLIENT_SECRET"
+    )
+    error_message = "fleetgraph_oauth_client_secret must not be empty (or whitespace-only), and must not be the terraform.tfvars.example placeholder value."
+  }
 }
 
 variable "grader_oauth_client_secret" {
@@ -366,6 +427,20 @@ variable "grader_oauth_client_secret" {
   EOT
   type        = string
   sensitive   = true
+
+  # TRO-488 (PF-900 follow-up, CodeRabbit on PR #174/TRO-411): same shape as
+  # agent_internal_secret's existing validation (TRO-347) — an empty or
+  # placeholder value here means PF-907's seed hashes a grader-app secret
+  # every reader of this repo already knows, while `terraform apply` still
+  # reports success. `length(trimspace(...)) > 0` rather than `!= ""` so
+  # whitespace-only input is also caught.
+  validation {
+    condition = (
+      length(trimspace(var.grader_oauth_client_secret)) > 0 &&
+      var.grader_oauth_client_secret != "REPLACE_WITH_A_REAL_GRADER_CLIENT_SECRET"
+    )
+    error_message = "grader_oauth_client_secret must not be empty (or whitespace-only), and must not be the terraform.tfvars.example placeholder value."
+  }
 }
 
 variable "oauth_access_token_ttl_seconds" {
@@ -383,6 +458,15 @@ variable "oauth_access_token_ttl_seconds" {
   EOT
   type        = number
   default     = 3600
+
+  # TRO-488: `tostring()` (web_service.tf) accepts any number, including 0,
+  # negative, or fractional seconds — none of which PF-104/PF-105's future
+  # token issuance path can treat as a sane TTL. Same
+  # positive-integer shape as the other three PF-900 numeric vars below.
+  validation {
+    condition     = var.oauth_access_token_ttl_seconds > 0 && var.oauth_access_token_ttl_seconds == floor(var.oauth_access_token_ttl_seconds)
+    error_message = "oauth_access_token_ttl_seconds must be a positive whole number of seconds."
+  }
 }
 
 variable "oauth_refresh_token_ttl_seconds" {
@@ -393,6 +477,12 @@ variable "oauth_refresh_token_ttl_seconds" {
   EOT
   type        = number
   default     = 2592000
+
+  # TRO-488: same shape as oauth_access_token_ttl_seconds above.
+  validation {
+    condition     = var.oauth_refresh_token_ttl_seconds > 0 && var.oauth_refresh_token_ttl_seconds == floor(var.oauth_refresh_token_ttl_seconds)
+    error_message = "oauth_refresh_token_ttl_seconds must be a positive whole number of seconds."
+  }
 }
 
 variable "rate_limit_app_rpm" {
@@ -406,6 +496,13 @@ variable "rate_limit_app_rpm" {
   EOT
   type        = number
   default     = 120
+
+  # TRO-488: a zero, negative, or fractional RPM ceiling is not a valid
+  # token-bucket rate — same positive-integer shape as the TTL vars above.
+  validation {
+    condition     = var.rate_limit_app_rpm > 0 && var.rate_limit_app_rpm == floor(var.rate_limit_app_rpm)
+    error_message = "rate_limit_app_rpm must be a positive whole number (requests per minute)."
+  }
 }
 
 variable "rate_limit_token_rpm" {
@@ -416,6 +513,12 @@ variable "rate_limit_token_rpm" {
   EOT
   type        = number
   default     = 60
+
+  # TRO-488: same shape as rate_limit_app_rpm above.
+  validation {
+    condition     = var.rate_limit_token_rpm > 0 && var.rate_limit_token_rpm == floor(var.rate_limit_token_rpm)
+    error_message = "rate_limit_token_rpm must be a positive whole number (requests per minute)."
+  }
 }
 
 variable "agent_platform_mode" {

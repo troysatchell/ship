@@ -502,6 +502,54 @@ describe('Issues API', () => {
         unsubscribeIssueCreated()
       }
     })
+
+    // TRO-501: the route's createIssueSchema accepts priority: 'none' (a
+    // "No Priority" state the web Properties Panel dropdown already offers
+    // — IssueSidebar.tsx's PRIORITIES array — and the Kanban board /
+    // issues list already render — KanbanBoard.tsx's/IssuesList.tsx's
+    // PRIORITY_COLORS.none) but shared/src/types/document.ts's
+    // IssuePriority union did not, and neither did the webhooks event
+    // registry's local mirror (platform/webhooks/events.ts). Verified
+    // before this fix (not assumed): the write itself succeeds (201, row
+    // committed) because InProcessEventBus.publish()'s throw for
+    // priority: 'none' happens inside flushPendingEvents, AFTER
+    // issues.ts's own COMMIT — and documentService.ts's safeDispatch
+    // catches+console.errors that throw rather than rethrowing (its own
+    // header comment: "a subscriber that chokes on an event must not turn
+    // an already-successful write into a request the client sees as
+    // failed"). So the real, confirmed bug is quieter than a 500: the
+    // issue.created webhook event is silently dropped for every issue
+    // created with priority: 'none', with only a server-side
+    // console.error as a trace. This test hits the real route + the real
+    // process-wide IEventBus singleton (not a substituted double) to prove
+    // both the row and the published event now carry priority: 'none'
+    // without the dispatch failing.
+    it('creates an issue with priority "none" and still publishes issue.created', async () => {
+      const bus = getEventBus()
+      const issueCreatedEvents: EventEnvelope[] = []
+      const unsubscribeIssueCreated = bus.subscribe('issue.created', (event) => {
+        issueCreatedEvents.push(event)
+      })
+
+      try {
+        const res = await request(app)
+          .post('/api/issues')
+          .set('Cookie', sessionCookie)
+          .set('x-csrf-token', csrfToken)
+          .send({ title: 'No Priority Issue', priority: 'none' })
+
+        expect(res.status).toBe(201)
+        expect(res.body.priority).toBe('none')
+
+        const issueCreatedEvent = issueCreatedEvents.find(
+          (event) => (event.data as { id: string }).id === res.body.id
+        )
+        expect(issueCreatedEvent).toBeDefined()
+        expect((issueCreatedEvent?.data as { priority: string }).priority).toBe('none')
+      } finally {
+        unsubscribeIssueCreated()
+      }
+    })
   })
 
   describe('PATCH /api/issues/:id', () => {

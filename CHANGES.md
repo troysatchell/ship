@@ -62,6 +62,376 @@ pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/app-registr
 
 ---
 
+## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
+
+**The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
+that were supposed to disagree about whether `priority: 'none'` is legal: the route's inline
+`createIssueSchema`/`updateIssueSchema` (`api/src/routes/issues.ts`), `shared/src/types/document.ts`'s
+`IssuePriority` union, and the OpenAPI `IssuePrioritySchema`
+(`api/src/openapi/schemas/issues.ts:24-34`). Verified by reading the actual file, not by trusting the
+ticket text: the OpenAPI schema already includes `'none'`, and `git blame` shows it has since the
+very first commit that added OpenAPI docs (`adf72f9d`) — it was never absent. Only
+`shared/src/types/document.ts`'s `IssuePriority` (`'low' | 'medium' | 'high' | 'urgent'`, no `'none'`)
+was actually out of step. Two of the three named sources already agreed.
+
+**Direction decided by real evidence, per the ticket's own instructions.** This worktree's database
+(`ship_wt_tro_501`, freshly migrated) has 0 issue-type documents, so it proved nothing either way.
+Grepping `web/src` and `api/src` did: `'none'` is a real, first-class "No Priority" state, not
+leftover cruft.
+- `web/src/components/sidebars/IssueSidebar.tsx`'s Properties Panel priority `<select>` explicitly
+  offers `{ value: 'none', label: 'No Priority' }` alongside urgent/high/medium/low — a live,
+  user-facing feature, not a filter sentinel.
+- `web/src/hooks/useIssuesQuery.ts`'s optimistic issue-creation update sets `priority: 'none'` as the
+  new issue's default before the server responds.
+- `web/src/components/KanbanBoard.tsx` and `web/src/components/IssuesList.tsx` both define a
+  dedicated `none` entry in their `PRIORITY_COLORS`/label maps (rendered, not just a fallback), and
+  `web/src/components/WeekReconciliation.tsx` explicitly branches on `issue.priority !== 'none'`.
+- The route's own `createIssueSchema`/`updateIssueSchema` already accepted it on both create and
+  update.
+
+Widening beat narrowing on the evidence: narrowing the route would have broken the Properties Panel's
+existing "No Priority" option (a real PATCH with `priority: 'none'` would 400) and contradicted a
+UI feature already shipped. Interesting side-evidence of the same gap: `web/src/lib/contextMenuActions.ts`'s
+right-click context menu (`ISSUE_PRIORITY_OPTIONS`, strictly typed as `IssuePriority[]`) omits "No
+Priority" entirely — the narrow type had already caused one UI surface to silently drop an option the
+other surface offers. Left that array's contents unchanged (adding a menu entry is a product decision
+beyond this ticket's ask), but it's a visible symptom of the exact type gap being fixed here.
+
+**What changed.**
+- `shared/src/types/document.ts`: widened `IssuePriority` to `'low' | 'medium' | 'high' | 'urgent' |
+  'none'`. `api/src/routes/issues.ts` and `api/src/openapi/schemas/issues.ts` needed no change —
+  both already allowed `'none'`.
+- **A fourth source of truth, not named in the ticket, found live-broken during investigation:**
+  `api/src/platform/webhooks/events.ts`'s local `IssuePrioritySchema` mirror (used by the
+  `issue.created` webhook event payload schema) also excluded `'none'`, and its own header comment
+  (written 2026-08-10 for TRO-419) repeated the same wrong claim about the OpenAPI schema, explicitly
+  deferring the fix "for a future ticket." Confirmed live, red-before-fix, with
+  `api/src/routes/issues.test.ts`'s new TRO-501 test: creating an issue via `POST /api/issues` with
+  `priority: 'none'` committed successfully (**201**, row written) but the derived `issue.created`
+  webhook event was **silently dropped** — `InProcessEventBus.publish()` throws on the schema
+  mismatch, and `documentService.ts`'s `safeDispatch` catches and `console.error`s a dispatch throw
+  rather than failing the request (by design, per its own header comment), so nothing surfaced to the
+  API caller. Fixed by widening this file's `IssuePrioritySchema` to include `'none'` and correcting
+  the stale comment.
+- `api/src/platform/openapi/schemas/issues.ts` (the `/api/v1/issues` public API's response-only
+  schema, a *different* file from the internal `api/src/openapi/schemas/issues.ts`): widened its own
+  local `IssuePrioritySchema` mirror to include `'none'` so the documented `GET /api/v1/issues`
+  response shape matches what `serializeIssue()` can actually return. No runtime validation depended
+  on this one (response-doc only), but left undocumented it would have been a fifth source of
+  disagreement.
+- Regenerated `docs/openapi.json` (the v1 public spec) via `pnpm --filter @ship/api
+  openapi:generate:v1` — the only spec that changed (added `"none"` to the `priority` enum). The
+  legacy internal spec (`api/openapi.json`/`api/openapi.yaml`, from `openapi:generate`) was
+  regenerated too and came out byte-identical, confirming its enum already had `'none'`.
+
+**Regression tests.**
+- `api/src/routes/issues.test.ts`, new test `'creates an issue with priority "none" and still
+  publishes issue.created'` inside `POST /api/issues`: hits the real route and the real
+  process-wide `IEventBus` singleton (not a substituted double), asserts `201` + `priority: 'none'`
+  in the response, and asserts the `issue.created` event fired with `priority: 'none'` — the specific
+  case that used to be silently dropped. Verified red before the fix (ran standalone against the
+  pre-fix code: `expected undefined to be defined` on the event lookup, with
+  `documentService: an event dispatch threw after its write already committed` visible on stderr).
+- `api/src/platform/webhooks/__tests__/events.test.ts`, new test `"accepts an issue.created payload
+  with priority: 'none' (TRO-501)"` inside the `schemas` block: unit-level proof that the registry's
+  `issue.created` schema itself now accepts `'none'`, independent of the route.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/routes/issues.test.ts src/platform/webhooks/__tests__/events.test.ts
+```
+Both files pass in full (29 + 24 tests) after the fix.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit: `shared/src/types/document.ts`,
+`api/src/platform/webhooks/events.ts`, `api/src/platform/openapi/schemas/issues.ts`, the two test
+files, `docs/openapi.json`, and this entry). No migration, no schema change, no data backfilled —
+`priority` lives in the `properties` JSONB column with no DB-level CHECK constraint, so nothing else
+needs undoing. Reverting restores the pre-fix drift (route already permissive, shared type and the
+two webhook/v1 mirrors narrower) rather than fixing anything new.
+
+---
+
+## TRO-488 — PF-900 follow-up: terraform input hardening — secret/number validation blocks + verify-script block-scoped greps
+
+**CodeRabbit finding on PR #174/TRO-411, triaged real, none merge-blocking — non-code / artifact-based
+ticket, same terraform-testing precedent as TRO-411 itself (`terraform validate`/`plan` is the proof
+mechanism, not vitest; disclosed below rather than routed around).**
+
+**What was missing.**
+1. `terraform/render/variables.tf` — the three new PF-900 secrets (`secret_encryption_key`,
+   `fleetgraph_oauth_client_secret`, `grader_oauth_client_secret`) had no `validation {}` block, so
+   an empty string or an uncorrected copy-paste of `terraform.tfvars.example`'s
+   `REPLACE_WITH_A_REAL_*_KEY`/`_SECRET` placeholder would `terraform apply` clean and deploy a
+   webhook-encryption key or OAuth client secret every reader of this repo already knows, while
+   Terraform itself reported success.
+2. The TTL/RPM `number` variables (`oauth_access_token_ttl_seconds`, `oauth_refresh_token_ttl_seconds`,
+   `rate_limit_app_rpm`, `rate_limit_token_rpm`) accepted any number at all — zero, negative, or
+   fractional seconds/RPM — silently `tostring()`'d into the Render env var (web_service.tf) with no
+   rejection at plan time.
+3. `scripts/factory/verify-terraform-artifact.sh`'s items #2 (env var presence) and #4 (provider pin)
+   grepped the **entire** plan file / **entire** `versions.tf` respectively — a string that merely
+   *appeared* somewhere in the file (a doc-comment example shaped like an `env_vars` map entry, a
+   stray `version = "x.y.z"`-shaped line in an unrelated block) could false-positive a PASS without
+   actually being inside a real `render_web_service` resource's `env_vars` map or the real
+   `required_providers.render` entry.
+
+**Correction to the ticket's own framing (observed, not assumed).** The ticket names
+`agent_internal_secret` as one of "3 pre-existing [vars] with the same gap" alongside
+`ship_api_token`/`langsmith_api_key`. `grep -n 'variable "\|validation {' terraform/render/variables.tf`
+(run before touching anything) shows `agent_internal_secret` already carries a `validation {}` block
+(added under TRO-347, CodeRabbit's original finding on that PR) that already rejects both an empty
+string and its exact `terraform.tfvars.example` placeholder — precisely the shape this ticket asks
+for. Only `ship_api_token` and `langsmith_api_key` actually had the gap. Re-adding a duplicate
+validation block to `agent_internal_secret` would have been redundant, so it was left untouched; the
+"six sensitive vars" total is still six (3 new + `agent_internal_secret`'s pre-existing block counted
+as already-satisfying + `ship_api_token` + `langsmith_api_key` newly added).
+
+**What changed.**
+- `terraform/render/variables.tf` — `validation {}` blocks added to `secret_encryption_key`,
+  `fleetgraph_oauth_client_secret`, `grader_oauth_client_secret`, `ship_api_token`,
+  `langsmith_api_key` (5 vars; `agent_internal_secret` already had one — see correction above). Each
+  rejects `length(trimspace(var.x)) == 0` (empty or whitespace-only) and the exact
+  `REPLACE_WITH_A_REAL_*` placeholder string from `terraform.tfvars.example`, same shape as the
+  existing `agent_internal_secret`/`agent_platform_mode` blocks in the same file.
+- `terraform/render/variables.tf` — `validation {}` blocks added to `oauth_access_token_ttl_seconds`,
+  `oauth_refresh_token_ttl_seconds`, `rate_limit_app_rpm`, `rate_limit_token_rpm`: each rejects
+  non-positive and non-integer values (`var.x > 0 && var.x == floor(var.x)`).
+- `scripts/factory/verify-terraform-artifact.sh` — new `extract_braced_blocks()` helper
+  (brace-balanced, so nested maps like `env_vars` aren't truncated at the first inner `}`) scopes
+  item #2 to only the text inside `resource "render_web_service" "..." { ... }` block(s), and item #4
+  to only the text inside the `required_providers { render = { ... } }` entry. Item #3 (resource
+  address presence) is unchanged — the ticket scoped hardening to items #2 and #4 only.
+
+**Proof — terraform binary.** No `terraform` binary or Render credentials exist in this environment
+(`which terraform` → not found). Downloaded `terraform_1.9.8_darwin_arm64` directly from
+`releases.hashicorp.com` into the session scratchpad — never committed, same methodology this
+directory's own `plan/tro-411-pf900-w6-env-vars.md` and `plan/plan-annotated.md` already document
+("temp-downloaded into the session scratchpad, not committed"). `terraform fmt -check -diff`: clean,
+exit 0. `terraform init -input=false`: reused the committed `.terraform.lock.hcl`, no version drift.
+`terraform validate -no-color`: `Success!`, the same two pre-existing `pull_request_previews_enabled`
+deprecation warnings as every prior capture in this directory, zero new warnings, zero errors — this
+proves every new `validation {}` block is syntactically valid HCL the provider schema accepts, but
+`terraform validate` alone does **not** evaluate variable validations against concrete values for
+no-default variables (all six touched here have no default) — that needs `terraform plan`.
+
+**Proof — red before green, `terraform plan -var-file=<gitignored tfvars> -input=false` (no
+`RENDER_API_KEY` set; provider auth was never in scope for this ticket).**
+- **Red, each of the 5 newly-validated secrets, both empty and the exact tfvars.example placeholder**
+  (10 cases; `agent_internal_secret`'s pre-existing block re-confirmed as an 11th): every case produced
+  `Error: Invalid value for variable` naming the exact var and the exact error message from its
+  `validation` block, e.g. for `langsmith_api_key = "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"`:
+  `langsmith_api_key must not be empty (or whitespace-only), and must not be the terraform.tfvars.example
+  placeholder value. This was checked by the validation rule at variables.tf:203,3-13.`
+- **Red, each of the 4 number vars, zero/negative/fractional** (7 cases:
+  `oauth_access_token_ttl_seconds` = `0`, `-1`, `3600.5`; `oauth_refresh_token_ttl_seconds` = `0`;
+  `rate_limit_app_rpm` = `-5`, `0.25`; `rate_limit_token_rpm` = `0`): every case produced
+  `Error: Invalid value for variable` naming the var and its "must be a positive whole number" message.
+- **Green, all eleven sensitive/number vars given real-shaped values** (random hex-ish strings for
+  secrets, `3600`/`2592000`/`120`/`60` for numbers): zero `Invalid value for variable` errors — the
+  **only** remaining error is `Error: Missing Render API Key` (expected; this ticket was never
+  authorized to touch or fabricate Render credentials — same "never fabricate a credential" rule
+  TRO-411's own CHANGES.md entry documents). This is the correct green signature: every variable
+  validation cleared, and Terraform proceeded past the variable-evaluation stage into provider
+  initialization, which is as far as a credential-less run can go.
+
+**Proof — verify-script, red before green, three fixtures.**
+- **Red (false-positive class, pre-TRO-488 script, as evidence the fix is needed):** the OLD
+  (pre-this-ticket) script run against a hand-built prose-only fixture (never committed — a fake
+  "design doc" containing every PF-900 env-var name formatted exactly like a plan-renderer map entry,
+  e.g. `+ "SECRET_ENCRYPTION_KEY" = { ... }`, but with **zero** actual `resource "render_web_service"`
+  block anywhere in the file) reported **PASS, exit 0, all 12 checks green** — a genuine false
+  positive, confirming the ticket's premise.
+- **Red (new script, same fixture):** the hardened script against the identical fixture correctly
+  **FAILs all 8 env-var checks** (`no render_web_service resource block found in: <fixture>`) while
+  item #3 (unchanged, still flat) still passes — exit 1.
+- **Red/green pair for item #4 specifically:** temporarily edited `terraform/render/versions.tf` in
+  place (reverted immediately after, confirmed via `git status`/`git diff` clean before committing —
+  never part of any commit) to remove the render provider's own `version` line entirely while adding
+  an unrelated `resource "decoy_unrelated_thing" { version = "9.9.9" }` block elsewhere. The OLD
+  script's flat "exact-pin-line exists somewhere AND no range-line exists anywhere" logic found the
+  decoy's exact-shaped line and **incorrectly PASSed** with the real provider pin missing entirely.
+  The hardened script, scoped to the extracted `required_providers.render` block only, correctly
+  **FAILed** (`required_providers.render does not show an exact x.y.z pin`).
+- **Green (real artifact, unchanged from TRO-411's own proof):**
+  `scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md`
+  → all 12 checks PASS, exit 0 — identical output to the one already committed in that plan doc,
+  confirming zero regression from the block-scoping.
+
+**Disclosed gate exception.** This is a terraform-only ticket — nothing under `api/src/**`/
+`web/src/**` can run `terraform` or hold Render credentials, so there is no vitest regression test
+for the `.tf` changes (same precedent as TRO-411/PF-900 itself and TF-* audit findings). The proof
+above (`terraform plan` red/green against placeholder vs. real-shaped values) is the actual
+regression coverage; `scripts/factory/verify-terraform-artifact.sh`'s own red/green run against the
+prose decoy IS a real, re-runnable shell-level regression check for item #2/#4's fix (not gated by
+`gate.sh`, but runnable by any future reviewer). Expect `regression-test` to report
+`pass-with-disclosed-exception` for this reason.
+
+**Not verified.** No live `terraform apply` was run (never authorized, never attempted — this ticket
+only needed variable-validation and static-grep proof). Whether a real Render API call would accept
+any of the real-shaped-but-fake secret values used in the green proof — not applicable, since those
+values are never sent anywhere in a plan-only run. `terraform plan`'s provider-init step was reached
+but not passed (no `RENDER_API_KEY`), so the full plan graph past that point was not exercised by
+this ticket's proof — TRO-411's own live-plan capture already covers that, unaffected by this change.
+
+**How to run it.** `cd terraform/render && terraform init && terraform validate` — no credentials
+needed. To see the validation blocks fire: `terraform plan -input=false -var-file=<tfvars with a bad
+value>` — e.g. set `langsmith_api_key = "REPLACE_WITH_A_REAL_LANGSMITH_API_KEY"` in a scratch tfvars
+file and watch it fail before Terraform even asks for `RENDER_API_KEY`.
+`scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md`
+re-runs the (now block-scoped) mechanical assist against the real committed artifact.
+
+**How to roll it back.** `git revert` this commit. Removes the 9 new `validation {}` blocks (5
+secrets + 4 numbers) and reverts `verify-terraform-artifact.sh`'s item #2/#4 checks to the prior
+flat-grep behavior. No live resource was ever touched — nothing to tear down. Any `terraform.tfvars`
+that was passing invalid values only by accident (there should be none, since `terraform.tfvars` is
+gitignored and never committed) would need a real value going forward, same as it always should have.
+
+---
+
+## TRO-609 — e2e/program-mode-week-ux.spec.ts: sprint filter test asserted a `<select>` that never existed, cascaded to 30 skipped tests
+
+**What changed.** `e2e/program-mode-week-ux.spec.ts`'s file-scoped `test.describe.configure({mode:
+'serial'})` means one early failure skips every test after it (54 tests, 1 failure, 30 skipped —
+confirmed live before this fix). The one reported failure, `"Issues tab has sprint filter
+dropdown"`, asserted `page.locator('select')`, but the sprint filter (`IssuesList.tsx:1115-1128`)
+is a Radix Popover + cmdk `Combobox` and has never been a native `<select>`, since it was
+introduced (`6adf8f6`, 2026-01-21). Rewrote that test's locators to the real UI
+(`getByRole('combobox', {name: 'Filter issues by week'})` + `[cmdk-item]`, the pattern already
+proven in `e2e/weeks.spec.ts`).
+
+Fixing that one test only advanced the cascade point, so the fix kept going until it stopped
+surfacing failures inside its own root-cause cluster:
+
+- 8 tests asserted bucketed week filters ("Active Week"/"Upcoming Weeks"/"Completed Weeks"/
+  "Backlog (No Week)" as selectable filter values) that have never existed —
+  `sprintOptions` (`IssuesList.tsx:540-552`) is built only from real sprint names on issues, no
+  bucket/category concept anywhere, confirmed via `git log -S` on `web/src` (never introduced) and
+  on the test file (introduced in `ed932c9`, "Eliminate all test skips and fix test failures").
+  Same never-built-UI pattern as TRO-293/TRO-596: deleted, not fixed.
+- "Move to Week" in the bulk action bar (`BulkActionBar.tsx`) is also never a `<select>` — a
+  custom `ActionButton` + `role="menu"` dropdown. 2 tests rewritten to match.
+- The selection-count assertion `getByText(/\d+ issue[s]? selected/)` never matched the actual
+  rendered text (`BulkActionBar.tsx:159`: `{selectedCount} selected`, no "issue(s)" word) — only
+  surfaced once the cascade above stopped hiding it. 3 occurrences fixed to
+  `getByText(/^\d+ selected$/)`.
+- `"bulk \"Move to Week\" updates issues"` waited on `PATCH /api/issues/`, but the real call is
+  `POST /api/issues/bulk` (`useIssuesQuery.ts`'s `bulkUpdateIssuesApi`). Fixed the wait condition
+  and dropped an unverified "or 400" status assumption that doesn't apply to this endpoint.
+
+54 tests → 45 (9 deleted). `test.describe.configure({mode: 'serial'})` was deliberately **not**
+rescoped to per-`describe`-block serial mode — documented inline why: `e2e/fixtures/isolated-env.ts`
+gives each Playwright worker one persistent Postgres container shared across every test that
+worker runs, and several blocks mutate that shared week/sprint data
+(`cleanupExtraSprints()`/creation flows). Under `fullyParallel: true`, un-grouping the file would
+let those mutations race against other blocks' read assertions on the same worker DB. Splitting it
+safely needs a full read/write audit per block — filed as a separate follow-up, not guessed at
+here.
+
+**Not fixed here — filed as TRO-613.** Getting past the fixed cascade point surfaced a *different*,
+unrelated failure next in file order: `"active sprint shows Linear-style progress graph"` (Phase 2
+Continued) asserts `"Scope:"/"Started:"/"Completed:"` text that `WeekProgressGraph.tsx` does not
+appear to render (confirmed via grep — only found in code comments). Different feature, different
+component, same origin commit (`ed932c9`) — out of scope for this ticket, not investigated further
+here. The other 8 tests in that describe block, plus "Phase 2: Empty States" (2) and "Phase 3
+Continued" (1) after it, have still never been reached by any run to date.
+
+**How to verify it.** Every rewritten test verified individually,
+`PLAYWRIGHT_WORKERS=1 pnpm exec playwright test e2e/program-mode-week-ux.spec.ts -g "<test name>"
+--retries=0` (isolated, to rule out the shared-machine resource contention this session hit
+repeatedly while multiple factory sessions ran concurrently — two other unrelated tests
+spuriously failed with `ENOENT`/60s-timeout signatures under that load and passed cleanly in
+isolation; not counted as real failures). Cumulative full-file serial runs reached and passed every
+test through the end of "Phase 4 Continued: Filter Functionality" and the "Integration" test above
+across three independent attempts before hitting TRO-613's separate failure each time.
+
+**Rollback.** Revert this commit on branch
+`troysatchell/tro-609-e2eprogram-mode-week-uxspects-issues-tab-has-sprint-filter` — the only file
+touched is `e2e/program-mode-week-ux.spec.ts` (plus this CHANGES.md entry and a
+`.claude/skills/ship-factory/references/lessons.md` note). No application code changed. Reverting
+restores the original 54-test file with the pre-existing `<select>`-based cascade (1 failure, 30
+skipped) and the never-built bucketed-filter tests.
+
+---
+
+## TRO-440 — PF-704: Flag matrix in CI + audit-trail proof — the Epic 7 submission evidence
+
+**What was built.** The missing graded proof artifact for Epic 7 (agent-as-platform-citizen). The
+mechanism itself (`AGENT_PLATFORM_MODE` flag, both code paths, per-mode unit tests) already existed
+and was already tested — this ticket closes the specific gap tonight's requirements-audit sweep
+found: no committed CI matrix, no committed proof that a real sdk-mode agent turn's actions land in
+`public_api_audit` correctly attributed.
+
+1. **`agent/src/__tests__/auditTrailProof.liveServer.test.ts`** (new) — a real sdk-mode agent turn
+   against a real running Ship API + the real seeded worktree DB: seeds the actual `ship_app_fleetgraph`
+   first-party app (`seedFirstPartyApp`, PF-701's own function — not a stand-in fixture), mints a
+   real Client Credentials token against it (the exact grant `index.ts`'s real boot path uses), does
+   three real reads (documents/issues/sprints — the "read-heavy chat" half of the AC), then one
+   accepted-draft-shaped write (`GateShipClient.postStandup` + `.setStandupContent`, the same two
+   calls `gate.ts`'s `acceptDraft` makes internally) with a scoped personal token belonging to a real
+   human user. Queries `public_api_audit` directly and asserts: every read row attributes to
+   `ship_app_fleetgraph`'s `client_id` with `user_id IS NULL`; the write row attributes to the human
+   `user_id` with `app_client_id IS NULL`; `X-RateLimit-*` headers were present on the app-identity
+   credential's traffic (observed via one independent raw `fetch()`, since `@ship/sdk`'s
+   `RequestClient` never exposes response headers to callers — confirmed by reading
+   `sdk/src/internal/requestClient.ts`). A final test prints the exact SQL query and its real result
+   rows to stdout — the AC's own words: "the audit rows themselves (attach query + output to
+   ticket/PR)." See that file's own header for exactly how this differs from (and doesn't duplicate)
+   `gateWriteBoundary.dbRoundTrip.test.ts` and `shipClientParity.liveServer.test.ts`, which prove
+   adjacent but distinct claims.
+2. **CI flag matrix** — `.gitlab-ci.yml`'s `verify` job and `.github/workflows/ci.yml`'s "Agent
+   tests" step now each run `pnpm --filter @ship/agent test` a second time with
+   `AGENT_PLATFORM_MODE=sdk` set. **Disclosed honestly, not oversold:** grepped `agent/src` (excluding
+   tests) for every reader of this flag — only `config.ts`/`shipClient.ts`/`index.ts`, never any test
+   file, which all construct explicit config objects rather than reading ambient `process.env`. So
+   today this second invocation is a regression net against an accidental ambient read appearing
+   elsewhere in the suite, not a second independent assertion set — the real mode-specific proof is
+   `auditTrailProof.liveServer.test.ts` above, which is already covered by the existing unconditional
+   invocation since it constructs its sdk-mode clients directly. `agent/src/__tests__/gitlabCiAgentTests.test.ts`
+   extended with two new fitness-test cases structurally asserting the second invocation exists
+   alongside (not instead of) the first, plus three more (CodeRabbit finding on this ticket's own
+   PR — the GitLab-side fitness test had no `.github/workflows/ci.yml` equivalent, leaving the two
+   CI platforms free to silently desync) asserting the GitHub Actions mirror's `verify` job has both
+   the flag-off and flag-on "Agent tests" steps, and that the flag-on step's own body genuinely sets
+   `AGENT_PLATFORM_MODE: sdk`, not just carries a matching name.
+3. **`docs/submission/PF-704-COST-LEDGER-DELTA.md`** (new) — the AC's "cost-ledger before/after
+   shows unchanged token volume" clause. A structural proof: `AGENT_PLATFORM_MODE`/`agentPlatformMode`
+   never appears in `agent/src/graph.ts` (confirmed by grep, zero hits) — the only file that owns
+   real `model.invoke()` call sites and the only place `costTracking.ts`'s hooks are called from. The
+   committed `agent/cost-ledger-snapshot.jsonl` (7 real recorded invocations, 2026-08-05–07, entirely
+   before Epic 7 work began 2026-08-10) carries zero new rows from the rewire — consistent with, and
+   further confirming, the structural claim. Feeds PF-905/TRO-434, which owns the remaining cost-
+   analysis items (CI minutes, storage growth, production-scale projections) this ticket does not.
+
+**Regression tests.** `auditTrailProof.liveServer.test.ts` (4 new tests, all real behavioral
+assertions against a live app+DB, not mocks) and 5 new cases in `gitlabCiAgentTests.test.ts`
+(2 GitLab-side, 3 GitHub Actions-side — structural CI-config assertions).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm build:shared && pnpm build:sdk   # sdk/dist must exist before agent's tests can import @ship/sdk
+pnpm --filter @ship/agent exec vitest run src/__tests__/auditTrailProof.liveServer.test.ts src/__tests__/gitlabCiAgentTests.test.ts
+```
+
+**Roll back.** Revert this commit. Changes are localized to: `agent/src/__tests__/auditTrailProof.liveServer.test.ts`
+(new), `agent/src/__tests__/gitlabCiAgentTests.test.ts` (5 new `it()` blocks appended, nothing
+removed), `.gitlab-ci.yml` (1 new script line in `verify`), `.github/workflows/ci.yml` (1 new step),
+`docs/submission/PF-704-COST-LEDGER-DELTA.md` (new file). No application source touched — this
+ticket is proof/CI/docs only, exactly as its own `Tier: investigate` / doc-and-test scope implies.
+
+**Post-merge correction (CodeRabbit review on this PR):** the cost-ledger doc's original claim that
+the rewire was "architecturally inert" with respect to token volume was too strong — a real,
+traced data-flow path (`buildExpansionPrompt` → `ExpandedDocument.textSnippet` →
+`getDocument().content`, which differs between modes) means token volume for the `on_demand`
+trigger specifically can genuinely differ between `internal` and `sdk` mode. Fixed in
+`docs/submission/PF-704-COST-LEDGER-DELTA.md` — see that file's own "corrected" section. Also fixed:
+env-var restore instead of unconditional delete, OAuth grant response validation, and the printed
+proof query no longer risking drift from the executed one (all in `auditTrailProof.liveServer.test.ts`).
+
+---
+
 ## TRO-612 — `webhooks.liveServer.test.ts`: `oauthAppId` setup guard fails loudly, not skips
 
 **Root cause.** `sdk/src/__tests__/webhooks.liveServer.test.ts`'s TRO-607 `createSubscription()`
