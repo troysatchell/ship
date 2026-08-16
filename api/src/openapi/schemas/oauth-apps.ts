@@ -9,7 +9,7 @@
  */
 
 import { z, registry } from '../registry.js';
-import { UuidSchema, DateTimeSchema, ErrorResponseSchema } from './common.js';
+import { UuidSchema, DateTimeSchema, InternalErrorResponseSchema } from './common.js';
 
 // ============== OAuth App ==============
 
@@ -164,11 +164,11 @@ registry.registerPath({
     },
     400: {
       description: 'Validation error',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
     403: {
       description: 'Workspace admin access required',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
   },
 });
@@ -190,7 +190,7 @@ registry.registerPath({
     },
     403: {
       description: 'Workspace admin access required',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
   },
 });
@@ -215,11 +215,11 @@ registry.registerPath({
     },
     403: {
       description: 'Workspace admin access required',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
     404: {
       description: 'OAuth app not found',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
   },
 });
@@ -247,15 +247,15 @@ registry.registerPath({
     },
     400: {
       description: 'App is public (no secret to rotate) or already revoked',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
     403: {
       description: 'Workspace admin access required',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
     404: {
       description: 'OAuth app not found',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
   },
 });
@@ -282,15 +282,15 @@ registry.registerPath({
     },
     403: {
       description: 'Workspace admin access required',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
     404: {
       description: 'OAuth app not found',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
     409: {
       description: 'OAuth app already revoked',
-      content: { 'application/json': { schema: ErrorResponseSchema } },
+      content: { 'application/json': { schema: InternalErrorResponseSchema } },
     },
   },
 });
