@@ -1,0 +1,26 @@
+(node:67588) ExperimentalWarning: CommonJS module /Users/troy/.nvm/versions/node/v23.2.0/lib/node_modules/npm/node_modules/debug/src/node.js is loading ES Module /Users/troy/.nvm/versions/node/v23.2.0/lib/node_modules/npm/node_modules/supports-color/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1m[46m RUN [49m[22m [36mv4.0.17 [39m[90m/Users/troy/repos/GAUNTLET/Ship/api[39m
+
+[90mstderr[2m | src/__tests__/activity.test.ts[2m > [22m[2mActivity API[2m > [22m[2mGET /activity/:entityType/:entityId[2m > [22m[2merror handling[2m > [22m[2mreturns 500 on database error
+[22m[39mActivity fetch error: Error: Database connection failed
+    at [90m/Users/troy/repos/GAUNTLET/Ship/api/[39msrc/__tests__/activity.test.ts:210:11
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:145:11
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:915:26
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1209:10)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:12)
+
+ [32m✓[39m src/__tests__/activity.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 201[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m1 passed[39m[22m[90m (1)[39m
+[2m      Tests [22m [1m[32m13 passed[39m[22m[90m (13)[39m
+[2m   Start at [22m 08:41:07
+[2m   Duration [22m 458ms[2m (transform 54ms, setup 47ms, import 122ms, tests 201ms, environment 0ms)[22m
+
