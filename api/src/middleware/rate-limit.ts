@@ -58,6 +58,7 @@ import {
   REDIS_KEY_PREFIX_IDENTITY,
   REDIS_KEY_PREFIX_SOURCE_IP,
   REDIS_KEY_PREFIX_SPA_STATIC,
+  REDIS_KEY_PREFIX_OAUTH,
 } from './redis-rate-limit-store.js';
 
 /** All `/api/` limits are evaluated over a rolling one-minute window. */
@@ -443,6 +444,108 @@ export function createSpaStaticLimiter(
     ...(redisClient
       ? {
           store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_SPA_STATIC),
+          passOnStoreError: true,
+        }
+      : {}),
+  });
+}
+
+export interface OAuthRateLimit {
+  windowMs: number;
+  /** Requests per window per source IP, across the whole `/oauth/*` prefix. */
+  limit: number;
+}
+
+/**
+ * TRO-588 — `/oauth/authorize`, `/oauth/token`, and `/oauth/device/*`
+ * (PF-103/104/106) have never had any rate-limit coverage: they sit outside
+ * `/api/` (so `perSourceIpLimiter`/`perIdentityLimiter` never mount on them,
+ * `app.ts:375-376`), and outside `/api/v1` (so PF-500's `rateLimitDefaults`/
+ * `rateLimitBuckets`, mounted only on `v1Router`, don't either). These are
+ * exactly the endpoints an attacker would hammer — credential stuffing on
+ * `/oauth/token`, `user_code` brute-forcing on `/oauth/device/verify` — and
+ * every request here is pre-auth by definition, so `perIdentityLimiter`'s
+ * session/token keying (`apiRateLimitKey`) has nothing to key on; a
+ * per-source-IP flood ceiling (`createSpaStaticLimiter`'s shape, not
+ * `createApiRateLimiters`'s) is the right fit, same reasoning as that
+ * limiter's own doc comment.
+ *
+ * One limiter across the whole prefix, not one per sub-route: the ceiling
+ * has to accommodate the highest-legitimate-frequency traffic on this
+ * prefix, which by construction also covers the lower-frequency routes
+ * (`/authorize`, `/device/verify`) more than adequately. That highest
+ * frequency is device-grant polling — RFC 8628 §3.5's default interval is 5s
+ * (`DEFAULT_DEVICE_POLL_INTERVAL_SECONDS`, `platform/oauth/device.ts`), so
+ * one well-behaved device-login flow alone is ~12 `/oauth/token` requests/
+ * min. **DERIVED, not measured** (unlike `MEASURED_WORST_CASE_BURST_PER_MINUTE`
+ * above, this prefix has no audit traffic capture to calibrate against): the
+ * production ceiling assumes up to ~10 concurrent device-login attempts
+ * behind one shared NAT egress as a generous but bounded legitimate load
+ * (10 x 12 = 120), then rounds up for authorize/token/device-verify headroom
+ * on top of that. If production traffic ever needs recalibrating, capture
+ * real `/oauth/*` volume the way `MEASURED_WORST_CASE_BURST_PER_MINUTE` was
+ * captured for `/api/*` and replace this reasoning, don't just raise the
+ * number.
+ *
+ * Test tier is 10,000 — NOT a small, easily-driveable number. First version
+ * of this ticket shipped it at 30 (mirroring `createSpaStaticLimiter`'s
+ * test tier, which is safe there because nothing else in this suite drives
+ * real traffic through the static-SPA route). `/oauth/token` is different:
+ * `platform/oauth/__tests__/token.test.ts` alone drives dozens of real HTTP
+ * requests through one shared `createApp()` instance across its `it()`
+ * blocks. A 30-request test-tier cap meant later tests in that file started
+ * genuinely receiving 429 instead of their expected specific status —
+ * caught by `gate.sh`'s full suite run, not by this ticket's own isolated
+ * test file (which passes either way, since it resets modules per test).
+ * Fixed the same way TRO-494 fixed the identical tension for
+ * `createApiRateLimiters`: keep the ambient test tier permissive (matching
+ * every other limiter's 10,000/100,000-class test tier in this file) and
+ * add `limitOverrides` as a test-only third parameter for a test that
+ * specifically wants to drive the 429 path quickly.
+ */
+export function resolveOAuthRateLimit(env: RateLimitEnv = process.env): OAuthRateLimit {
+  const { isTestEnv, isDevEnv } = resolveEnvTier(env);
+
+  return {
+    windowMs: API_RATE_LIMIT_WINDOW_MS,
+    limit: isTestEnv ? 10000 : isDevEnv ? 10000 : 120,
+  };
+}
+
+/**
+ * Build the per-source-IP flood ceiling for the `/oauth/*` prefix. No custom
+ * `keyGenerator` — like `createSpaStaticLimiter`, keys on `req.ip` via
+ * `express-rate-limit`'s own default, which is the right shape for
+ * pre-auth, anonymous traffic (no session or bearer token exists yet at this
+ * point in any OAuth flow).
+ *
+ * `redisClient` defaults from `env.REDIS_URL`, same pattern and same reason
+ * as every other limiter in this file — a per-process `MemoryStore` would
+ * silently multiply this ceiling by the instance count under autoscaling.
+ *
+ * `limitOverrides` — test-only third seam, same shape and same reason as
+ * `createApiRateLimiters`'s (TRO-494): nothing outside a test passes a third
+ * argument, so the real `app.ts` call site (two args) resolves exactly
+ * `resolveOAuthRateLimit(env)` with no override. Lets a test isolate this
+ * limiter at a small, quickly-driveable cap without lowering the ambient
+ * test tier every OTHER test in the suite also runs against.
+ */
+export function createOAuthRateLimiter(
+  env: RateLimitEnv = process.env,
+  redisClient: Redis | undefined = createRedisClientFromEnv(env),
+  limitOverrides: Partial<OAuthRateLimit> = {}
+): RequestHandler {
+  const { windowMs, limit } = { ...resolveOAuthRateLimit(env), ...limitOverrides };
+
+  return rateLimit({
+    windowMs,
+    limit,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please slow down.' },
+    ...(redisClient
+      ? {
+          store: createRedisRateLimitStore(redisClient, REDIS_KEY_PREFIX_OAUTH),
           passOnStoreError: true,
         }
       : {}),
