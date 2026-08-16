@@ -327,10 +327,13 @@ describe('PF-702: ShipClient parity — internal mode vs sdk mode, same fixtures
 
   // ─── 1. getDocument ──────────────────────────────────────────────────
   //
-  // Parity on the fields v1 CAN carry (id/document_type/title/properties);
-  // the documented divergence (content/visibility/created_by/completed_at)
-  // is asserted explicitly, not silently skipped.
-  it('getDocument(): parity on id/document_type/title/properties; documented divergence on content/visibility/created_by', async () => {
+  // TRO-620: since TRO-605 widened `GET /api/v1/documents/:id` to carry
+  // `content`/`visibility`/`created_by`/`completed_at`, sdk mode passes them
+  // through and this case asserts FULL parity on every `ShipDocument` field
+  // (before TRO-620 the sdk side returned `content: null`, a synthesized
+  // `visibility`, `created_by: null`, `completed_at: undefined` — the
+  // divergence this same case used to assert as "documented").
+  it('getDocument(): full parity on id/document_type/title/properties/content/visibility/created_by/completed_at', async () => {
     const [viaInternal, viaSdk] = await Promise.all([
       internalClient.getDocument(anchorDocId),
       sdkClient.getDocument(anchorDocId),
@@ -341,15 +344,19 @@ describe('PF-702: ShipClient parity — internal mode vs sdk mode, same fixtures
     expect(viaSdk.title).toBe(viaInternal.title);
     expect(viaSdk.properties).toEqual(viaInternal.properties);
 
-    // The internal surface DOES carry these (real values); the v1 surface
-    // structurally cannot (see shipClient.ts's module docstring).
+    // The internal surface carries real values (sanity-check the fixture so
+    // the equality assertions below cannot pass vacuously on null === null).
     expect(viaInternal.content).not.toBeNull();
     expect(viaInternal.visibility).toBe('workspace');
     expect(viaInternal.created_by).toBe(userId);
+    expect(viaInternal.completed_at).toBeNull();
 
-    expect(viaSdk.content).toBeNull();
-    expect(viaSdk.visibility).not.toBe('workspace'); // fails isDocumentVisibleTo closed
-    expect(viaSdk.created_by).toBeNull();
+    // TRO-620: the sdk surface now carries the SAME values (TRO-605 widened
+    // the v1 serializer) — no more synthesized/absent fields.
+    expect(viaSdk.content).toEqual(viaInternal.content);
+    expect(viaSdk.visibility).toBe(viaInternal.visibility);
+    expect(viaSdk.created_by).toBe(viaInternal.created_by);
+    expect(viaSdk.completed_at).toBe(viaInternal.completed_at);
   });
 
   // ─── 2. getPeople ────────────────────────────────────────────────────
