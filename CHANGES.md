@@ -6,6 +6,56 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
+
+**What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:
+'invalid_grant'` for three different rejection reasons (unknown token, expired token, reused/stolen
+token) — the enum is closed, so a new top-level value would be a spec-breaking, externally-visible
+contract change. Added an **additive**, non-RFC `error_details: { reason }` field alongside the
+existing `error`/`error_description` — never replacing either — populated only for the three
+refresh-token-specific rejection branches this ticket is about:
+
+- `api/src/platform/oauth/token.ts` — new `RefreshTokenErrorReason` type (`'token_unknown' |
+  'token_expired' | 'token_reused'`), `TokenGrantResult`'s error variant gains an optional
+  `errorDetails` field, `invalidGrant()` takes an optional second argument. Populated at
+  `rotateRefreshToken`'s three relevant call sites (unknown lookup, already-revoked-on-first-read,
+  and the atomic-UPDATE-lost-the-race branch — the last two both mean "reused," matching the
+  module's own documented "same outward behavior, deliberately" reasoning for those two paths).
+  **Deliberately not touched:** the authorization-code grant's own `invalidGrant` calls, and the
+  refresh grant's "wrong client" rejection — none of those are one of the three reasons this ticket
+  scopes.
+- `api/src/routes/oauth-token.ts` — `sendTokenError` takes an optional `details` parameter, only
+  emits `error_details` in the JSON body when present. Every existing call site that never had a
+  reason keeps sending the unmodified RFC 6749 §5.2 shape.
+
+**Regression test.** Extended `refresh-rotation-stolen-token.test.ts`'s existing reuse assertion
+(the file whose own header previously documented "no machine-readable discriminator exists, only
+`error_description` text" as a deliberate, still-open choice — that header is updated to reflect
+this ticket closing the gap) with `expect(...).error_details?.reason).toBe('token_reused')`.
+**Confirmed red before green:** temporarily reverted the `{ reason: 'token_reused' }` argument at
+the reuse call site — real `AssertionError`, `Expected: "token_reused"` / `Received: undefined`, not
+an import/typo error. Restored; 33/33 tests in both `token.test.ts` and
+`refresh-rotation-stolen-token.test.ts` pass.
+
+**Not done (per the ticket's own "not verified" note, still true):** no SDK/portal consumer was
+wired up to read `error_details.reason` — this ticket adds the server-side field, per its own
+"Candidate fix" scope; whether any consumer needs it programmatically vs. `error_description`
+text-matching being sufficient remains unverified, as the ticket itself flagged going in.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts src/platform/oauth/__tests__/token.test.ts
+```
+
+**Roll back.** Revert this commit. Changes are localized to `api/src/platform/oauth/token.ts`,
+`api/src/routes/oauth-token.ts`, `api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts`.
+Purely additive (a new optional field, populated at 3 call sites) — no RFC-shaped field changed, so
+reverting has no effect on any client that never reads `error_details`.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
