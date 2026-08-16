@@ -263,7 +263,7 @@ published package (`sdk/` stays a workspace package; npm-publishing is explicitl
 |---|---|---|
 | `ShipClient` constructor, `me()`, `documents` / `issues` / `sprints` resource clients, `verifyWebhook`, async-iterator pagination (`iterate()`) | **stable** | Directly mirrors the OpenAPI spec; PF-405's parity fitness test keeps it that way. Shape is fixed by the resources in §2.4 and shouldn't change without a spec change. |
 | `webhooks` resource client (subscriptions / deliveries / replay CRUD) | **stable** once PF-401 lands | Same parity guarantee as above — called out separately only because it ships slightly later (E4). |
-| `deviceLogin()` / `authorizationCodeFlow()` auth helpers, `ITokenStore` (`MemoryTokenStore` / `FileTokenStore`) | **pre-1.0** | Hand-written against the OAuth flows, not generated from the spec — §2.8 names this openly as a trade-off (type quality over generated drift-safety). Signatures may still move during E4/E6 build-out (CLI, browser demo) before they're proven against real integrations. |
+| `deviceLogin()` / `authorizationCodeFlow()` auth helpers, `ITokenStore` with three built-in stores — `MemoryTokenStore` and `LocalStorageTokenStore` (browser, `{ storageKey? }`) from `@ship/sdk`, `FileTokenStore` from `@ship/sdk/node` (TRO-617) | **pre-1.0** | Hand-written against the OAuth flows, not generated from the spec — §2.8 names this openly as a trade-off (type quality over generated drift-safety). Signatures may still move during E4/E6 build-out (CLI, browser demo) before they're proven against real integrations. |
 
 ---
 

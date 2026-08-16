@@ -6,6 +6,60 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-617 — `@ship/sdk` now ships `LocalStorageTokenStore` (third built-in `ITokenStore`)
+
+**What was wrong.** The brief (p.4) promises a "Pluggable ITokenStore (in-memory, file, browser
+localStorage)", and ruling I-06 says the SDK must ship all three. Observed by reading the files:
+`sdk/src/index.ts` exported only `MemoryTokenStore`, `sdk/src/node.ts` only `FileTokenStore`, and
+the localStorage implementation lived solely in `integrations/browser-demo/src/localStorageTokenStore.ts`
+— demo-private code, invisible to any other browser consumer. `sdk/src/tokenStore.ts`'s header and
+the demo README both stated the SDK "deliberately ships no browser `ITokenStore`", which was
+accurate at the time but is the exact gap I-06 closes.
+
+**What changed.**
+- `sdk/src/localStorageTokenStore.ts` (new) — the demo's implementation moved into the SDK, with a
+  `{ storageKey?: string }` constructor option (default `'ship_sdk_tokens'`, exported as
+  `DEFAULT_LOCAL_STORAGE_KEY`). Zero deps, no `dom` lib needed (a local `StorageLike` interface),
+  and no top-level `localStorage` access: the module and constructor are Node-safe (the main
+  barrel is imported by Node tests), only `get`/`set`/`clear` require the global and each rejects
+  with an Error naming `localStorage` and pointing at `MemoryTokenStore`/`FileTokenStore`. Methods
+  are `async` so that Error is a rejected promise, not a synchronous throw from a
+  Promise-returning method (the first test run caught exactly that — see below).
+- `sdk/src/index.ts` — exports `LocalStorageTokenStore` + `LocalStorageTokenStoreOptions` (browser
+  barrel; `node:` imports still confined to `sdk/src/node.ts`).
+- `sdk/src/tokenStore.ts`, `sdk/src/fileTokenStore.ts` — header comments updated (no longer claim
+  the SDK ships no third store).
+- `integrations/browser-demo/src/localStorageTokenStore.ts` — deleted. `src/main.ts` imports
+  `LocalStorageTokenStore` from `@ship/sdk` with `{ storageKey: 'ship_browser_demo_tokens' }`, so
+  existing demo logins under the old key survive. `README.md` updated to match.
+- `sdk/src/localStorageTokenStore.test.ts` (new, 6 tests; Map-backed `globalThis.localStorage`
+  stub under vitest's `node` env) — default-key round trip, corrupt JSON → `null` + key removed,
+  non-TokenSet JSON → `null`, custom `storageKey` honoured, and missing `localStorage` → ctor OK
+  but `get`/`set`/`clear` reject with a clear message.
+- `docs/architecture.md` SDK Surface table — names the three stores and where each is exported.
+
+**Evidence.** Red-before-green: with `sdk/src/localStorageTokenStore.ts` absent the new test file
+failed at import (`Test Files 1 failed | Tests no tests`); with the first implementation (sync
+`Promise.resolve` style) the missing-`localStorage` case failed because the Error was thrown
+synchronously instead of rejecting (`1 failed | 5 passed`); after making the methods `async`:
+`Tests 6 passed (6)`. Full suite `pnpm test:sdk` (worktree DB): `Test Files 26 passed (26)`,
+`Tests 235 passed (235)`. `pnpm --filter @ship/browser-demo type-check` clean after
+`pnpm --filter @ship/sdk build`. `node sdk/scripts/measure-size.mjs`:
+`PASS — 4.87 kB < 250 kB` (`gzipBytes: 4866`, `minifiedBytes: 16885`).
+
+**How to verify.**
+```bash
+pnpm --filter @ship/sdk build
+pnpm test:sdk                                          # incl. sdk/src/localStorageTokenStore.test.ts
+pnpm --filter @ship/browser-demo type-check
+node sdk/scripts/measure-size.mjs
+```
+
+**Rollback.** Revert the PR (restores the demo-private store; no data migration — the demo keeps
+using the same `ship_browser_demo_tokens` key either way).
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
