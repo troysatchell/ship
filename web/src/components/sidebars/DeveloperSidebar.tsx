@@ -21,6 +21,8 @@ const DEVELOPER_NAV: DeveloperNavEntry[] = [
   { to: '/developer/apps', label: 'Apps' },
   // PF-503 (TRO-439) — delivery log, DLQ, replay, subscription CRUD.
   { to: '/developer/webhooks', label: 'Webhooks' },
+  // TRO-616 — public_api_audit, queryable per app via GET /api/v1/audit.
+  { to: '/developer/audit', label: 'Audit' },
 ];
 
 export function DeveloperSidebar() {
