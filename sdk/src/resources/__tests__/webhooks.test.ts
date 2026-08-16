@@ -20,8 +20,8 @@
  * for one that's since been added. Response bodies used as fixtures below
  * are the REAL shapes (TRO-599: verified against `serializeSubscription()`/
  * `serializeDelivery()`); `createSubscription()`'s REQUEST body is now the
- * REAL shape too (TRO-452 fixed the previously-disclosed gap — see
- * webhooks.ts's header for the full history).
+ * REAL shape too (TRO-607/TRO-452 independently fixed the previously-
+ * disclosed gap — see webhooks.ts's header for the full history).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ShipClient } from '../../client.js';
@@ -78,9 +78,10 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     // Both response AND request shapes are the REAL ones now. Response:
     // TRO-599, verified against serializeSubscription() + the routes' own
     // `{ ...serialized, secret, warning }` construction — app_id/singular
-    // event_type/target_url/no updated_at, plus `warning`. Request: TRO-452
-    // (this ticket needed a working createSubscription() to implement
-    // `ship webhooks tail`) — app_id/singular event_type/target_url, per
+    // event_type/target_url/no updated_at, plus `warning`. Request:
+    // TRO-607/TRO-452 independently fixed the same gap (TRO-452 needed a
+    // working createSubscription() to implement `ship webhooks tail`) —
+    // app_id/singular event_type/target_url, per
     // `CreateWebhookSubscriptionRequestSchema`
     // (`platform/api/v1/resources/webhooks.ts`), replacing the old
     // `url`/plural-`events` shape that would 400 against a real server (see
@@ -99,8 +100,15 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     vi.stubGlobal('fetch', fetchSpy);
     const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
 
+    // Request body now matches the real server schema: app_id/singular
+    // event_type/target_url. This mocked test proves the SDK builds the
+    // correct HTTP request and parses the response correctly. A real UUID,
+    // not a placeholder like 'app_1' — the real request schema requires
+    // app_id to be a valid UUID (CodeRabbit, TRO-607 review), and this mock
+    // should stay representative of what actually validates.
+    const appId = '11111111-1111-4111-8111-111111111111';
     const created = await client.webhooks.createSubscription({
-      app_id: 'app_1',
+      app_id: appId,
       event_type: 'document.created',
       target_url: 'https://example.com/hook',
     });
@@ -110,7 +118,7 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     expect(init?.method).toBe('POST');
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer t', 'content-type': 'application/json' });
     expect(JSON.parse(String(init?.body))).toEqual({
-      app_id: 'app_1',
+      app_id: appId,
       event_type: 'document.created',
       target_url: 'https://example.com/hook',
     });

@@ -148,6 +148,81 @@ No migrations, no server-side route changes, no database schema changes.
 
 ---
 
+## TRO-607 — SDK `CreateWebhookSubscriptionBody` request shape drifts from the real server schema
+
+**Root cause.** `sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody` interface declared `url` (string) and `events` (plural array) — matching PF-401's original guess before the real routes existed. The real `POST /api/v1/webhooks` route (PF-302, merged concurrently with TRO-599) validates against `CreateWebhookSubscriptionRequestSchema` (`api/src/platform/api/v1/resources/webhooks.ts`, verified by reading that file in full) requiring `app_id` (UUID), singular `event_type`, and `target_url`. As declared, every `createSubscription()` call 400s with a validation error against the real server.
+
+This is the same drift class as TRO-599's two RESPONSE-type instances (`WebhookSubscription`/`WebhookDelivery`), discovered while verifying TRO-599. TRO-599 explicitly scoped itself to response types only and disclosed the REQUEST body gap separately — it was out of scope by TRO-599's own design because the two RESPONSE types were the primary defects TRO-599 named, and fixing both in one ticket was already ambitious for the fitness-test infrastructure that ticket built.
+
+**What was broken, field-for-field** — verified against `CreateWebhookSubscriptionRequestSchema` and the real server route's own validation:
+
+| Field | Before (guessed) | After (real) |
+|---|---|---|
+| `url` | `url: string` | removed, replaced with `target_url: string` |
+| `events` | plural `events: readonly WebhookEventType[]` | removed, replaced with singular `event_type: WebhookEventType` |
+| — | absent | `app_id: string` added (required) |
+
+All three fields are now required (never optional).
+
+**The fix — SDK types only, no server-side change.**
+
+1. `sdk/src/resources/webhooks.ts`:
+   - `CreateWebhookSubscriptionBody` interface: changed to `{ readonly app_id: string; readonly event_type: WebhookEventType; readonly target_url: string; }` (three required fields, matching the real schema exactly).
+   - File header: updated the "STILL NOT FIXED" disclosure (lines 120-130) to reflect the fix, with claim provenance — "verified by reading `CreateWebhookSubscriptionRequestSchema` in full."
+   - Interface doc comment: changed to plainly state the fields and their real origin (Zod schema).
+
+2. `sdk/src/resources/__tests__/webhooks.test.ts` (mocked-fetch request-shape suite):
+   - The `createSubscription()` test now uses the corrected request body shape (`app_id`/singular `event_type`/`target_url`).
+   - File header: removed the stale "except `createSubscription()`'s REQUEST body, which is a disclosed, not-yet-fixed gap" phrase.
+
+3. `sdk/src/__tests__/webhooks.liveServer.test.ts` (real-server round-trip regression suite):
+   - File header: updated the SQL-seeding rationale — prior to TRO-607, `createSubscription()`'s REQUEST body was too broken to call; now it's fixed, so a real `createSubscription()` call is added as a regression test.
+   - New test case (after `rotateSecret`, before `listDeliveries`): `createSubscription() (TRO-607) creates a real subscription with the corrected request body shape and returns EXACTLY CreatedWebhookSubscription`. Calls `client.webhooks.createSubscription({ app_id: ..., event_type: 'issue.created', target_url: ... })` against the real server, verifies the response shape (matching `CreatedWebhookSubscription`'s fields exactly), retrieves the created row via `getSubscription()`, and cleans up via SQL `DELETE`.
+
+**Regression test — the strongest form of proof.**
+
+The new test in `webhooks.liveServer.test.ts` is a genuine TCP round-trip against a real running server:
+
+- Makes a real `POST /api/v1/webhooks` with the corrected body shape.
+- Verifies the response includes all required fields of `CreatedWebhookSubscription` and no extra ones (`Object.keys(response).sort()` matches the expected set exactly).
+- Verifies the row was actually created in the database by fetching it back.
+- Confirms the new subscription has the exact fields that `WebhookSubscription` declares.
+
+**Evidence.** Verified by running the full SDK test suite:
+
+| Check | Result |
+|---|---|
+| `pnpm --filter @ship/sdk type-check` | pass (no type errors) |
+| `pnpm --filter @ship/sdk test` (224 total tests, 25 files) | pass (100%) |
+| `createSubscription()` mocked test | pass (request body shape assertion) |
+| `createSubscription()` real-server regression test | pass (genuine POST /api/v1/webhooks, verified response shape, verified row creation) |
+
+The regression test ran under a real Ship API server with a seeded database (`beforeAll` setup in the test file itself, matching `TRO-599: webhooks.liveServer.test.ts`'s own pattern).
+
+**How to run it.**
+
+```bash
+source .factory-env  # DATABASE_URL for live-server tests
+pnpm --filter @ship/sdk test  # full suite, including the new regression test
+pnpm --filter @ship/sdk type-check
+```
+
+Or individually:
+
+```bash
+pnpm --filter @ship/sdk exec vitest run src/resources/__tests__/webhooks.test.ts           # mocked test
+pnpm --filter @ship/sdk exec vitest run src/__tests__/webhooks.liveServer.test.ts          # regression test
+```
+
+**Roll back.** Revert this commit. Changes are localized to:
+- `sdk/src/resources/webhooks.ts` — reverts the interface, comments, and doc strings
+- `sdk/src/resources/__tests__/webhooks.test.ts` — reverts the mocked test and file header
+- `sdk/src/__tests__/webhooks.liveServer.test.ts` — reverts the file header and removes the new test case
+
+No migrations, no server-side route changes, no database schema changes.
+
+---
+
 ## TRO-611 — PATCH /api/v1/documents/:id now checks visibility before writing (SECURITY)
 
 **Root cause.** `api/src/platform/api/v1/resources/documents.ts`'s `PATCH /:id` resolved its target

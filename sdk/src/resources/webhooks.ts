@@ -117,26 +117,22 @@
  * own header for why it is scoped to webhooks specifically rather than
  * generalized to every SDK resource in this same ticket.
  *
- * UPDATE — TRO-452 (`ship webhooks tail`, PF-602). The gap directly above
- * ("STILL NOT FIXED" as of TRO-599) is now FIXED — found blocking, not
- * optional, while building this ticket: `ship webhooks tail` has to call
- * `createSubscription()` to register its own listener, so the pre-existing
- * `url`/plural-`events` request shape would have 400'd on every real
- * invocation, exactly as this comment predicted. `CreateWebhookSubscriptionBody`
- * now declares `app_id`/singular `event_type`/`target_url`, matching
- * `CreateWebhookSubscriptionRequestSchema`
- * (`platform/api/v1/resources/webhooks.ts`) field-for-field. Updated:
- * `sdk/src/resources/__tests__/webhooks.test.ts`'s `createSubscription()`
- * request-shape case (now asserts the corrected body), and
- * `sdk/src/__tests__/webhooks.liveServer.test.ts` gained a new case proving
- * `createSubscription()` itself now round-trips against a real server —
- * previously that suite could only exercise the OTHER five methods and had
- * to seed the row directly via SQL because calling `createSubscription()`
- * would have 400'd (see that file's own header, updated to match).
+ * UPDATE — TRO-607 and TRO-452 (`ship webhooks tail`, PF-602) independently
+ * found and fixed this same gap ("STILL NOT FIXED" as of TRO-599) at the
+ * same time: `CreateWebhookSubscriptionBody` now declares `app_id`/singular
+ * `event_type`/`target_url`, matching `CreateWebhookSubscriptionRequestSchema`
+ * (`platform/api/v1/resources/webhooks.ts`) field-for-field, replacing the
+ * old `url`/plural-`events` shape that would 400 on every real call.
+ * TRO-452 hit this as a blocking dependency — `ship webhooks tail` has to
+ * call `createSubscription()` to register its own listener. Both branches
+ * updated `sdk/src/resources/__tests__/webhooks.test.ts`'s request-shape
+ * case and added a real-server round-trip case to
+ * `sdk/src/__tests__/webhooks.liveServer.test.ts`; both survive the merge
+ * (see that file's own header).
  *
  * Previously documented here as "STILL NOT FIXED ... explicitly OUT OF
  * SCOPE for TRO-599 ... see CHANGES.md's TRO-599 entry ... a follow-up
- * ticket" — TRO-452 is that follow-up ticket.
+ * ticket" — TRO-607/TRO-452 are that follow-up.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -204,16 +200,16 @@ export interface CreatedWebhookSubscription extends WebhookSubscription {
 }
 
 /**
- * `createSubscription()`'s request body. **FIXED by TRO-452** (previously
- * disclosed as out of TRO-599's scope — see this file's header for the full
- * history). Matches the real `POST /api/v1/webhooks` route's
+ * `createSubscription()`'s request body. **FIXED by TRO-607/TRO-452**
+ * (previously disclosed as out of TRO-599's scope — see this file's header
+ * for the full history). Matches the real `POST /api/v1/webhooks` route's
  * `CreateWebhookSubscriptionRequestSchema`
  * (`platform/api/v1/resources/webhooks.ts`) field-for-field: `app_id` (a
  * UUID that must reference an `oauth_apps` row in the caller's own
  * workspace — checked server-side, not expressible here), singular
- * `event_type`, and `target_url` (must be an http/https URL). Replaces the
- * old `url`/plural-`events` shape (PF-401's pre-PF-302 guess), which would
- * 400 on every real call.
+ * `event_type`, and `target_url` (must be an http/https URL, all three
+ * required, never optional). Replaces the old `url`/plural-`events` shape
+ * (PF-401's pre-PF-302 guess), which would 400 on every real call.
  */
 export interface CreateWebhookSubscriptionBody {
   readonly app_id: string;
