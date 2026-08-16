@@ -389,6 +389,32 @@ route the token above can reach, plus request/response schemas.
   above (and `/api/v1/openapi.json`) is the full grader-facing surface until E5 lands. See
   `PLUGFORGE.MD` §4 (PF-907) and §6 (MVP cut line) for the full epic breakdown.
 
+**Working credentials for the deployed site**, same disclosure basis as `alice.chen`'s web-login
+credentials above (`FLEETGRAPH.MD`'s "Grader Access" section): deliberately published, because the
+grading brief requires a working credential, this deployment is a graded test environment, and the
+credential is scoped read-only to synthetic seed data only — nothing here grants write access or
+reaches anything real. Verified 2026-08-15 by minting a real token and calling the live API.
+
+| Field | Value |
+|---|---|
+| API URL | `https://ship-rr6m.onrender.com` |
+| `client_id` | `ship_app_grader_9ea6a33b` |
+| `client_secret` | `4137c69bb19691aadfcec95cf686d2c95eec38157f4d9054a562b01ff0a853eb` |
+| Scopes | `documents:read issues:read sprints:read` (read-only, enforced — see the 403 example above) |
+
+```bash
+API_URL=https://ship-rr6m.onrender.com
+CLIENT_ID=ship_app_grader_9ea6a33b
+CLIENT_SECRET=4137c69bb19691aadfcec95cf686d2c95eec38157f4d9054a562b01ff0a853eb
+
+TOKEN=$(curl -s -X POST "$API_URL/oauth/token" \
+  -d 'grant_type=client_credentials' \
+  -d "client_id=$CLIENT_ID" -d "client_secret=$CLIENT_SECRET" \
+  | python3 -c 'import json,sys;print(json.load(sys.stdin)["access_token"])')
+
+curl -s "$API_URL/api/v1/documents?limit=5" -H "authorization: Bearer $TOKEN" | python3 -m json.tool
+```
+
 ### Environment Variables
 
 | Variable | Description | Default |

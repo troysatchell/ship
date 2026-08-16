@@ -927,5 +927,167 @@ describe('PF-200: /api/v1/documents (Linear TRO-398)', () => {
       expect(res.status).toBe(401);
       expect(res.body.code).toBe('unauthorized');
     });
+
+    // TRO-611 — PATCH /:id never checked visibility/created_by before
+    // allowing the write: any documents:write-scoped token in the workspace
+    // could overwrite ANY document's content, including another user's
+    // visibility: 'private' document. assertDocumentWritable() (documents.ts,
+    // above assertDocumentExists) closes that gap for this route only — the
+    // four read-only sub-resource routes above keep the pre-existing,
+    // disclosed read-side gap unchanged (out of scope for this ticket).
+    describe('TRO-611: the write path checks visibility, not just existence', () => {
+      let otherUserId: string;
+      let otherUserWriteToken: string;
+
+      beforeAll(async () => {
+        const otherUserResult = await pool.query<{ id: string }>(
+          `INSERT INTO users (email, password_hash, name, last_workspace_id)
+           VALUES ($1, 'test-hash', 'TRO-611 Other User', $2) RETURNING id`,
+          [`tro611-other-${testRunId}@ship.local`, workspaceId]
+        );
+        const id = otherUserResult.rows[0]?.id;
+        if (!id) throw new Error('seed TRO-611 other-user insert produced no row');
+        otherUserId = id;
+
+        const raw = `ship_${crypto.randomBytes(24).toString('hex')}`;
+        await pool.query(
+          `INSERT INTO api_tokens (user_id, workspace_id, name, token_hash, token_prefix, scopes)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [
+            otherUserId,
+            workspaceId,
+            `TRO-611 other-user token ${crypto.randomBytes(4).toString('hex')}`,
+            sha256Hex(raw),
+            raw.slice(0, 12),
+            ['documents:read', 'documents:write'],
+          ]
+        );
+        otherUserWriteToken = raw;
+      });
+
+      afterAll(async () => {
+        await pool.query('DELETE FROM api_tokens WHERE user_id = $1', [otherUserId]);
+        await pool.query('DELETE FROM users WHERE id = $1', [otherUserId]);
+      });
+
+      async function insertVisibilityDocument(
+        title: string,
+        createdAt: Date,
+        visibility: 'private' | 'workspace',
+        createdBy: string,
+        content: Record<string, unknown>
+      ): Promise<string> {
+        const result = await pool.query<{ id: string }>(
+          `INSERT INTO documents (workspace_id, title, document_type, content, visibility, created_by, created_at, updated_at)
+           VALUES ($1, $2, 'wiki', $3, $4, $5, $6, $6)
+           RETURNING id`,
+          [workspaceId, title, JSON.stringify(content), visibility, createdBy, createdAt]
+        );
+        const row = result.rows[0];
+        if (!row) throw new Error('seed TRO-611 insertVisibilityDocument produced no row');
+        return row.id;
+      }
+
+      it("a documents:write token belonging to a DIFFERENT user gets 404 (not 200) PATCHing another user's private document — and the document's content in the database is unchanged", async () => {
+        const originalContent = {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'original private body' }] }],
+        };
+        const docId = await insertVisibilityDocument(
+          'TRO-611 private doc (userId owns)',
+          new Date(BASE_MS + 70_000),
+          'private',
+          userId, // owned by userId, NOT otherUserId
+          originalContent
+        );
+
+        const res = await request(app)
+          .patch(`/api/v1/documents/${docId}`)
+          .set('Authorization', `Bearer ${otherUserWriteToken}`) // otherUserId's OWN write-scoped token
+          .send({
+            content: {
+              type: 'doc',
+              content: [{ type: 'paragraph', content: [{ type: 'text', text: 'HIJACKED BY OTHER USER' }] }],
+            },
+          });
+
+        expect(
+          res.status,
+          'a documents:write token belonging to a different user must not be able to overwrite a private document it does not own'
+        ).toBe(404);
+        expect(res.body.code).toBe('not_found');
+
+        // The critical check (TRO-611's own regression-test requirement): a
+        // status-code-only assertion does not prove the write was actually
+        // blocked. Read the row back and confirm it is byte-for-byte
+        // unchanged.
+        const row = await pool.query<{ content: unknown }>(
+          `SELECT content FROM documents WHERE id = $1`,
+          [docId]
+        );
+        expect(
+          row.rows[0]?.content,
+          "the document's content must be unchanged in the database after the rejected PATCH attempt"
+        ).toEqual(originalContent);
+      });
+
+      it('the creator CAN still PATCH their own private document (200, content genuinely updated)', async () => {
+        const originalContent = {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'my own private body' }] }],
+        };
+        const docId = await insertVisibilityDocument(
+          'TRO-611 private doc (creator PATCHes own)',
+          new Date(BASE_MS + 71_000),
+          'private',
+          userId,
+          originalContent
+        );
+        const newContent = {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'updated by the owner' }] }],
+        };
+
+        const res = await request(app)
+          .patch(`/api/v1/documents/${docId}`)
+          .set('Authorization', `Bearer ${writeToken}`) // writeToken belongs to userId, the creator
+          .send({ content: newContent });
+
+        expect(res.status).toBe(200);
+        expect((res.body as DocumentBody).content).toEqual(newContent);
+
+        const row = await pool.query<{ content: unknown }>(`SELECT content FROM documents WHERE id = $1`, [docId]);
+        expect(row.rows[0]?.content).toEqual(newContent);
+      });
+
+      it("any documents:write-scoped token CAN still PATCH a visibility: 'workspace' document it did not create (pre-existing legitimate case, unchanged)", async () => {
+        const originalContent = {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'shared workspace body' }] }],
+        };
+        const docId = await insertVisibilityDocument(
+          'TRO-611 workspace-visible doc (otherUser owns)',
+          new Date(BASE_MS + 72_000),
+          'workspace',
+          otherUserId, // owned by otherUserId, NOT userId
+          originalContent
+        );
+        const newContent = {
+          type: 'doc',
+          content: [{ type: 'paragraph', content: [{ type: 'text', text: 'updated by a different workspace member' }] }],
+        };
+
+        const res = await request(app)
+          .patch(`/api/v1/documents/${docId}`)
+          .set('Authorization', `Bearer ${writeToken}`) // writeToken belongs to userId, NOT otherUserId
+          .send({ content: newContent });
+
+        expect(res.status).toBe(200);
+        expect((res.body as DocumentBody).content).toEqual(newContent);
+
+        const row = await pool.query<{ content: unknown }>(`SELECT content FROM documents WHERE id = $1`, [docId]);
+        expect(row.rows[0]?.content).toEqual(newContent);
+      });
+    });
   });
 });

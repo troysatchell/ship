@@ -148,6 +148,92 @@ No migrations, no server-side route changes, no database schema changes.
 
 ---
 
+## TRO-611 — PATCH /api/v1/documents/:id now checks visibility before writing (SECURITY)
+
+**Root cause.** `api/src/platform/api/v1/resources/documents.ts`'s `PATCH /:id` resolved its target
+document via `assertDocumentExists(id, workspaceId, requestId)` — a check that only confirms
+`id`/`workspace_id`/`deleted_at IS NULL`, with **no `visibility`/`created_by` check at all**. Any
+caller holding a `documents:write`-scoped token (personal API token or OAuth token) could `PATCH`
+— i.e. overwrite `content` on — **any** document in the workspace, including another user's
+`visibility: 'private'` document, live on `main` since PF-703/TRO-435 first added this route. Not a
+regression from TRO-605 (which widened this same file's `GET` response shape and added *read*-side
+content masking in `serializeDocument()`) — `PATCH /:id` predates TRO-605 and TRO-605 never touched
+`assertDocumentExists()` or the `updateDocument()` call this route makes.
+
+**What changed.**
+- `api/src/platform/api/v1/resources/documents.ts`: added `assertDocumentWritable(id, workspaceId,
+  viewerUserId, requestId)`, a write-path-only sibling of `assertDocumentExists`. It additionally
+  requires `visibility = 'workspace' OR created_by = $viewerUserId` before a 200 is possible —
+  mirroring the internal API's already-correct pattern (`api/src/routes/documents.ts`:
+  `visibility = 'workspace' OR created_by = $2 OR $3 = TRUE`), **minus** the workspace-admin bypass
+  (`$3 = TRUE`). `PATCH /:id` is the only call site switched to it; the four read-only sub-resource
+  routes in the same file (`/:id/associations`, `/:id/reverse-associations`, `/:id/backlinks`,
+  `/:id/comments`) keep calling the original `assertDocumentExists` unchanged — their pre-existing,
+  disclosed read-side visibility gap (documented in this file's own `serializeDocument()` header and
+  `resources/people.ts`'s header) is out of scope for this ticket, which is specifically about the
+  one place the gap was a *write*, not a read.
+- Failure mode: **404 `not_found`**, not 403. This file has no existing 403 for an `:id` route's
+  "exists but caller cannot act on it" case — every route in it (verified by reading `GET /:id` and
+  all four sub-resource routes) already 404s on a malformed or missing id (PF-200 test design AC-4:
+  "malformed/nonexistent id -> code: 'not_found'"). Treating "exists, not writable by you" the same
+  as "does not exist" is consistent with that established convention and also avoids confirming a
+  private document's existence to a caller who cannot act on it.
+
+**Disclosed simplification — no workspace-admin bypass.** Verified directly:
+`api/src/platform/oauth/principal.ts`'s `Principal` type is `{ app: PrincipalApp | null, user:
+PrincipalUser | null, scopes: string[] }` — no workspace-role or "is admin" concept the way an
+internal session (`isWorkspaceAdmin()`) has. Rather than inventing an admin concept this identity
+type doesn't carry, the bypass is simply omitted — fails toward MORE restrictive, not less. A future
+ticket can add a public "admin override" if one is ever specified for the v1 API.
+
+**Null-viewer safety.** `viewerUserId` is `principal.user?.id ?? null` (null for an app-only, Client
+Credentials OAuth token — `principal.ts`'s own doc comment). `created_by = $3` with `$3` bound as SQL
+`NULL` relies on ordinary three-valued SQL logic: `x = NULL` evaluates to `NULL`, which `WHERE` never
+treats as true — so an ownerless private document (`created_by IS NULL`) is never matched by a null
+viewer. Same fail-closed pairing `serializeDocument()`'s own `viewerUserId !== null &&` guard already
+enforces explicitly on the read side (TRO-605).
+
+**Regression test** — `api/src/platform/api/v1/resources/__tests__/documents.test.ts`, new
+`describe('TRO-611: the write path checks visibility, not just existence')` inside the existing
+`PATCH /api/v1/documents/:id` block:
+- A `documents:write` token belonging to a **different** user gets **404** (not 200) PATCHing
+  another user's `visibility: 'private'` document. Verified **red before the fix** (temporarily
+  reverted `documents.ts` to its pre-fix `git show HEAD:...` content, ran the suite: this case failed
+  with `expected 200 to be 404` — the actual vulnerability reproduced — while the two
+  already-legitimate cases below passed unchanged, confirming they were never broken). Critically,
+  the test also `SELECT content FROM documents WHERE id = $1` **after** the rejected attempt and
+  asserts it is byte-for-byte unchanged — a status-code-only assertion would not prove the write was
+  actually blocked.
+- The creator can still PATCH their own `visibility: 'private'` document (200, content genuinely
+  updated, verified via a DB read-back).
+- Any `documents:write`-scoped token can still PATCH a `visibility: 'workspace'` document it did not
+  create (200, content genuinely updated, verified via a DB read-back) — confirms the fix does not
+  regress the existing legitimate case.
+
+**How to run it.**
+```bash
+source .factory-env && npx vitest run api/src/platform/api/v1/resources/__tests__/documents.test.ts
+```
+Full file, 34/34 passed after the fix, including all pre-existing GET/POST/PATCH coverage — no
+regressions.
+
+**Not verified / left for a follow-up ticket.** The four read-only sub-resource routes' own
+pre-existing visibility gap (disclosed, not touched here — see "What changed" above). No public
+"admin override" exists for `PATCH /:id` (disclosed simplification above) — a workspace admin using a
+personal API token can no longer PATCH another member's private document via `PATCH /:id`, which is a
+narrowing of that admin's public-API capability relative to what an internal session already allows
+them; if that capability is needed, it requires either an explicit `Principal.isAdmin` concept or an
+additional DB lookup keyed on `principal.user.id` + the target workspace, deliberately not added here
+per the ticket's own "fail toward restrictive" guidance.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit, isolated to `documents.ts` + its test
+file + this entry). Functionally: change `PATCH /:id`'s `await assertDocumentWritable(id, workspaceId,
+principal.user?.id ?? null, requestId)` back to `await assertDocumentExists(id, workspaceId,
+requestId)` and delete the now-unused `assertDocumentWritable` function; no migration, no schema
+change, no data was written or backfilled by this fix, so nothing else needs undoing.
+
+---
+
 ## TRO-593 — `e2e/session-timeout.spec.ts`: 29/58 tests crashed the browser context at a consistent ~60s timeout
 
 **Root cause, observed via a direct diagnostic, not just Playwright's docs.** `page.clock.fastForward()`
