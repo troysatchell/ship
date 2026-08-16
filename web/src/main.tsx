@@ -67,6 +67,8 @@ const SetupPage = React.lazy(() => import('@/pages/Setup').then((m) => ({ defaul
 const NotFoundPage = React.lazy(() => import('@/pages/NotFound').then((m) => ({ default: m.NotFoundPage })));
 const DeveloperAppsPage = React.lazy(() => import('@/pages/DeveloperApps').then((m) => ({ default: m.DeveloperAppsPage })));
 const DeveloperAppDetailPage = React.lazy(() => import('@/pages/DeveloperAppDetail').then((m) => ({ default: m.DeveloperAppDetailPage })));
+// TRO-616 — public_api_audit queryable in the portal (GET /api/v1/audit).
+const DeveloperAuditPage = React.lazy(() => import('@/pages/DeveloperAudit').then((m) => ({ default: m.DeveloperAuditPage })));
 
 /**
  * Redirect component for type-specific routes to canonical /documents/:id
@@ -320,6 +322,8 @@ function AppRoutes() {
             * shell landed; see CHANGES.md's TRO-439 entry for the
             * reconciliation. */}
           <Route path="webhooks" element={<DeveloperPortalPage />} />
+          {/* TRO-616: public API audit log, same provider subtree. */}
+          <Route path="audit" element={<DeveloperAuditPage />} />
         </Route>
         {/*
           Catch-all (A11Y-5 / TRO-219). Without this, an unmatched path under

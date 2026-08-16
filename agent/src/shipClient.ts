@@ -51,24 +51,22 @@ import type { ShipClient as SdkShipClient, DocumentType as SdkDocumentType, Issu
  * ── Fields that CANNOT carry over from internal to sdk mode (verified, not
  *    guessed — CLAUDE.md's claim-provenance rule) ──
  *
- * `getDocument()`: `GET /api/v1/documents/:id`'s own doc comment states it
- * plainly — "Deliberately narrower than the full internal `documents` row
- * (no `content`, `yjs_state`, `visibility`, etc.)" — confirmed by reading
- * `DocumentRow`/`serializeDocument()` in
- * `api/src/platform/api/v1/resources/documents.ts` directly. `content` and
- * `completed_at` are absent from the v1 response; `visibility`/`created_by`
- * are absent too. The last two are not cosmetic: `visibility.ts`'s
- * `isDocumentVisibleTo` — FleetGraph's own "never surface a document the
- * recipient can't see" security check — REQUIRES real `visibility`/
- * `created_by` values. `getDocumentViaSdk` below synthesizes values that
- * make that check FAIL CLOSED (never treated as visible) rather than
- * fabricating `'workspace'`/a matching `created_by`, which would silently
- * WIDEN who a private document gets surfaced to — the same "wrong direction
- * to be wrong in" posture `visibility.ts`'s own docstring already states for
- * its missing-admin-check case. This is a real, disclosed behavioral
- * difference in `sdk` mode, not a silent gap — see CHANGES.md (TRO-428) and
- * the parity test's own `getDocument` case for exactly what is and is not
- * proven equivalent.
+ * `getDocument()`: as of TRO-605 there are NONE. `GET /api/v1/documents/:id`
+ * was widened to return `content`/`visibility`/`created_by`/`completed_at`
+ * (verified by reading `DocumentRow`/`serializeDocument()` in
+ * `api/src/platform/api/v1/resources/documents.ts` and `Document` in
+ * `sdk/src/types.ts` — all four are non-optional on the SDK type), so
+ * `getDocumentViaSdk` below passes them straight through (TRO-620) and the
+ * parity test's `getDocument` case asserts full field equality. Before
+ * TRO-620 this method returned `content: null`, `created_by: null`,
+ * `completed_at: undefined` and a synthesized `visibility` that made
+ * `visibility.ts`'s `isDocumentVisibleTo` fail closed — a disclosed
+ * behavioral difference that ALSO changed the token volume of every
+ * sdk-mode chat turn (less document text reaching the model). One remaining
+ * server-side nuance, not a client gap: `serializeDocument()` masks
+ * `content` to `null` for a `visibility: 'private'` document the caller did
+ * not create (TRO-605 CodeRabbit finding); that value is passed through
+ * as-is, never re-synthesized here. `yjs_state` stays off both surfaces.
  *
  * `getAssociations()`/`getReverseAssociations()`: the internal route's
  * `?type=` filter (e.g. `'blocks'`, `'project'`, `'sprint'` — actively used
@@ -82,8 +80,6 @@ import type { ShipClient as SdkShipClient, DocumentType as SdkDocumentType, Issu
  * internal route's single filtered query. Also a real, disclosed gap, not
  * silently absorbed.
  */
-const SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN = 'sdk_mode_unknown';
-
 export interface ChangeFeedDocument {
   id: string;
   document_type: string;
@@ -541,26 +537,27 @@ export class ShipClient {
     return this.getJson<ShipDocument>(`${this.base}/api/documents/${id}`);
   }
 
-  /** See this file's module docstring ("Fields that CANNOT carry over") for
-   *  the full, verified explanation of why `content`/`completed_at` are
-   *  `null`/`undefined` and `visibility`/`created_by` are synthesized to
-   *  fail `isDocumentVisibleTo` closed rather than open. */
+  /** TRO-620: straight passthrough of every `ShipDocument` field from the
+   *  SDK `Document` (`sdk/src/types.ts`) — `content`/`visibility`/
+   *  `created_by`/`completed_at` all carry over since TRO-605 (see this
+   *  file's module docstring, "Fields that CANNOT carry over"). Nothing is
+   *  synthesized or dropped here any more. */
   private async getDocumentViaSdk(sdk: SdkShipClient, id: string): Promise<ShipDocument> {
     const doc = await sdk.documents.get(id);
     return {
       id: doc.id,
       document_type: doc.document_type,
       title: doc.title,
-      content: null,
-      visibility: SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN,
-      created_by: null,
+      content: doc.content,
+      visibility: doc.visibility,
+      created_by: doc.created_by,
       // No cast needed (CodeRabbit finding, TRO-428): `doc.properties` is
       // `Record<string, unknown>`, and `ShipDocument['properties']`'s own
       // index signature (`[key: string]: unknown`) already makes every
       // named field structurally optional-and-compatible — a plain
       // `Record<string, unknown>` satisfies it without narrowing.
       properties: doc.properties,
-      completed_at: undefined,
+      completed_at: doc.completed_at,
     };
   }
 

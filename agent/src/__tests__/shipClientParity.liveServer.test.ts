@@ -20,13 +20,15 @@
  * already established) — never a mock — so this is a genuine two-surface
  * comparison, not two hand-written fixtures asserted against each other.
  *
- * `getDocument()` is NOT asserted as fully field-identical between modes —
- * see `shipClient.ts`'s module docstring ("Fields that CANNOT carry over")
- * for the verified, disclosed reason (`content`/`completed_at` absent from
- * v1; `visibility`/`created_by` synthesized to fail `isDocumentVisibleTo`
- * closed). This file's own `getDocument` case asserts parity on exactly the
- * fields that CAN match (id/document_type/title/properties) and asserts the
- * documented divergence explicitly, rather than silently skipping it.
+ * `getDocument()` IS asserted as fully field-identical between modes as of
+ * TRO-620 — TRO-605 widened `GET /api/v1/documents/:id` to carry
+ * `content`/`visibility`/`created_by`/`completed_at`, and `shipClient.ts`'s
+ * `getDocumentViaSdk` now passes them through (see its module docstring,
+ * "Fields that CANNOT carry over"). Before TRO-620 this file's `getDocument`
+ * case asserted parity on id/document_type/title/properties only and
+ * asserted the (then-real) divergence explicitly; it now asserts equality
+ * on every `ShipDocument` field, and sanity-checks the internal side's real
+ * values so the equalities cannot pass vacuously on null === null.
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import crypto from 'crypto';
@@ -327,10 +329,13 @@ describe('PF-702: ShipClient parity — internal mode vs sdk mode, same fixtures
 
   // ─── 1. getDocument ──────────────────────────────────────────────────
   //
-  // Parity on the fields v1 CAN carry (id/document_type/title/properties);
-  // the documented divergence (content/visibility/created_by/completed_at)
-  // is asserted explicitly, not silently skipped.
-  it('getDocument(): parity on id/document_type/title/properties; documented divergence on content/visibility/created_by', async () => {
+  // TRO-620: since TRO-605 widened `GET /api/v1/documents/:id` to carry
+  // `content`/`visibility`/`created_by`/`completed_at`, sdk mode passes them
+  // through and this case asserts FULL parity on every `ShipDocument` field
+  // (before TRO-620 the sdk side returned `content: null`, a synthesized
+  // `visibility`, `created_by: null`, `completed_at: undefined` — the
+  // divergence this same case used to assert as "documented").
+  it('getDocument(): full parity on id/document_type/title/properties/content/visibility/created_by/completed_at', async () => {
     const [viaInternal, viaSdk] = await Promise.all([
       internalClient.getDocument(anchorDocId),
       sdkClient.getDocument(anchorDocId),
@@ -341,15 +346,19 @@ describe('PF-702: ShipClient parity — internal mode vs sdk mode, same fixtures
     expect(viaSdk.title).toBe(viaInternal.title);
     expect(viaSdk.properties).toEqual(viaInternal.properties);
 
-    // The internal surface DOES carry these (real values); the v1 surface
-    // structurally cannot (see shipClient.ts's module docstring).
+    // The internal surface carries real values (sanity-check the fixture so
+    // the equality assertions below cannot pass vacuously on null === null).
     expect(viaInternal.content).not.toBeNull();
     expect(viaInternal.visibility).toBe('workspace');
     expect(viaInternal.created_by).toBe(userId);
+    expect(viaInternal.completed_at).toBeNull();
 
-    expect(viaSdk.content).toBeNull();
-    expect(viaSdk.visibility).not.toBe('workspace'); // fails isDocumentVisibleTo closed
-    expect(viaSdk.created_by).toBeNull();
+    // TRO-620: the sdk surface now carries the SAME values (TRO-605 widened
+    // the v1 serializer) — no more synthesized/absent fields.
+    expect(viaSdk.content).toEqual(viaInternal.content);
+    expect(viaSdk.visibility).toBe(viaInternal.visibility);
+    expect(viaSdk.created_by).toBe(viaInternal.created_by);
+    expect(viaSdk.completed_at).toBe(viaInternal.completed_at);
   });
 
   // ─── 2. getPeople ────────────────────────────────────────────────────

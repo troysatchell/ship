@@ -8,9 +8,10 @@ Do not confuse the two.
 **Method note, read before the numbers below:** every figure in this document is tagged
 **OBSERVED** (measured directly, this session, against a real artifact), **DERIVED** (computed from
 a real schema/config value, arithmetic shown), or **ASSUMED** (an explicit, named business
-assumption with stated rationale — not measured, and never presented as if it were). One section is
-a **TODO** placeholder per this ticket's own scope constraint. Nothing below is a number pulled from
-memory of "what these things usually cost."
+assumption with stated rationale — not measured, and never presented as if it were). §2.1 was
+originally a **TODO** placeholder per this ticket's own scope constraint and was filled in with
+**MEASURED** ledger rows by TRO-620 (2026-08-16). Nothing below is a number pulled from memory of
+"what these things usually cost."
 
 ---
 
@@ -64,13 +65,40 @@ credentials are unavailable (`ai-analysis.ts`'s `getClient()` catches init failu
 
 ### 2.1 LLM spend during Epic 7 (cost-ledger before/after)
 
-> TODO(TRO-434): pull real numbers from docs/submission/PF-704-COST-LEDGER-DELTA.md once PR #263 (TRO-440/PF-704) merges — do not fill this in from estimates.
+**MEASURED (TRO-620, 2026-08-16) — real ledger rows, not estimates.** Full method, setup and the
+per-turn table live in `docs/submission/PF-704-COST-LEDGER-DELTA.md` ("Measured: matched workload,
+both modes"); the raw ledgers are committed as
+`docs/submission/cost-ledger/tro-620-{internal,sdk,sdk-before-fix}.jsonl`. Summary:
 
-**Verified before writing this section:** PR #263 (`feat/pf-704-flag-matrix-audit-proof`,
-"TRO-440/PF-704: Flag matrix in CI + audit-trail proof") is **OPEN, unmerged**
-(`gh pr view 263 --json state` → `"state":"OPEN"`, `"mergedAt":null`, checked at doc-write time).
-`docs/submission/PF-704-COST-LEDGER-DELTA.md` does not exist on `main`. No cost-ledger before/after
-numbers are guessed or estimated here, per this ticket's own scope constraint.
+| Configuration (same seed doc, same 3 questions, `claude-haiku-4-5-20251001`) | Docs in context | Input tokens (3 turns) | Output tokens (3 turns) | Input Δ vs internal |
+|---|---:|---:|---:|---:|
+| `AGENT_PLATFORM_MODE=internal` | 12 / turn | 1274 | 637 | — |
+| `AGENT_PLATFORM_MODE=sdk`, after TRO-620 (`getDocument` passthrough) | 12 / turn | 1274 | 619 | **0.0%** |
+| `AGENT_PLATFORM_MODE=sdk`, before TRO-620 (`content: null`, synthesized `visibility`) | 0 / turn | 197 | 323 | **−84.5%** |
+
+**What that establishes:** the Epic 7 rewire (`internal` → `sdk` transport) does **not** change
+input token volume for the `on_demand` trigger — per-turn input counts are identical (424/425/425)
+once `agent/src/shipClient.ts`'s sdk-mode `getDocument` passes `content`/`visibility`/
+`created_by`/`completed_at` through (TRO-605 widened the v1 route; TRO-620 wired the client). The
+only output difference (Q2: 279 vs 261) is model non-determinism on an identically-sized prompt.
+The pre-fix row is what PF-704's traced exception actually cost: every expansion candidate failed
+`passesAskerVisibility` on the synthesized `visibility`, zero documents reached the prompt, and the
+model answered from the bare question — ~85% cheaper per turn, and answering without any Ship
+context. Cheaper was the wrong direction to be wrong in.
+
+**What was and was not measured, precisely:** 9 real model calls total (3 per configuration,
+≈ $0.0074); only the `on_demand`/expansion trigger — the one path PF-704 traced as exposed. The
+other four prompt builders (`composeStandupDraft`, `composeBlockerEscalation`,
+`composeRetroDraft`, `composePlanChangeDraft`) were not run. One operability finding surfaced on
+the way (`sdk`-mode expansion trips `/api/v1`'s default `RATE_LIMIT_TOKEN_RPM=60` bucket with
+HTTP 429 on a 12-document walk; the measurement ran with the limit raised locally) — recorded in
+PF-704's section, out of this doc's scope.
+
+**Provenance note (kept for the record):** an earlier revision of this section carried a literal
+`TODO(TRO-434)` placeholder because PR #263 (`feat/pf-704-flag-matrix-audit-proof`, TRO-440/PF-704)
+was still open/unmerged at doc-write time (`gh pr view 263 --json state` → `"state":"OPEN"`) and
+`PF-704-COST-LEDGER-DELTA.md` did not yet exist on `main`. Nothing here was filled in from
+estimates: the numbers above were produced after that PR landed, by re-running the workload.
 
 ### 2.2 TTFE CI minutes
 
@@ -335,7 +363,7 @@ analysis; $ conversion is a follow-up once real billing data exists post-deploy.
 | Section | Status |
 |---|---|
 | Platform-is-LLM-free statement | **CORRECTED** — 2 real LLM paths found (agent turns + plan/retro scoring), not 1; both cited by file:line |
-| E7 LLM spend before/after | **TODO** — blocked on PR #263 (PF-704/TRO-440), left as placeholder per this ticket's scope constraint |
+| E7 LLM spend before/after | **MEASURED** (TRO-620) — 9 real ledger rows, `on_demand` trigger only: input tokens identical `internal` vs post-fix `sdk` (1274 vs 1274); pre-fix `sdk` was −84.5% with 0 docs in context |
 | TTFE CI minutes | **OBSERVED** (10 real samples: 5 log files + 5 CI runs) + **ASSUMED** weekly PR volume, both cases shown |
 | Playwright OAuth compute | **OBSERVED** — real run this session, including an honestly-reported partial failure under real Docker contention |
 | Spec-gen overhead | **OBSERVED** — timed directly, 1.196s |
