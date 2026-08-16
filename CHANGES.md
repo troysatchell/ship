@@ -41,7 +41,7 @@ only workflow-inline `init`/`analyze` steps) with `paths-ignore: ['**/__tests__/
 '**/*.test.tsx']`. Wired in via `config-file:` on the existing `Initialize CodeQL` step in
 `.github/workflows/ci.yml` (`codeql` job) — one line added, nothing else in that job changed.
 
-**Proof.**
+**Verification.**
 - `python3 -c "import yaml; yaml.safe_load(...)"` — both the new config file and the edited
   `ci.yml` parse as valid YAML.
 - Confirmed the three glob patterns actually match all 5 flagged files (`__tests__/` directory segment
