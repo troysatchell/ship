@@ -70,6 +70,124 @@ because there wasn't one.
 
 ---
 
+## TRO-493 — PF-102 follow-up: `oauth-apps.ts` registered the wrong error-response schema
+
+**Root cause.** `api/src/openapi/schemas/oauth-apps.ts` registered every one of its route's error
+responses (11 across 5 handlers — create/list/get/rotate/revoke) against the shared
+`ErrorResponseSchema` (`api/src/openapi/schemas/common.ts`) — a flat `{error: string, message?,
+details?: array<{path,message}>}` shape. But `api/src/routes/oauth-apps.ts` has never returned
+that shape; every error response there is `{success: false, error: {code, message, details?}}`,
+with `details` carrying zod's own `flatten()` output (`{formErrors, fieldErrors}`) on validation
+failures. Surveyed before picking a fix direction, per the ticket's own instruction not to assume
+either side is "correct": `grep -l "success: false" api/src/routes/*.ts` returns 9 files
+(`api-tokens.ts`, `workspaces.ts`, `oauth-apps.ts`, and 6 more) all using this same
+`{success,error:{code,message}}` shape, plus `api/src/middleware/auth.ts` itself — this is the
+dominant, established convention across the internal API, not an outlier. `documents.ts`/
+`issues.ts` are the ones actually close to `ErrorResponseSchema`'s flat shape. `oauth-apps.ts`
+registered the wrong shared schema; the schema itself was never wrong for the routes that
+correctly use it.
+
+**What changed.**
+- `api/src/openapi/schemas/common.ts`: added `InternalErrorResponseSchema` — `{success:
+  z.literal(false), error: {code: z.enum(ERROR_CODES values), message: z.string(), details?:
+  z.record(z.unknown())}}` — describing the real, dominant convention. `ErrorResponseSchema`
+  itself is **untouched**, since `issues.ts` genuinely returns its shape; changing it would have
+  fixed oauth-apps.ts by breaking issues.ts's already-correct registration.
+- `api/src/openapi/schemas/oauth-apps.ts`: all 11 `ErrorResponseSchema` references switched to
+  `InternalErrorResponseSchema`. No route-handler code changed — the runtime behavior was already
+  correct; only the OpenAPI documentation was wrong.
+
+**Regression tests** — `api/src/platform/oauth/__tests__/app-registration.test.ts`, two new cases:
+1. *Shape*: three real response bodies (validation/400, not-found/404, no-session/401) parsed with
+   `InternalErrorResponseSchema.safeParse()`, plus a concrete check that the validation case's
+   `details` carries `fieldErrors`.
+2. *Documentation-drift*: `generateOpenAPIDocument()`'s actual generated doc is inspected directly
+   — `paths['/oauth-apps'].post.responses['400'].content['application/json'].schema.$ref` must
+   equal `'#/components/schemas/InternalErrorResponse'`. **This is the test that actually catches
+   the original bug** — test 1 alone doesn't, because the runtime shape never changed; only the
+   *documentation* did. Verified genuinely red before the fix: reverted `oauth-apps.ts`'s schema
+   references back to `ErrorResponseSchema` and re-ran — test 1 still passed (proving it doesn't
+   catch this bug class), test 2 failed with `expected '#/components/schemas/ErrorResponse' to be
+   '#/components/schemas/InternalErrorResponse'`, then restored and both passed.
+
+**Full `api` suite**: 1427 tests, 2 failures (`files.test.ts`'s file-confirm test,
+`route-fitness.test.ts`'s `/api/v1/issues` 401-check) — both re-run standalone and passed 133/133,
+confirming the documented load-sensitive (TEST-12/TRO-277-class) pattern, not a regression from
+this change (neither touched file is anywhere near `oauth-apps.ts`/`common.ts`).
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/app-registration.test.ts
+```
+
+**Rollback.** `git revert <this commit>` — 3 files (`common.ts`, `oauth-apps.ts`,
+`app-registration.test.ts`), no schema/migration, no route-handler behavior change.
+
+---
+
+## TRO-552 — v1-exemption boundary predicate now tested at segment edges
+
+**What was built.** `isLegacyLimiterExemptPath` (`api/src/middleware/rate-limit.ts`) — the
+predicate that exempts `/api/v1/*` from the two legacy `/api/` rate limiters (PF-004 / TRO-401) —
+was already segment-boundary-correct (`path === '/v1' || path.startsWith('/v1/')`, per its own
+top-of-file doc), but nothing in `rate-limit-v1-exemption.test.ts` ever mounted a route whose
+mount-relative path shares the `/v1` string as a prefix without actually being it, so the boundary
+behavior was asserted only in a code comment. A regression to a bare `path.startsWith('/v1')`
+(dropping the exact-match branch and the trailing-slash check) would have passed every existing
+AC-1..AC-3b case in that file unchanged, because none of them ever requests a path only a substring
+match would wrongly admit.
+
+Added two new cases to that same file, matching its existing `limitOverrides` (TRO-494) seam and
+AC-numbering convention:
+- **AC-4a**: a test app mounts `/api/v10/example` behind both legacy limiters with
+  `identityLimit`/`sourceIpLimit` both overridden to a small cap (3), and asserts the route DOES
+  throttle past that cap (i.e., is NOT exempted).
+- **AC-4b**: same shape for `/api/v1foo/example`.
+
+No production code changed — this is a pure test-only addition; `rate-limit.ts` itself is
+unmodified by this ticket.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/rate-limit-v1-exemption.test.ts
+```
+
+All 6 tests (the 4 pre-existing AC-1/AC-2/AC-3a/AC-3b plus the new AC-4a/AC-4b) pass.
+
+**Confirmed red before green.** Temporarily mutated `isLegacyLimiterExemptPath` in
+`api/src/middleware/rate-limit.ts` to a bare substring match:
+
+```ts
+export function isLegacyLimiterExemptPath(path: string): boolean {
+  return path.startsWith('/v1');
+}
+```
+
+Re-ran the suite: AC-4a and AC-4b failed —
+
+```
+AssertionError: never saw a 429 in 4 requests to /api/v10/example against a cap of 3 — a bare
+startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom:
+expected -1 not to be -1
+
+AssertionError: never saw a 429 in 4 requests to /api/v1foo/example against a cap of 3 — a bare
+startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom:
+expected -1 not to be -1
+```
+
+— while AC-1/AC-2/AC-3a/AC-3b stayed green, confirming the mutation is a real, targeted regression
+that only the new boundary tests catch. Reverted the mutation (`git diff` on `rate-limit.ts` empty
+afterward) and re-ran: 6/6 pass.
+
+**Rollback.** Revert this commit. `rate-limit-v1-exemption.test.ts` returns to its prior 4-case
+form; `rate-limit.ts` is untouched by this ticket either way, so there is no production behavior to
+roll back.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
