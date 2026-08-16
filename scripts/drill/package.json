@@ -1,0 +1,6 @@
+{
+  "name": "@ship/drill-internal",
+  "private": true,
+  "type": "module",
+  "description": "Marks scripts/drill/*.ts as ESM for both tsc (NodeNext module classification, per-file via nearest package.json) and tsx/node at runtime — the same mechanism sdk/package.json and integrations/cli/package.json already use. Not a real workspace package (absent from pnpm-workspace.yaml on purpose, same as scripts/factory/defect-gates)."
+}

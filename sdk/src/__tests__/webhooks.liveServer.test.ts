@@ -26,11 +26,13 @@
  * NOT-fixed gap that would 400 against this real server if used, so seeding
  * the row directly via SQL was the only way to test the RESPONSE shapes
  * (`listSubscriptions`/`getSubscription`/`rotateSecret`/`listDeliveries`/
- * `replayDelivery`). TRO-607 fixes that REQUEST body bug, so this suite now
- * includes a REAL `createSubscription()` call that proves the corrected body
- * shape works end-to-end against a real server. The initially-seeded
- * subscription (and its deliveries) remain, tested via the same read/action
- * methods as before.
+ * `replayDelivery`). TRO-607 fixes that REQUEST body bug (the same fix
+ * TRO-455/PF-603's TTFE drill independently needed — `scripts/drill/ttfe.ts`
+ * proves it again, live, via the drill's own `webhooks.createSubscription()`
+ * call), so this suite now includes a REAL `createSubscription()` call that
+ * proves the corrected body shape works end-to-end against a real server.
+ * The initially-seeded subscription (and its deliveries) remain, tested via
+ * the same read/action methods as before.
  *
  * DB SAFETY: own isolated workspace/user/oauth_app/api_token/webhook rows in
  * `beforeAll`, deleted in `afterAll`; does not touch `pnpm db:seed`'s

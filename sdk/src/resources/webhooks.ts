@@ -117,8 +117,8 @@
  * own header for why it is scoped to webhooks specifically rather than
  * generalized to every SDK resource in this same ticket.
  *
- * UPDATE — TRO-607 (this ticket; found while verifying TRO-599, explicitly
- * OUT OF SCOPE for that ticket which targeted only the two RESPONSE types):
+ * UPDATE — TRO-607 (found while verifying TRO-599, explicitly OUT OF SCOPE
+ * for that ticket which targeted only the two RESPONSE types):
  * `CreateWebhookSubscriptionBody` below (`createSubscription()`'s request
  * body) has been FIXED. Was `url`/plural `events`; is now `app_id`/singular
  * `event_type`/`target_url`, matching the real `POST /api/v1/webhooks` route's
@@ -127,6 +127,17 @@
  * regression test added to `sdk/src/__tests__/webhooks.liveServer.test.ts`
  * calls the method against a real server with the corrected body shape,
  * confirming the fix end-to-end.
+ *
+ * UPDATE — TRO-455 (PF-603, the TTFE drill), landed independently and
+ * converging on the same fix above (verified against the same
+ * `CreateWebhookSubscriptionRequestSchema`,
+ * `platform/api/v1/resources/webhooks.ts:158-165`): this shape was a
+ * confirmed blocker for the drill's own literal AC ("`webhooks.create`"
+ * against a real running server) — the drill could not create a
+ * subscription through this method before TRO-607's fix landed.
+ * `createSubscription()` itself needed no change (it already forwards
+ * `body` as-is); see `scripts/drill/ttfe.ts`'s live use of this method for
+ * the drill's own round-trip proof.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -199,7 +210,8 @@ export interface CreatedWebhookSubscription extends WebhookSubscription {
  * which requires `app_id` (uuid), singular `event_type`, and `target_url`.
  * All three fields are required (never optional). The subscription belongs to
  * an `app_id` (`oauth_apps`, migration 047), not directly to a workspace or
- * user — the caller supplies it in every create request.
+ * user — the caller supplies it in every create request. Also the exact
+ * shape TRO-455 (PF-603)'s TTFE drill needed — see this file's header.
  */
 export interface CreateWebhookSubscriptionBody {
   readonly app_id: string;

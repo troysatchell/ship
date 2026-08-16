@@ -6,6 +6,100 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-455 — TTFE drill in CI (PF-603)
+
+**What this is.** `pnpm drill ttfe` — a narrated, timed proof of PLUGFORGE.MD §4's TTFE (Time To
+First Event) story: install `@ship/sdk` into a clean directory → device login (RFC 8628, auto-
+approved via a real `POST /oauth/device/verify` call) → `client.webhooks.createSubscription(...)`
+→ `client.documents.create(...)` → wait for the real, already-running production deliverer to
+send the signed POST → `verifyWebhook(...)`. Every stage is timed and asserted, individually and
+as a total, against a committed threshold config (`scripts/drill/ttfe.config.json`:
+`totalBudgetMs: 60000`, matching PLUGFORGE.MD §5's "TTFE CI P95 < 60 s"). Wired into
+`.gitlab-ci.yml` (the graded platform) and `.github/workflows/ci.yml` as a new `drill-ttfe` job on
+every PR, and into `scripts/factory/gate.sh` (G11/G12) so the factory's own local eval runs it too.
+
+**Blocking bug found and fixed while building this: `sdk/src/resources/webhooks.ts`'s
+`CreateWebhookSubscriptionBody` was wrong.** It declared `{ url, events }`; the real, merged
+`POST /api/v1/webhooks` route (`api/src/platform/api/v1/resources/webhooks.ts`) requires
+`{ app_id, event_type, target_url }`. This was a previously-DISCLOSED, not-yet-fixed gap (see that
+file's former "STILL NOT FIXED" header note, and TRO-599's own header) — every real call built from
+the old SDK type 400'd. Fixed here because it directly blocked this ticket's own literal AC
+(`webhooks.create` against a real server): the interface now matches
+`CreateWebhookSubscriptionRequestSchema` field-for-field; `createSubscription()` itself needed no
+change (it already forwarded `body` as-is). Updated the mocked request-shape test
+(`sdk/src/resources/__tests__/webhooks.test.ts`) to match; the drill itself
+(`scripts/drill/ttfe.ts`) is the live, real-server proof this now works. **Converged with TRO-607**
+(entry immediately below), which landed on `main` first and independently fixed the identical bug
+— resolved at merge-forward by keeping TRO-607's code/tests as the canonical version (its UUID-shaped
+mock `app_id` is stricter, catching a real CodeRabbit-flagged gap the earlier ad hoc `'app_1'`
+placeholder missed); the drill's own proof stands unchanged either way.
+
+**Design decisions made, stated as decisions (not literal PRD text):**
+- **Postgres source is environment-dependent, on purpose.** `scripts/drill/ttfe.ts` reuses an
+  ambient `DATABASE_URL` when one is set (both new CI jobs, and a factory worktree via
+  `.factory-env`) and only falls back to a genuine `@testcontainers/postgresql` container
+  (`e2e/fixtures/isolated-env.ts:119`'s own pattern) when nothing is set — a real local/clean-machine
+  run. This is deliberate, not a shortcut: `.gitlab-ci.yml`'s own `image-build`/`e2e-agent` job
+  comments document, in writing, that GitLab's shared runner cannot start a nested Docker daemon —
+  the exact capability testcontainers needs. Requiring testcontainers in the graded `drill-ttfe` job
+  would have repeated this project's own documented "GitLab pipeline silently never ran" incident.
+  Both code paths were run and observed passing before this PR opened (see Evidence below) — this
+  is an observed claim, not a derived one.
+- **Stages 2-6 (device login through `verifyWebhook`) import `@ship/sdk` from its own built
+  `dist/`** (same import `docs/submission/demo-webhook-listener.mjs` already uses), not from the
+  throwaway directory stage 1 (`install_sdk`) installs into. Both are the byte-identical build;
+  stage 1 alone proves "does this install cleanly via `npm install` from a real tarball" — the
+  literal thing worth proving separately. Folding every later stage into a second child process
+  resolving through that directory's own `node_modules` would add real IPC complexity for no
+  additional SDK-vs-server proof.
+- **Only stage timings count toward `totalBudgetMs`.** Postgres/migrations/spawning the real `api/`
+  process are untimed, logged separately, and never asserted against a budget — standing platform
+  infrastructure a real developer already has running, not part of "how long did my first event
+  take."
+
+**Regression test — the AC itself ("regression past threshold fails the build").**
+`scripts/drill/__tests__/thresholds.test.ts` (7 cases) proves `evaluateDrillStages()`
+(`scripts/drill/thresholds.ts`) fails a run whose total exceeds `totalBudgetMs` OR whose one stage
+exceeds its own `stageBudgetsMs` entry, even when the other check alone would pass — verified red
+first: a plausible wrong-first-draft implementation (total-only check, no per-stage check) produced
+two genuine `AssertionError`s (`expected true to be false`, and a missing "OVER BUDGET" marker in
+the rendered summary), not an import error. Restored to the real implementation, all 7 green.
+Separately, the PRD's own literal AC text ("simulate, evidence, revert") was reproduced live against
+the real drill, not just the unit test — see Evidence.
+
+**How to run it.**
+```bash
+source .factory-env   # or set DATABASE_URL yourself
+pnpm drill ttfe
+```
+No `DATABASE_URL` set → genuine testcontainers Postgres (needs Docker). Threshold-logic unit tests
+only: `pnpm exec vitest run --config scripts/drill/vitest.config.ts`.
+
+**Evidence (this worktree, ship_wt_tro_455).**
+- `pnpm drill ttfe` (ambient `DATABASE_URL`): `total: ~2000ms / 60000ms budget — verdict: pass`, run
+  twice, zero leftover rows in the database afterward both times (`cleanupPrincipal` verified via
+  direct SQL count).
+- `pnpm drill ttfe` with `DATABASE_URL` unset (genuine testcontainers path): same result,
+  `verdict: pass`.
+- `DRILL_TTFE_SIMULATE_SLOW_MS="verify_webhook=65000" pnpm drill ttfe` (test-only override, same
+  precedent as `sdk/scripts/measure-size.mjs`'s `--threshold-kb`): exit code 1,
+  `verify_webhook: 65000ms OVER BUDGET (> 2000ms)`, `total: 67007ms / 60000ms budget — OVER BUDGET`,
+  `verdict: fail`. Reverted (ran again without the env var): exit code 0, `verdict: pass`. Rows
+  cleaned up even on the simulated-failure path.
+
+**Not verified.** The 0%-flake-over-20-CI-runs target (PLUGFORGE.MD §4's own AC) is explicitly an
+operational follow-up tracked over the next 20 real CI runs on both platforms, not something one PR
+can prove — any flake becomes a P0 ticket per that AC, never retry-masked.
+
+**Rollback.** Revert this commit. No schema/migration changes, no changed behavior on any existing
+route — the only production-code change is the `CreateWebhookSubscriptionBody` type fix in
+`sdk/src/resources/webhooks.ts` (a type-only correction; `createSubscription()`'s runtime behavior
+is unchanged) plus the new, additive `pg`/`@types/pg` root devDependencies. Reverting removes the
+`drill` script, `scripts/drill/`, the `drill-ttfe` CI jobs, and gate.sh's G11/G12 checks; nothing
+else in the repo depends on any of them.
+
+---
+
 ## TRO-607 — SDK `CreateWebhookSubscriptionBody` request shape drifts from the real server schema
 
 **Root cause.** `sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody` interface declared `url` (string) and `events` (plural array) — matching PF-401's original guess before the real routes existed. The real `POST /api/v1/webhooks` route (PF-302, merged concurrently with TRO-599) validates against `CreateWebhookSubscriptionRequestSchema` (`api/src/platform/api/v1/resources/webhooks.ts`, verified by reading that file in full) requiring `app_id` (UUID), singular `event_type`, and `target_url`. As declared, every `createSubscription()` call 400s with a validation error against the real server.
