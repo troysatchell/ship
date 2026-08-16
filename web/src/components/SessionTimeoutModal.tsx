@@ -7,6 +7,7 @@ interface SessionTimeoutModalProps {
   timeRemaining: number | null;
   warningType: WarningType | null;
   onStayLoggedIn: () => void;
+  onDismissAbsolute: () => void;
 }
 
 // Announcements happen at these seconds remaining
@@ -17,6 +18,7 @@ export function SessionTimeoutModal({
   timeRemaining,
   warningType,
   onStayLoggedIn,
+  onDismissAbsolute,
 }: SessionTimeoutModalProps) {
   const stayLoggedInButtonRef = useRef<HTMLButtonElement>(null);
   const [lastAnnouncement, setLastAnnouncement] = useState<number | null>(null);
@@ -181,7 +183,7 @@ export function SessionTimeoutModal({
           <div className="mt-6 flex justify-center">
             <button
               ref={stayLoggedInButtonRef}
-              onClick={onStayLoggedIn}
+              onClick={isInactivity ? onStayLoggedIn : onDismissAbsolute}
               className="rounded-md bg-accent px-6 py-3 text-base font-medium text-white hover:bg-accent/90 focus:outline-none focus:ring-2 focus:ring-accent focus:ring-offset-2 focus:ring-offset-background"
             >
               {buttonText}
