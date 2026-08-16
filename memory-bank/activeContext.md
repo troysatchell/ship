@@ -51,7 +51,7 @@
 ## Still needs Troy directly — not further actionable by any session
 
 - **TRO-429** (pre-search answers + saved AI-conversation artifact)
-- **TRO-444** (demo video/social post — also blocked on `ship webhooks tail`/TRO-452, which is already merged, so this is now unblocked and ready whenever Troy wants to record it)
+- **TRO-444** (demo video/social post) — script re-grounded on `6b60377b` and merged (PR #304, `cf9b4e4b`, 2026-08-16 ~16:45Z); Troy began the live pre-stage the same hour (his `pnpm dev` = API `:3001` / web `:5174`; `/tmp/ship-demo.env` written for him; P4 listener → `:8788` because `:8787` is held by a `Ship-wt-tro_444` process). Only the recording + post remain his.
 - TRO-437 (per-epic write-ups) is already done as of this session, so it's off this list.
 
 ## Standing facts (still true)
