@@ -38,6 +38,19 @@
  *                          actually sends the signed POST.
  *   6. verify_webhook    — `verifyWebhook(headers, rawBody, secret)` against
  *                          the captured request, asserted `true`.
+ *   7. tamper_reject     — (TRO-615) the same headers/secret against a
+ *                          one-byte-mutated copy of the captured rawBody,
+ *                          asserted `false` — PLUGFORGE.MD §5's graded row
+ *                          "... signed POST < 2 s → tamper rejected".
+ *   8. delivery_p95      — (TRO-615) burst-create `deliveryLatencySampleSize`
+ *                          (20) more documents, wait for all 20 signed
+ *                          deliveries, correlate each by payload `data.id`,
+ *                          per-delivery latency = listener `receivedAt` −
+ *                          `documents.create()` resolved; nearest-rank P95
+ *                          asserted `< deliveryLatencyP95Ms` (2000) — §5's
+ *                          "first-attempt webhook latency P95 < 2 s". The
+ *                          single first delivery's `wait_for_delivery` ms is
+ *                          held to the same 2000 ms bound.
  *
  * ── DERIVED SCOPE DECISION (not literal PRD text — stated per this repo's
  *    claim-provenance rule): stages 2-6 import `@ship/sdk` from its OWN
@@ -124,6 +137,18 @@ function parseSimulateSlowOverride(): { stage: string; extraMs: number } | null 
   return { stage, extraMs };
 }
 
+// ── TRO-615 test-only override, same precedent as above: replaces the
+// MEASURED delivery-latency P95 sample with a single synthetic sample set
+// (20 × <n> ms) AFTER the real burst/deliveries completed, so the P95 gate
+// can be proven to fail without slowing the real deliverer. Never for real
+// budgets. Format: `DRILL_TTFE_SIMULATE_P95_MS=2500`.
+function parseSimulateP95Override(): number | null {
+  const raw = process.env.DRILL_TTFE_SIMULATE_P95_MS;
+  if (!raw) return null;
+  const ms = Number(raw);
+  return Number.isFinite(ms) ? ms : null;
+}
+
 function getFreePort(): Promise<number> {
   return new Promise((resolvePort, reject) => {
     const srv = createNetServer();
@@ -205,33 +230,48 @@ function spawnApiChild(databaseUrl: string, port: number, secretEncryptionKey: s
 interface CapturedRequest {
   headers: Record<string, string | string[] | undefined>;
   rawBody: string;
+  /** Wall-clock ms at which the request body was fully received (TRO-615). */
+  receivedAt: number;
 }
 
-/** A minimal, single-request HTTP capture listener — this drill's own
- *  webhook "subscriber," deliberately simpler than
+/** A minimal HTTP capture listener — this drill's own webhook "subscriber,"
+ *  deliberately simpler than
  *  `docs/submission/demo-webhook-listener.mjs`'s `createReferenceSubscriber`
- *  (no dedupe bookkeeping; TTFE cares about ONE fresh delivery, not replay
- *  semantics — that contract is PF-801's drill, not this one). Always
- *  answers 200 so the real deliverer records `status: 'success'`. */
+ *  (no dedupe bookkeeping — replay semantics are PF-801's drill, not this
+ *  one). Always answers 200 so the real deliverer records
+ *  `status: 'success'`. `captured` resolves with the FIRST request (TTFE's
+ *  own single fresh delivery); TRO-615 additionally records EVERY request in
+ *  `requests` (arrival order) with a `receivedAt` timestamp, and
+ *  `waitForCount(n, timeoutMs)` resolves once at least `n` have arrived —
+ *  the P95 sample. */
 function createCaptureListener(): {
   listen(): Promise<number>;
   captured: Promise<CapturedRequest>;
+  requests: CapturedRequest[];
+  waitForCount(n: number, timeoutMs: number): Promise<CapturedRequest[]>;
   close(): Promise<void>;
 } {
   let resolveCaptured!: (value: CapturedRequest) => void;
   const captured = new Promise<CapturedRequest>((r) => {
     resolveCaptured = r;
   });
-  let alreadyCaptured = false;
+  const requests: CapturedRequest[] = [];
+  const countWaiters: Array<{ n: number; resolve: (reqs: CapturedRequest[]) => void }> = [];
 
   const server = createHttpServer((req: IncomingMessage, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
     req.on('end', () => {
       const rawBody = Buffer.concat(chunks).toString('utf8');
-      if (!alreadyCaptured) {
-        alreadyCaptured = true;
-        resolveCaptured({ headers: req.headers, rawBody });
+      const record: CapturedRequest = { headers: req.headers, rawBody, receivedAt: Date.now() };
+      requests.push(record);
+      if (requests.length === 1) resolveCaptured(record);
+      for (let i = countWaiters.length - 1; i >= 0; i--) {
+        const waiter = countWaiters[i];
+        if (waiter && requests.length >= waiter.n) {
+          countWaiters.splice(i, 1);
+          waiter.resolve(requests.slice());
+        }
       }
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ received: true }));
@@ -249,10 +289,41 @@ function createCaptureListener(): {
       });
     },
     captured,
+    requests,
+    waitForCount(n: number, timeoutMs: number): Promise<CapturedRequest[]> {
+      if (requests.length >= n) return Promise.resolve(requests.slice());
+      return new Promise((resolveCount, reject) => {
+        const timer = setTimeout(() => {
+          const idx = countWaiters.findIndex((w) => w.resolve === wrapped);
+          if (idx !== -1) countWaiters.splice(idx, 1);
+          reject(new Error(`only ${requests.length}/${n} webhook deliveries received within ${timeoutMs}ms`));
+        }, timeoutMs);
+        const wrapped = (reqs: CapturedRequest[]) => {
+          clearTimeout(timer);
+          resolveCount(reqs);
+        };
+        countWaiters.push({ n, resolve: wrapped });
+      });
+    },
     close(): Promise<void> {
       return new Promise((resolveClose) => server.close(() => resolveClose()));
     },
   };
+}
+
+/** TRO-615: pull the document id a `document.created` delivery carries —
+ *  `api/src/platform/webhooks/events.ts`'s `eventSchema` wraps the per-type
+ *  `data` object, and `documentCreatedData` has `id` (the document's uuid).
+ *  Returns null on any shape mismatch so the caller can fall back to
+ *  arrival-order correlation rather than crash. */
+function documentIdFromDelivery(rawBody: string): string | null {
+  try {
+    const parsed = JSON.parse(rawBody) as { data?: { id?: unknown } };
+    const id = parsed?.data?.id;
+    return typeof id === 'string' ? id : null;
+  } catch {
+    return null;
+  }
 }
 
 interface SeededPrincipal {
@@ -369,6 +440,15 @@ async function installSdkInCleanDir(): Promise<string> {
   return installDir;
 }
 
+/** TRO-615: mutate exactly one byte of a webhook body — flip the last
+ *  character to a different one (or append a space to an empty body). */
+function tamperOneByte(body: string): string {
+  if (body.length === 0) return ' ';
+  const last = body[body.length - 1];
+  const replacement = last === '}' ? ']' : '}';
+  return body.slice(0, -1) + replacement;
+}
+
 async function main(): Promise<void> {
   const configRaw = await readFile(join(__dirname, 'ttfe.config.json'), 'utf8');
   const config = JSON.parse(configRaw) as DrillThresholdConfig;
@@ -428,6 +508,7 @@ async function main(): Promise<void> {
 
   let exitCode = 0;
   let installDir: string | undefined;
+  let deliveryLatenciesMs: number[] = [];
   try {
     // ── Stage 1: install_sdk ──
     let t0 = Date.now();
@@ -505,6 +586,62 @@ async function main(): Promise<void> {
       if (!verified) {
         throw new Error('verifyWebhook() returned false for the real, freshly-delivered request — signature mismatch');
       }
+
+      // ── Stage 7 (TRO-615): tamper_reject — one mutated byte in the body
+      // must fail verification under the SAME headers/secret that just
+      // verified true. Flip the last character (or append a byte if empty)
+      // rather than a whole different body so this is genuinely a one-byte
+      // tamper, the exact PLUGFORGE.MD §5 "tamper rejected" row. ──
+      t0 = Date.now();
+      const tampered = tamperOneByte(captured.rawBody);
+      if (tampered === captured.rawBody) throw new Error('tamperOneByte() produced an identical body — test is vacuous');
+      const tamperVerified = verifyWebhook(captured.headers, tampered, subscription.secret);
+      stages.push({ name: 'tamper_reject', ms: Date.now() - t0 });
+      if (tamperVerified) {
+        throw new Error('verifyWebhook() returned TRUE for a one-byte-tampered body — tamper NOT rejected');
+      }
+
+      // ── Stage 8 (TRO-615): first-attempt delivery latency P95 over a
+      // burst of `deliveryLatencySampleSize` documents. Burst (create all
+      // first, then wait for all) rather than one-at-a-time: the real
+      // deliverer's `DEFAULT_POLL_INTERVAL_MS` is 1 s (deliverer.ts:123), so
+      // 20 sequential create→wait cycles would cost ~20 s of pure poll
+      // latency for no extra proof; a burst is also the more realistic P95.
+      // Latency per delivery = listener receivedAt − the moment
+      // documents.create() resolved, correlated by the payload's data.id
+      // (events.ts documentCreatedData.id); arrival order is the fallback
+      // only if a payload somehow lacks it. ──
+      t0 = Date.now();
+      const sampleSize = config.deliveryLatencySampleSize ?? 20;
+      const alreadyReceived = listener.requests.length; // the single TTFE delivery above
+      const createdAtById = new Map<string, number>();
+      const createdAtInOrder: number[] = [];
+      for (let i = 0; i < sampleSize; i++) {
+        const doc = await client.documents.create({ title: `TRO-615 p95 sample ${i + 1}/${sampleSize} ${runId}` });
+        const resolvedAt = Date.now();
+        createdAtById.set(doc.id, resolvedAt);
+        createdAtInOrder.push(resolvedAt);
+      }
+      const p95WaitMs = config.stageBudgetsMs.wait_for_delivery ?? 15_000;
+      const allRequests = await listener.waitForCount(alreadyReceived + sampleSize, p95WaitMs);
+      const burstRequests = allRequests.slice(alreadyReceived);
+      let correlatedById = 0;
+      deliveryLatenciesMs = burstRequests.map((req, i) => {
+        const id = documentIdFromDelivery(req.rawBody);
+        const createdAt = id !== null ? createdAtById.get(id) : undefined;
+        if (createdAt !== undefined) {
+          correlatedById++;
+          return req.receivedAt - createdAt;
+        }
+        const fallback = createdAtInOrder[i];
+        if (fallback === undefined) throw new Error(`no create timestamp for delivery #${i} (arrival-order fallback)`);
+        return req.receivedAt - fallback;
+      });
+      stages.push({ name: 'delivery_p95', ms: Date.now() - t0 });
+      console.log(
+        `[delivery_p95] ${burstRequests.length} deliveries; ${correlatedById} correlated by payload data.id, ` +
+          `${burstRequests.length - correlatedById} by arrival order`
+      );
     } finally {
       await listener.close();
       if (subscriptionId) {
@@ -536,9 +673,34 @@ async function main(): Promise<void> {
       }
     }
 
-    const evaluation = evaluateDrillStages(stages, config);
+    // ── TRO-615 test-only: replace the measured P95 sample after the real
+    // work, so the P95 gate itself can be shown to fail. ──
+    const p95Override = parseSimulateP95Override();
+    if (p95Override !== null) {
+      const n = Math.max(1, deliveryLatenciesMs.length);
+      deliveryLatenciesMs = Array.from({ length: n }, () => p95Override);
+      console.log(
+        `[DRILL_TTFE_SIMULATE_P95_MS] replaced the measured delivery-latency sample with ${n} × ${p95Override}ms (test-only, never for real budgets)`
+      );
+    }
+
+    const evaluation = evaluateDrillStages(stages, config, deliveryLatenciesMs);
     console.log(formatDrillEvaluation(stages, evaluation));
     exitCode = evaluation.pass ? 0 : 1;
+
+    // ── TRO-615: the single, first delivery is held to the same "< 2 s"
+    // bound as the P95 (PLUGFORGE.MD §5 "signed POST < 2 s"). Independent
+    // of stageBudgetsMs.wait_for_delivery (15 s), which is only the wait's
+    // timeout / "which stage hung" ceiling. ──
+    const firstDelivery = stages.find((s) => s.name === 'wait_for_delivery');
+    if (config.deliveryLatencyP95Ms !== undefined && firstDelivery && firstDelivery.ms > config.deliveryLatencyP95Ms) {
+      console.log(
+        `first_delivery_bound: wait_for_delivery ${firstDelivery.ms}ms > ${config.deliveryLatencyP95Ms}ms — FAIL`
+      );
+      exitCode = 1;
+    } else if (firstDelivery && config.deliveryLatencyP95Ms !== undefined) {
+      console.log(`first_delivery_bound: wait_for_delivery ${firstDelivery.ms}ms <= ${config.deliveryLatencyP95Ms}ms — ok`);
+    }
 
     await cleanupPrincipal(pool, principal);
   } catch (error) {
