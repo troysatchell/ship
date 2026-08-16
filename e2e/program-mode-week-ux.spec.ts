@@ -13,7 +13,21 @@
 
 import { test, expect, Page } from './fixtures/isolated-env'
 
-// Make tests run serially to prevent race conditions with sprint creation
+// Make tests run serially to prevent race conditions with sprint creation.
+//
+// TRO-609: this is file-scoped, so ANY single failure anywhere in the file skips
+// every test after it (54 tests, one failure -> 30 skipped, confirmed live). That
+// blind spot is real: keep it in mind when a "pass" summary for this file looks too
+// clean. It was NOT rescoped to per-describe-block serial mode here, on purpose -
+// e2e/fixtures/isolated-env.ts gives each Playwright *worker* one persistent Postgres
+// container shared across every test that worker runs (not reset per test), and
+// several blocks below (Phase 3: Week Creation UX, Phase 3 Continued, Integration)
+// mutate that shared week/sprint data via cleanupExtraSprints()/creation flows. Under
+// `fullyParallel: true`, un-grouping this file would let those mutations interleave
+// with other blocks' read assertions (window/issue counts) on the same worker DB in
+// whatever order the scheduler picks - a real race, not a hypothetical one. Splitting
+// this safely needs a full read/write audit per block; that's a separate, larger
+// investigation than this ticket, not a change to make speculatively.
 test.describe.configure({ mode: 'serial' })
 
 // =============================================================================
@@ -487,88 +501,35 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
   test('Issues tab has sprint filter dropdown', async ({ page }) => {
     await clickIssuesTab(page)
 
-    const select = page.locator('select').first()
-    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-    // Options inside closed select are hidden - check existence with toBeAttached
-    await expect(page.locator('option').filter({ hasText: 'All Weeks' })).toBeAttached()
+    // Sprint filter is a Radix Popover + cmdk Combobox (web/src/components/ui/Combobox.tsx),
+    // not a native <select> - it never has been, since it was introduced (6adf8f6).
+    const sprintFilter = page.getByRole('combobox', { name: 'Filter issues by week' })
+    await expect(sprintFilter, 'Issues tab should have a sprint filter combobox').toBeVisible({ timeout: 3000 })
+
+    await sprintFilter.click()
+    await expect(
+      page.locator('[cmdk-item]').filter({ hasText: 'All Weeks' }),
+      'Sprint filter should offer an "All Weeks" clear option'
+    ).toBeVisible({ timeout: 3000 })
   })
 
   test('sprint filter has "All Weeks" as default option', async ({ page }) => {
     await clickIssuesTab(page)
 
-    const select = page.locator('select').first()
-    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    const sprintFilter = page.getByRole('combobox', { name: 'Filter issues by week' })
+    await expect(sprintFilter, 'Issues tab should have a sprint filter combobox').toBeVisible({ timeout: 3000 })
 
-    // Check that All Weeks is selected by default
-    const selectedValue = await select.inputValue()
-    expect(
-      selectedValue === '' || selectedValue === 'all',
-      `Default sprint filter value should be empty/"all", got "${selectedValue}"`
-    ).toBeTruthy()
+    // Unselected state shows the placeholder text, "All Weeks"
+    await expect(sprintFilter, 'Sprint filter should default to "All Weeks" (no filter applied)').toHaveText('All Weeks')
   })
 
-  test('sprint filter has "Backlog (No Week)" option', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    await expect(
-      page.locator('select').first(),
-      'Issues tab should have a sprint filter <select>'
-    ).toBeVisible({ timeout: 3000 })
-    // Options inside closed select are hidden - check existence with toBeAttached
-    await expect(page.locator('option').filter({ hasText: /Backlog|No Week/ })).toBeAttached()
-  })
-
-  test('sprint filter has "Active Week" option', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    await expect(
-      page.locator('select').first(),
-      'Issues tab should have a sprint filter <select>'
-    ).toBeVisible({ timeout: 3000 })
-    await expect(page.locator('option').filter({ hasText: 'Active Week' })).toBeAttached()
-  })
-
-  test('sprint filter has "Upcoming Weeks" option', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    await expect(
-      page.locator('select').first(),
-      'Issues tab should have a sprint filter <select>'
-    ).toBeVisible({ timeout: 3000 })
-    await expect(page.locator('option').filter({ hasText: 'Upcoming' })).toBeAttached()
-  })
-
-  test('sprint filter has "Completed Weeks" option', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    await expect(
-      page.locator('select').first(),
-      'Issues tab should have a sprint filter <select>'
-    ).toBeVisible({ timeout: 3000 })
-    await expect(page.locator('option').filter({ hasText: 'Completed' })).toBeAttached()
-  })
-
-  test('filtering by "Backlog" shows only issues without sprint', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    const select = page.locator('select').first()
-    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-    await select.selectOption('backlog')
-
-    // All visible issues should show "—" in Sprint column (no sprint)
-    const rows = page.locator('tbody tr')
-    await expect(rows.first(), 'Seed data should include at least one backlog issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
-    const rowCount = await rows.count()
-
-    // Assert per-row on the sprint column (second-to-last cell) rather than
-    // comparing counts across the whole table: `td` filtered by '—' also
-    // matches other columns (assignee, estimate, due date) that render an
-    // em dash, so a global count can coincidentally equal rowCount even when
-    // filtering is wrong.
-    for (let i = 0; i < rowCount; i++) {
-      await expect(rows.nth(i).locator('td:nth-last-child(2)')).toHaveText('—')
-    }
-  })
+  // NOTE: bucketed week filters ("Backlog (No Week)", "Active Week", "Upcoming Weeks",
+  // "Completed Weeks", and filtering by any of them) were removed here - they assert a
+  // filter feature that has never existed in web/src. `sprintOptions` (IssuesList.tsx) is
+  // built only from the real sprint names attached to issues, and `sprintFilter` is a
+  // strict equality match against real sprint IDs; there is no bucket/category concept.
+  // Same pattern as TRO-293/TRO-596 (test asserts UI that was never built). Re-file as a
+  // feature request if this filtering is actually wanted.
 
   test('issues table has checkbox column for bulk selection', async ({ page }) => {
     await clickIssuesTab(page)
@@ -600,7 +561,7 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
 
     // Should see bulk action bar with selection count
     await expect(
-      page.getByText(/\d+ issue[s]? selected/),
+      page.getByText(/^\d+ selected$/),
       'Selecting an issue should show the bulk action bar with a selection count'
     ).toBeVisible({ timeout: 3000 })
   })
@@ -616,54 +577,80 @@ test.describe('Phase 4: Issues Tab Filtering', () => {
     await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
     await checkbox.click()
 
-    // Should see Move to Week dropdown (second select element after sprint filter)
+    // "Move to Week" is a custom ActionButton + role="menu" dropdown
+    // (BulkActionBar.tsx), not a native <select>.
     await expect(
-      page.locator('select').nth(1),
-      'Bulk action bar should show a "Move to Week" dropdown once an issue is selected'
+      page.getByRole('button', { name: 'Move to Week' }),
+      'Bulk action bar should show a "Move to Week" button once an issue is selected'
     ).toBeVisible({ timeout: 3000 })
+  })
+
+  // Regression test for TRO-609: guards the exact defect class this ticket fixed —
+  // the menu must list real week names (BulkActionBar.tsx renders `sprint.name` per
+  // sprint), never the bucketed category labels ("Active Week"/"Upcoming Weeks"/
+  // "Completed Weeks"/"Backlog (No Week)") that 8 deleted tests wrongly assumed
+  // existed. If those labels ever appear here, someone reintroduced the never-built
+  // bucket-filter concept this ticket removed.
+  test('"Move to Week" menu lists real week names, not category buckets', async ({ page }) => {
+    await clickIssuesTab(page)
+
+    const firstRow = page.locator('tbody tr').first()
+    await expect(firstRow, 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
+    await firstRow.hover()
+
+    const checkbox = page.locator('td').getByRole('checkbox').first()
+    await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
+    await checkbox.click()
+
+    const moveButton = page.getByRole('button', { name: 'Move to Week' })
+    await expect(moveButton).toBeVisible({ timeout: 3000 })
+    await moveButton.click()
+
+    const menu = page.getByRole('menu')
+    await expect(menu).toBeVisible({ timeout: 3000 })
+
+    const items = await menu.getByRole('menuitem').allTextContents()
+    expect(items.some(t => /Week \d+|Week of/.test(t)), `expected a real week name, got: ${items.join(', ')}`).toBe(true)
+    for (const bucket of ['Active Week', 'Upcoming Weeks', 'Completed Weeks', 'Backlog (No Week)']) {
+      expect(items, `"Move to Week" menu should never show the bucket label "${bucket}"`).not.toContain(bucket)
+    }
   })
 
   test('bulk "Move to Week" updates issues', async ({ page }) => {
     await clickIssuesTab(page)
 
-    const select = page.locator('select').first()
-    await expect(select, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-
-    // Filter to backlog to find issues without sprint. The sprint filter is
-    // applied client-side over already-fetched issues (IssuesList.tsx filters
-    // by sprintFilter state, not a new query), so there is no network request
-    // to wait on here -- wait on the rendered result instead.
-    await select.selectOption('backlog')
-
+    // No bucketed "backlog" filter exists (see NOTE above) - operate on whatever
+    // issue is first in the table instead of pre-filtering to an unassigned one.
     const rows = page.locator('tbody tr')
-    await expect(rows.first(), 'Seed data should include at least one backlog issue (e2e/fixtures/isolated-env.ts)').toBeVisible({ timeout: 5000 })
+    await expect(rows.first(), 'Seed data should include at least one issue row').toBeVisible({ timeout: 5000 })
 
-    // Select first backlog issue
     const firstRow = rows.first()
     await firstRow.hover()
     const checkbox = page.locator('td').getByRole('checkbox').first()
     await expect(checkbox, 'Issue row should expose a selection checkbox on hover').toBeVisible({ timeout: 3000 })
     await checkbox.click()
 
-    // Use Move to Week dropdown (second select)
-    const moveDropdown = page.locator('select').nth(1)
-    await expect(moveDropdown, 'Bulk action bar should show a "Move to Week" dropdown').toBeVisible({ timeout: 3000 })
+    const moveButton = page.getByRole('button', { name: 'Move to Week' })
+    await expect(moveButton, 'Bulk action bar should show a "Move to Week" button').toBeVisible({ timeout: 3000 })
+    await moveButton.click()
 
-    // Get available sprint options
-    const options = await moveDropdown.locator('option').allTextContents()
-    const sprintOption = options.find(opt => opt.match(/Week \d+|Week of/))
-    if (!sprintOption) {
-      throw new Error(`"Move to Week" dropdown should list at least one sprint option, got: ${options.join(', ')}`)
+    const menu = page.getByRole('menu')
+    await expect(menu, '"Move to Week" button should open a menu of weeks').toBeVisible({ timeout: 3000 })
+
+    const sprintItem = menu.getByRole('menuitem').filter({ hasText: /Week \d+|Week of/ }).first()
+    if (await sprintItem.count() === 0) {
+      const items = await menu.getByRole('menuitem').allTextContents()
+      throw new Error(`"Move to Week" menu should list at least one week option, got: ${items.join(', ')}`)
     }
 
-    // Wait for API response when moving
+    // Bulk moves go through POST /api/issues/bulk (useIssuesQuery.ts's
+    // bulkUpdateIssuesApi), not a per-issue PATCH.
     const [response] = await Promise.all([
-      page.waitForResponse(resp => resp.url().includes('/api/issues/') && resp.request().method() === 'PATCH'),
-      moveDropdown.selectOption({ label: sprintOption })
+      page.waitForResponse(resp => resp.url().includes('/api/issues/bulk') && resp.request().method() === 'POST'),
+      sprintItem.click()
     ])
 
-    // API returns 200 for success, 400 if issue has no estimate
-    expect([200, 400]).toContain(response.status())
+    expect(response.status()).toBe(200)
   })
 })
 
@@ -934,99 +921,37 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
     await navigateToProgram(page)
   })
 
-  test('filtering by "Active Week" shows only issues in active sprint', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    const selectElement = page.locator('select').first()
-    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-    await selectElement.selectOption('active')
-
-    // Verify issues shown are in the active sprint (not backlog, not other sprints).
-    // Seed data guarantees active-sprint issues (e2e/fixtures/isolated-env.ts), so
-    // require at least one row rather than silently skipping the check below.
-    const rows = page.locator('tbody tr')
-    await expect(rows.first(), 'Seed data should include at least one active-sprint issue').toBeVisible({ timeout: 5000 })
-    const count = await rows.count()
-
-    for (let i = 0; i < Math.min(count, 5); i++) {
-      const sprintCell = rows.nth(i).locator('td').last()
-      const text = await sprintCell.textContent()
-      expect(text).not.toBe('—')
-    }
-  })
-
-  test('filtering by "Upcoming Weeks" shows only issues in upcoming sprints', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    const selectElement = page.locator('select').first()
-    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-    await selectElement.selectOption('upcoming')
-
-    // Seed data guarantees an upcoming-sprint issue (e2e/fixtures/isolated-env.ts).
-    const rows = page.locator('tbody tr')
-    await expect(rows.first(), 'Seed data should include at least one upcoming-sprint issue').toBeVisible({ timeout: 5000 })
-
-    const firstSprintCell = rows.first().locator('td').last()
-    const text = await firstSprintCell.textContent()
-    expect(text).not.toBe('—')
-  })
-
-  test('filtering by "Completed Weeks" shows only issues in completed sprints', async ({ page }) => {
-    await clickIssuesTab(page)
-
-    const selectElement = page.locator('select').first()
-    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-    await selectElement.selectOption('completed')
-
-    // Seed data guarantees a completed-sprint issue (e2e/fixtures/isolated-env.ts).
-    const rows = page.locator('tbody tr')
-    await expect(rows.first(), 'Seed data should include at least one completed-sprint issue').toBeVisible({ timeout: 5000 })
-
-    const firstSprintCell = rows.first().locator('td').last()
-    const text = await firstSprintCell.textContent()
-    expect(text).not.toBe('—')
-  })
+  // NOTE: "filtering by Active Week/Upcoming Weeks/Completed Weeks" tests were removed
+  // here for the same reason as Phase 4 above - no bucketed week filter exists.
 
   test('sprint filter has specific sprint options', async ({ page }) => {
     await clickIssuesTab(page)
 
-    const selectElement = page.locator('select').first()
-    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    const sprintFilter = page.getByRole('combobox', { name: 'Filter issues by week' })
+    await expect(sprintFilter, 'Issues tab should have a sprint filter combobox').toBeVisible({ timeout: 3000 })
+    await sprintFilter.click()
 
-    // Wait for sprints to load by checking for option elements with sprint names.
     // Seed data creates 5 real sprint documents per program (current-2..+2).
-    const weekOption = page.locator('option').filter({ hasText: /Week of/ }).first()
-    await expect(weekOption, 'Sprint filter should list individual "Week of" sprint options').toBeAttached({ timeout: 5000 })
-
-    // Should see individual sprint options in the dropdown
-    const options = await selectElement.locator('option').allTextContents()
-
-    // Should have specific sprint names beyond just the category filters
-    const sprintOptions = options.filter(opt => opt.match(/Week of/))
-    expect(sprintOptions.length).toBeGreaterThan(0)
+    const weekOption = page.locator('[cmdk-item]').filter({ hasText: /Week of/ }).first()
+    await expect(weekOption, 'Sprint filter should list individual "Week of" sprint options').toBeVisible({ timeout: 5000 })
   })
 
   test('filtering by specific sprint shows only that sprint\'s issues', async ({ page }) => {
     await clickIssuesTab(page)
 
-    const selectElement = page.locator('select').first()
-    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
+    const sprintFilter = page.getByRole('combobox', { name: 'Filter issues by week' })
+    await expect(sprintFilter, 'Issues tab should have a sprint filter combobox').toBeVisible({ timeout: 3000 })
+    await sprintFilter.click()
 
-    // Wait for sprints to load by checking for option elements with sprint names
-    const weekOption = page.locator('option').filter({ hasText: /Week of/ }).first()
-    await expect(weekOption, 'Sprint filter should list individual "Week of" sprint options').toBeAttached({ timeout: 5000 })
+    const weekOption = page.locator('[cmdk-item]').filter({ hasText: /Week of/ }).first()
+    await expect(weekOption, 'Sprint filter should list individual "Week of" sprint options').toBeVisible({ timeout: 5000 })
+    const sprintLabel = (await weekOption.textContent())?.trim() || ''
+    await weekOption.click()
 
-    // Get sprint options
-    const options = await selectElement.locator('option').allTextContents()
-    const sprintOption = options.find(opt => opt.match(/Week of/))
-    if (!sprintOption) {
-      throw new Error(`Expected at least one "Week of" sprint option, got: ${options.join(', ')}`)
-    }
-
-    await selectElement.selectOption({ label: sprintOption })
+    await expect(sprintFilter, 'Sprint filter should show the selected week').toHaveText(sprintLabel)
 
     const rows = page.locator('tbody tr')
-    await expect(rows.first(), `Seed data should include at least one issue in sprint "${sprintOption}"`).toBeVisible({ timeout: 5000 })
+    await expect(rows.first(), `Seed data should include at least one issue in sprint "${sprintLabel}"`).toBeVisible({ timeout: 5000 })
     const count = await rows.count()
 
     // All visible issues should be in that specific sprint
@@ -1051,7 +976,7 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
 
     // Verify bulk action bar appears
     await expect(
-      page.getByText(/\d+ issue[s]? selected/),
+      page.getByText(/^\d+ selected$/),
       'Selecting an issue should show the bulk action bar'
     ).toBeVisible({ timeout: 3000 })
 
@@ -1059,7 +984,7 @@ test.describe('Phase 4 Continued: Filter Functionality', () => {
     await checkbox.click()
 
     // Bulk action bar should disappear
-    await expect(page.getByText(/\d+ issue[s]? selected/)).not.toBeVisible()
+    await expect(page.getByText(/^\d+ selected$/)).not.toBeVisible()
   })
 
 })
@@ -1089,30 +1014,7 @@ test.describe('Integration: Full User Flows', () => {
     expect(hasTimeline || hasActive).toBeTruthy()
   })
 
-  test('user filters issues by backlog → sees only unassigned issues', async ({ page }) => {
-    await navigateToProgram(page)
-    await clickIssuesTab(page)
-
-    // Apply backlog filter (first <select> element)
-    const selectElement = page.locator('select').first()
-    await expect(selectElement, 'Issues tab should have a sprint filter <select>').toBeVisible({ timeout: 3000 })
-    await selectElement.selectOption('backlog')
-
-    // Verify filtered results. Seed data guarantees backlog issues
-    // (e2e/fixtures/isolated-env.ts), so require at least one row rather than
-    // letting an empty table make this loop -- and the assertions inside it --
-    // a no-op.
-    const rows = page.locator('tbody tr')
-    await expect(rows.first(), 'Seed data should include at least one backlog issue').toBeVisible({ timeout: 5000 })
-    const count = await rows.count()
-
-    for (let i = 0; i < count; i++) {
-      // Sprint column is second-to-last (last is action menu with ⋮)
-      const cells = rows.nth(i).locator('td')
-      const cellCount = await cells.count()
-      const sprintCell = cells.nth(cellCount - 2)
-      await expect(sprintCell).toHaveText('—')
-    }
-  })
+  // NOTE: "user filters issues by backlog" was removed here for the same reason as
+  // Phase 4 above - no bucketed week filter exists (see that NOTE for detail).
 
 })
