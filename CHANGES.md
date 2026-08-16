@@ -59,6 +59,48 @@ application code touched.
 
 ---
 
+## `agent/Dockerfile` — every `ship-agent` Render deploy has been `build_failed` since PF-702 (2026-08-14), never caught
+
+**Non-code / Docker-config ticket — a real `docker build` + `docker run`, not vitest** (same disclosed-exception
+class as TF-1..TF-10/TRO-488/TRO-590: no unit test exercises a Dockerfile, so the proof is an actual build
+and boot of the image).
+
+**Found live, not from a ticket.** Troy asked why the `ship-agent` Render service's builds were failing and
+whether the instance plan was out of date. Checked Render's own deploy history directly
+(`render deploys list srv-d9otunmgekts73eqs0h0`): **every one of the last 20 deploys is `status: build_failed`**,
+going back to at least `fd3db28` (2026-08-16 05:36Z) — this predates this session entirely, so none of tonight's
+merges caused it. `render logs` on the latest failure showed the real error: `src/shipClient.ts(37,112): error
+TS2307: Cannot find module '@ship/sdk' or its corresponding type declarations`, `tsc` exit code 2.
+
+**Root cause.** `agent/src/shipClient.ts` started importing `@ship/sdk` at `d50d5d66` (PF-702/TRO-428,
+2026-08-14) and `2f1284f8` (PF-703/TRO-435) — a real, intentional workspace dependency
+(`agent/package.json`'s `"@ship/sdk": "workspace:*"`). `agent/Dockerfile` was never updated: its manifest-copy
+step listed `api/web/shared/agent` (a stale comment, `pnpm-workspace.yaml` also lists `sdk` and
+`integrations/*`) but never copied `sdk/package.json` or `sdk/` source, and never built `@ship/sdk` before
+`pnpm --filter @ship/agent build` — so `node_modules/@ship/sdk` never existed in the build stage, and `tsc`
+correctly failed to resolve it. Same gap in the runtime stage: `sdk/package.json` and `sdk/dist` were never
+copied, so even a successful build would have crash-looped on `require('@ship/sdk')` at container start.
+
+**Fix.** `agent/Dockerfile`: build stage now copies `sdk/package.json` alongside the other workspace manifests,
+copies `sdk/` source, and runs `pnpm --filter @ship/sdk build` before `pnpm --filter @ship/agent build`.
+Runtime stage now copies `sdk/package.json` (for the `--prod` install) and `COPY --from=build /app/sdk/dist
+./sdk/dist`.
+
+**Verified for real, not just reasoned about.** `docker build -f agent/Dockerfile .` from a clean checkout of
+this branch: build stage's `tsc` step (both `@ship/sdk` and `@ship/agent`) completed clean, full image export
+succeeded. Then `docker run` the resulting image: process started, logged `[agent] listening on :3100`, no
+`MODULE_NOT_FOUND` at runtime (the config-missing warnings printed — `AGENT_INTERNAL_SECRET`,
+`ANTHROPIC_API_KEY`, etc. — are expected with no secrets injected in a local smoke test, unrelated to this fix).
+
+**How to run it.** `docker build -f agent/Dockerfile -t ship-agent-test .` from repo root; `docker run --rm -p
+13100:3100 -e NODE_ENV=production ship-agent-test` and confirm `[agent] listening on :3100` in the logs with no
+`Cannot find module` error.
+
+**Roll back.** Revert this commit; `agent/Dockerfile` returns to copying only `api/web/shared/agent` manifests
+(reintroduces the build failure).
+
+---
+
 ## TRO-490 — jsonToYaml emitted unparseable/mis-indented openapi.yaml; converter fixed and proven by round-trip
 
 **Observed, on `main`, by reading the tracked artifact directly.** `api/src/swagger.ts`'s hand-rolled
