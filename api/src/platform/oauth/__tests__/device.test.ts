@@ -393,6 +393,44 @@ describe('/oauth/device/* (PF-106)', () => {
     });
   });
 
+  // ── TRO-589: user_code hashed at rest ────────────────────────────────
+  // device_code_hash has always been hashed; user_code — the human-typed
+  // 8-char code, same table — was found stored in plaintext (this ticket's
+  // own PF-106/TRO-425 landing agent's security self-review). Queries the
+  // DB directly (not through this module's own lookup helpers, which would
+  // trivially "pass" either way) to prove the column itself never holds the
+  // plaintext value.
+
+  describe('TRO-589: user_code is hashed at rest', () => {
+    it('stores a SHA-256 hash of user_code, not the plaintext code returned to the client', async () => {
+      const codeRes = await requestDeviceCode(publicApp.client_id, 'documents:read');
+      expect(codeRes.status).toBe(200);
+      const { device_code: deviceCode, user_code: plaintextUserCode } = requireDeviceCodeBody(codeRes.body);
+
+      const rowResult = await pool.query<{ user_code: string }>(
+        `SELECT user_code FROM oauth_device_codes WHERE device_code_hash = $1`,
+        [crypto.createHash('sha256').update(deviceCode).digest('hex')]
+      );
+      const storedUserCode = requireRow(rowResult.rows[0], 'device code row (user_code column)').user_code;
+
+      // The DB column must not hold the plaintext value the human sees/types.
+      expect(storedUserCode).not.toBe(plaintextUserCode);
+      // It must be exactly the SHA-256 hex digest of that plaintext value —
+      // same deterministic hash-at-rest pattern device_code_hash already
+      // uses — proving this is a real, reversible-by-rehashing lookup key,
+      // not some other transformation (a salted hash would break lookups;
+      // a truncation/encoding wouldn't satisfy "hashed").
+      expect(storedUserCode).toBe(crypto.createHash('sha256').update(plaintextUserCode).digest('hex'));
+      expect(storedUserCode).toMatch(/^[0-9a-f]{64}$/);
+
+      // And the hash still works for its actual purpose: a human typing the
+      // plaintext code at the verify page must still resolve to this row.
+      const approveRes = await submitVerifyDecision(plaintextUserCode, 'approve', sessionCookie);
+      expect(approveRes.status).toBe(303);
+      expect(requireLocation(approveRes)).toBe(`${WEB_ORIGIN}/oauth-device-verify?result=approved`);
+    });
+  });
+
   // ── Misc negative cases ───────────────────────────────────────────────
 
   describe('negative cases', () => {
