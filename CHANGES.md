@@ -49,6 +49,59 @@ violation with `field: 'optionalDependencies'` in the updated test file.
 
 ---
 
+## TRO-500 — PF-003 follow-up: boundary lint misses dynamic `import()` — `ImportExpression` never hooked
+
+**The gap.** TRO-399's PF-003 boundary rule (`eslint.config.mjs`'s `apiV1BoundaryRules`) enforces
+PLUGFORGE.MD §2.1 via `no-restricted-imports`, which ESLint only hooks on
+`ImportDeclaration`/`ExportNamedDeclaration`/`ExportAllDeclaration`/`TSImportEqualsDeclaration`. It
+never visits `ImportExpression` — the AST node for dynamic `import(...)` — so a call like
+`import('../../../routes/documents')` from `api/src/platform/api/v1/**` silently bypassed the
+boundary rule entirely: same forbidden coupling the rule exists to block, zero errors reported.
+Verified directly (before writing the fix) by lint-checking a real fixture file under
+`api/src/platform/api/v1/` containing exactly that dynamic import: `pnpm exec eslint` exit 0, no
+diagnostics.
+
+**What changed.** `eslint.config.mjs`'s `apiV1BoundaryRules` gained a second rule,
+`no-restricted-syntax`, with a selector `ImportExpression > Literal[value=/(^|\/)routes(\/|$)/]` —
+the selector-language equivalent of the existing `no-restricted-imports` pattern pair
+(`'**/routes/**'` / `'**/routes'`): it matches a `routes` path *segment* at any `../` depth,
+including a bare `'routes'` specifier, and deliberately does **not** match `routesFoo/**` or an
+unrelated `services/**` import (verified with ESLint's `Linter` class directly against all four
+cases before wiring the rule into the flat config). No existing rule's severity or `files` glob
+changed — this is additive, scoped to the same `files: ['api/src/platform/api/v1/**/*.ts']` block
+TRO-399 added.
+
+**Regression tests.** Extended `api/src/platform/__tests__/boundary-lint.test.ts` (same file,
+fixture-file technique TRO-399 established — real temporary files under
+`api/src/platform/api/v1/__pf003_test_fixtures__/`, removed in `finally`) with two new cases
+mirroring fixtures (a)/(b) but through `import('...')` instead of static `import ... from '...'`:
+- fixture (c): dynamic `import('../../../../routes/documents')` — asserts `no-restricted-syntax`
+  fires.
+- fixture (d): dynamic `import('../../../../services/foo')` (sibling, non-routes path) — asserts
+  zero `no-restricted-syntax` errors.
+
+**AC evidence.** Wrote a real (non-test-harness) fixture pair directly under
+`api/src/platform/api/v1/__manual_verify__/` — one with `import('../../../routes/documents')`, one
+with `import('../../../services/foo')` — and ran `pnpm exec eslint` on each: the routes fixture
+produced exactly one `no-restricted-syntax` error naming PLUGFORGE.MD §2.1; the services fixture
+produced zero errors, exit 0. Deleted both after confirming. `pnpm exec eslint
+api/src/platform/api/v1/` against the real (non-fixture) tree: exit 0, unchanged — this rule adds
+no new violations to code that already exists.
+
+**How to run it.**
+```
+pnpm exec eslint api/src/platform/api/v1/                    # boundary rule (both halves)
+pnpm --filter @ship/api test -- boundary-lint                # regression test, all 4 fixtures
+```
+
+**Rollback.** Revert this commit. The change is additive — one new `no-restricted-syntax` array
+entry inside the existing `apiV1BoundaryRules` object and two new `it()` blocks in
+`boundary-lint.test.ts` — no existing rule, severity, or `files` glob was touched, so reverting
+drops only the dynamic-import half of the boundary check; the original `no-restricted-imports`
+(static import) enforcement from TRO-399 is unaffected either way.
+
+---
+
 ## `agent/Dockerfile` — every `ship-agent` Render deploy has been `build_failed` since PF-702 (2026-08-14), never caught
 
 **Non-code / Docker-config ticket — a real `docker build` + `docker run`, not vitest** (same disclosed-exception
@@ -685,6 +738,23 @@ Also `integrations/cli/src/__tests__/demoScript.drift.test.ts`: a filesystem-onl
 that pins every CLI output line the script quotes to the command source that prints it, checks
 the captured frame matches `formatDeliveryLine()`'s exact shape, and asserts the stale W5 claims
 are gone (red against the pre-rewrite script — it contained "PF-600 is failing CI"; green now).
+
+**Addendum (2026-08-16, re-grounded on `6b60377b` after PR #300 landed).** The script's Act 3 had
+gone stale the moment TRO-615/TRO-621 merged in the same convoy: the drill now prints two more
+stages (`tamper_reject`, `delivery_p95`), a `delivery_p95_ms … (target < 2000ms)` line, a
+`first_delivery_bound … — ok` line and a `[mode] api: …` line, and CI has a second job
+`drill · TTFE image-mode (TRO-621)`. Act 3 now quotes both jobs' output verbatim from a real green
+run (GitHub Actions run `31955603688`, jobs `95187181592`/`95187329714`, commit `2be3d1ef` = the
+PR #300 tip; `scripts/drill` and the drill CI jobs are unchanged between that commit and
+`6b60377b`) instead of illustrative numbers. Act 2 gains an optional beat on the TRO-616 Audit page
+(`/developer/audit`), labels from `web/src/pages/DeveloperAudit.tsx`. Provenance section updated
+accordingly, and notes that the Render deployment's running commit was not verified (auto-deploy
+broken, TRO-361) — the demo is local. `demoScript.drift.test.ts` extended from 9 to 20 pinned
+strings (drill header/stages from `ttfe.ts`/`thresholds.ts`, both CI job display names + the
+image-mode step from `ci.yml`, two Audit-page strings) — it went red on the first draft of this
+revision (three quoted phrases were line-wrapped in the markdown) and is green after unwrapping
+them, so the guard demonstrably bites. Verify: `pnpm --filter @ship/cli exec vitest run
+src/__tests__/demoScript.drift.test.ts` (22 passed).
 
 **Why.** PF-908 is a human checkpoint (Troy records and posts); the agent-side halves — accurate
 script, real screenshot, post text — were stale or missing.

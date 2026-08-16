@@ -108,6 +108,18 @@ const webPagesCorrectnessRules = {
 // and would equally catch a future absolute/aliased form. Deliberately NOT
 // '**/routes*' or a bare 'routes' — this must not false-positive on an
 // unrelated 'services/foo' import or a same-named local file.
+//
+// TRO-500 (PF-003 follow-up): `no-restricted-imports` hooks
+// `ImportDeclaration`/`ExportNamedDeclaration`/`ExportAllDeclaration`/
+// `TSImportEqualsDeclaration` only — it never visits `ImportExpression`
+// (dynamic `import('../../../routes/documents')`), so that form silently
+// bypassed the boundary door above. `no-restricted-syntax` closes that gap
+// with an AST selector instead of a path-pattern matcher; the regex
+// `(^|\/)routes(\/|$)` is the selector-language equivalent of
+// `no-restricted-imports`'s `'**/routes/**'` / `'**/routes'` pair — same
+// intent (match a `routes` path *segment*, any depth of `../`), same
+// deliberate exclusion of `routesFoo/**` or an unrelated `services/**`
+// import. Verified directly against ESLint's `Linter` before adding here.
 const apiV1BoundaryRules = {
   ...apiCorrectnessRules,
   'no-restricted-imports': [
@@ -120,6 +132,14 @@ const apiV1BoundaryRules = {
             'api/src/platform/api/v1/** must not import api/src/routes/** (internal route handlers) — PLUGFORGE.MD §2.1. Both layers call the same domain services; import the service, not the route.',
         },
       ],
+    },
+  ],
+  'no-restricted-syntax': [
+    'error',
+    {
+      selector: 'ImportExpression > Literal[value=/(^|\\/)routes(\\/|$)/]',
+      message:
+        'api/src/platform/api/v1/** must not import api/src/routes/** (internal route handlers) — PLUGFORGE.MD §2.1. Both layers call the same domain services; import the service, not the route. (This is the dynamic-import() form of the no-restricted-imports rule above — see TRO-500.)',
     },
   ],
 };

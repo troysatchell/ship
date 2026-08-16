@@ -28,6 +28,15 @@
  * rule's `no-restricted-imports` pattern (`**\/routes/**`) matches on the
  * import string regardless of how many `../` segments precede it — verified
  * directly against the real config before this test was written.
+ *
+ * TRO-500 (PF-003 follow-up): `no-restricted-imports` never hooks
+ * `ImportExpression` (dynamic `import(...)`), so that form bypassed the rule
+ * above entirely. `eslint.config.mjs`'s `apiV1BoundaryRules` now also carries
+ * a `no-restricted-syntax` entry with an `ImportExpression > Literal[value=...]`
+ * selector to close that gap. The two `dynamic import` fixtures below mirror
+ * fixtures (a) and (b) above but through `import('...')` instead of a static
+ * `import ... from '...'` — same routes-vs-services distinction, this time
+ * checking `no-restricted-syntax` messages instead of `no-restricted-imports`.
  */
 
 import { describe, it, expect, afterAll } from 'vitest';
@@ -113,5 +122,28 @@ describe('PF-003: boundary lint — platform/api/v1/** must not import api/src/r
     );
     const restrictedImportErrors = result.messages.filter((m) => m.ruleId === 'no-restricted-imports');
     expect(restrictedImportErrors).toEqual([]);
+  }, 30000);
+
+  it('fixture (c): dynamic import() of api/src/routes/** fails no-restricted-syntax (TRO-500)', async () => {
+    const result = await lintFixture(
+      'routes-dynamic-import.ts',
+      "export async function load() {\n  return import('../../../../routes/documents');\n}\n",
+    );
+    const restrictedSyntaxErrors = result.messages.filter((m) => m.ruleId === 'no-restricted-syntax');
+    expect(restrictedSyntaxErrors.length).toBeGreaterThan(0);
+    // Explicit destructure + check, not a non-null assertion (review-pattern
+    // rule 16) — see fixture (a) above for why.
+    const [firstError] = restrictedSyntaxErrors;
+    expect(firstError).toBeDefined();
+    expect(firstError?.message).toContain('routes');
+  }, 30000);
+
+  it('fixture (d): dynamic import() of api/src/services/** (a sibling, non-routes path) produces ZERO no-restricted-syntax errors', async () => {
+    const result = await lintFixture(
+      'services-dynamic-import.ts',
+      "export async function load() {\n  return import('../../../../services/foo');\n}\n",
+    );
+    const restrictedSyntaxErrors = result.messages.filter((m) => m.ruleId === 'no-restricted-syntax');
+    expect(restrictedSyntaxErrors).toEqual([]);
   }, 30000);
 });
