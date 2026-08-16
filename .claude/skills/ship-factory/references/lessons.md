@@ -46,6 +46,17 @@ Seeded 2026-07-29 from failures already documented in this project.
     `web/src/**/*.test.ts(x)`. The gate's regression-test check counts added cases in `*.spec.ts`
     too, but its test *execution* is only the two vitest projects and neither includes `e2e/`. An
     e2e-only regression test passes the check unexecuted.
+14. **File-scoped `test.describe.configure({mode:'serial'})` turns one failure into a blackout, not
+    just a skip.** TRO-609: a single early failure in `program-mode-week-ux.spec.ts` (54 tests)
+    skipped the other 30 — 56% of the file never ran, silently, on every prior run. Worse: the
+    whole file's assertions dated to one commit ("eliminate all test skips and fix test failures")
+    that converted `test.skip()`/empty tests into real assertions without checking them against the
+    running app — 13 tests asserted a native `<select>` where the UI has only ever been a
+    Radix+cmdk `Combobox`, 8 more asserted a bucketed week filter that was never built at all. Fixing
+    the first failure only exposed the next one further into the file (twice), each previously
+    invisible behind the same cascade. When a serial-mode e2e file "passes," check how many tests it
+    actually ran, not just the failure count — and treat a first real green run of an old serial file
+    as a fresh discovery pass, not a formality.
 
 ## Measurement
 
