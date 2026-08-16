@@ -469,6 +469,7 @@ We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for guideline
 - [Week Documentation Philosophy](./docs/week-documentation-philosophy.md) — Why weekly plans and retros work the way they do
 - [Accountability Philosophy](./docs/accountability-philosophy.md) — How Ship enforces accountability
 - [Accountability Manager Guide](./docs/accountability-manager-guide.md) — Using approval workflows
+- [PlugForge Pre-Search (Week 6)](./docs/submission/PLUGFORGE-PRESEARCH.md) — The three-phase pre-search checklist for the platform work, pre-filled from the PRD and repo with `file:line` citations; `[TROY — needs your answer]` blocks mark the personal answers still owed
 - [Contributing Guidelines](./CONTRIBUTING.md) — How to contribute
 - [Security Policy](./SECURITY.md) — Vulnerability reporting
 
