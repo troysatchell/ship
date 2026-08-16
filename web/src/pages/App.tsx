@@ -40,8 +40,9 @@ import { ProjectContextSidebar } from '@/components/sidebars/ProjectContextSideb
 import { InboxSidebar } from '@/components/InboxSidebar';
 import { useInboxQuery } from '@/hooks/useInboxQuery';
 import { AgentPill } from '@/components/agent/AgentPill';
+import { DeveloperSidebar } from '@/components/sidebars/DeveloperSidebar';
 
-type Mode = 'docs' | 'issues' | 'projects' | 'programs' | 'sprints' | 'team' | 'settings' | 'dashboard' | 'project-context';
+type Mode = 'docs' | 'issues' | 'projects' | 'programs' | 'sprints' | 'team' | 'settings' | 'dashboard' | 'project-context' | 'developer';
 
 export function AppLayout() {
   const { user, logout, isSuperAdmin, impersonating, endImpersonation } = useAuth();
@@ -88,6 +89,7 @@ export function AppLayout() {
     timeRemaining,
     warningType,
     resetTimer: resetSessionTimer,
+    dismissAbsoluteWarning,
   } = useSessionTimeout(handleSessionTimeout);
 
   // Check if user needs to post a standup today
@@ -204,6 +206,7 @@ export function AppLayout() {
     if (location.pathname.match(/^\/programs\/[^/]+\/sprints/)) return 'sprints';
     if (location.pathname.startsWith('/programs') || location.pathname.startsWith('/feedback')) return 'programs';
     if (location.pathname.startsWith('/team')) return 'team';
+    if (location.pathname.startsWith('/developer')) return 'developer';
     if (location.pathname.startsWith('/settings')) return 'settings';
     return 'dashboard';
   };
@@ -263,6 +266,7 @@ export function AppLayout() {
       case 'programs': void navigate('/programs'); break;
       case 'sprints': void navigate('/sprints'); break;
       case 'team': void navigate('/team'); break;
+      case 'developer': void navigate('/developer/apps'); break;
       case 'settings': void navigate('/settings'); break;
     }
   };
@@ -495,6 +499,12 @@ export function AppLayout() {
           {/* User avatar & settings at bottom */}
           <div className="flex flex-col items-center gap-2">
             <RailIcon
+              icon={<DeveloperIcon />}
+              label="Developer"
+              active={activeMode === 'developer'}
+              onClick={() => handleModeClick('developer')}
+            />
+            <RailIcon
               icon={<SettingsIcon />}
               label="Settings"
               active={activeMode === 'settings'}
@@ -542,6 +552,7 @@ export function AppLayout() {
                     {activeMode === 'programs' && 'Programs'}
                     {activeMode === 'sprints' && 'Weeks'}
                     {activeMode === 'team' && 'Teams'}
+                    {activeMode === 'developer' && 'Developer'}
                     {activeMode === 'settings' && 'Settings'}
                     {activeMode === 'project-context' && 'Project'}
                   </>
@@ -642,6 +653,9 @@ export function AppLayout() {
                   {activeMode === 'team' && (
                     <TeamSidebar />
                   )}
+                  {activeMode === 'developer' && (
+                    <DeveloperSidebar />
+                  )}
                   {activeMode === 'settings' && (
                     <div className="px-3 py-2 text-sm text-muted">Settings</div>
                   )}
@@ -700,6 +714,7 @@ export function AppLayout() {
         timeRemaining={timeRemaining}
         warningType={warningType}
         onStayLoggedIn={resetSessionTimer}
+        onDismissAbsolute={dismissAbsoluteWarning}
       />
 
       {/* Upload Navigation Warning Modal */}
@@ -1991,6 +2006,14 @@ function TeamIcon() {
   return (
     <svg aria-hidden="true" className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+    </svg>
+  );
+}
+
+function DeveloperIcon() {
+  return (
+    <svg aria-hidden="true" className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 9l-3 3 3 3m8-6l3 3-3 3M14 5l-4 14" />
     </svg>
   );
 }
