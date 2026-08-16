@@ -41,7 +41,11 @@ found: no committed CI matrix, no committed proof that a real sdk-mode agent tur
    `auditTrailProof.liveServer.test.ts` above, which is already covered by the existing unconditional
    invocation since it constructs its sdk-mode clients directly. `agent/src/__tests__/gitlabCiAgentTests.test.ts`
    extended with two new fitness-test cases structurally asserting the second invocation exists
-   alongside (not instead of) the first.
+   alongside (not instead of) the first, plus three more (CodeRabbit finding on this ticket's own
+   PR — the GitLab-side fitness test had no `.github/workflows/ci.yml` equivalent, leaving the two
+   CI platforms free to silently desync) asserting the GitHub Actions mirror's `verify` job has both
+   the flag-off and flag-on "Agent tests" steps, and that the flag-on step's own body genuinely sets
+   `AGENT_PLATFORM_MODE: sdk`, not just carries a matching name.
 3. **`docs/submission/PF-704-COST-LEDGER-DELTA.md`** (new) — the AC's "cost-ledger before/after
    shows unchanged token volume" clause. A structural proof: `AGENT_PLATFORM_MODE`/`agentPlatformMode`
    never appears in `agent/src/graph.ts` (confirmed by grep, zero hits) — the only file that owns
