@@ -231,6 +231,20 @@ export function WorkspaceSettingsPage() {
           >
             Conversions
           </Link>
+          {/* TRO-439 (PF-503) — minimal nav entry point to the developer
+            * portal (webhook subscriptions + delivery log/DLQ/replay). Same
+            * out-of-tab-set Link pattern as "Conversions" above, not a new
+            * Tab union member: DeveloperPortal.tsx's own header explains why
+            * this stays out of App.tsx's Mode/RailIcon set. */}
+          <Link
+            to="/settings/developer"
+            className={cn(
+              'px-4 py-3 text-sm font-medium border-b-2 border-transparent',
+              'text-muted hover:text-foreground hover:border-border/50 transition-colors'
+            )}
+          >
+            Developer
+          </Link>
         </nav>
       </div>
 

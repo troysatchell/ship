@@ -23,14 +23,17 @@
  * (which would stop this from being a genuine round trip).
  *
  * Every row this suite reads through the SDK is seeded directly via SQL —
- * `createSubscription()`'s own REQUEST body is a separate, disclosed,
- * NOT-fixed gap (`sdk/src/resources/webhooks.ts`'s header; out of TRO-599's
- * scope, which is the two RESPONSE types) that would 400 against this real
- * server if used, so seeding the row directly is what makes it possible to
- * prove the RESPONSE shapes (`listSubscriptions`/`getSubscription`/
- * `rotateSecret`/`listDeliveries`/`replayDelivery` — every read/action
- * method whose request needs no body beyond an id) without depending on the
- * one still-broken method.
+ * written when `createSubscription()`'s own REQUEST body was still a
+ * disclosed, not-yet-fixed gap (out of TRO-599's scope, which was the two
+ * RESPONSE types) that would 400 against this real server if used. TRO-439
+ * has since fixed that request body (`sdk/src/resources/webhooks.ts`'s
+ * header) and added its own regression coverage
+ * (`sdk/src/resources/__tests__/webhooks.test.ts`), but this file's
+ * SQL-seeding approach is unchanged and still the right call here: it keeps
+ * this suite's job scoped to what it was built for — the RESPONSE shapes
+ * (`listSubscriptions`/`getSubscription`/`rotateSecret`/`listDeliveries`/
+ * `replayDelivery`) — without also re-proving `createSubscription()`'s
+ * request shape, which is a different method with its own dedicated test.
  *
  * DB SAFETY: own isolated workspace/user/oauth_app/api_token/webhook rows in
  * `beforeAll`, deleted in `afterAll`; does not touch `pnpm db:seed`'s

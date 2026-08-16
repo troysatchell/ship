@@ -6,6 +6,136 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-439 — PF-503: developer portal — delivery log, DLQ, replay, subscription CRUD
+
+**What this is.** The developer portal's read-facing surface for webhooks (PLUGFORGE.MD §4/§2.9):
+a delivery log with server-side cursor pagination + status filter, a DLQ view (`status=dead`), a
+Replay button, and subscription CRUD (create/list/delete). Architect's note (Linear, TRO-443's
+written rationale): "even under the kill-criterion, the read-only delivery-log viewer + replay
+SURVIVES — build log+replay first within this ticket, CRUD second." This entry follows that order.
+
+**Architecture (§2.9, binding).** The portal is a normal client of the public API — it does not
+call internal `/api/*` webhook routes. On entry (`web/src/hooks/useDeveloperPortalToken.ts`) it
+mints a short-lived, `webhooks:manage`-scoped personal token via the existing session-authed
+`POST /api/api-tokens` route (the `api_tokens.scopes` mechanism, migration 043), and uses it to
+construct a real `@ship/sdk` `ShipClient`. Every delivery/subscription read or write in
+`web/src/pages/DeveloperPortal.tsx` goes through that client's `webhooks` resource against
+`/api/v1/*` — never a mocked or internal route. The token is revoked on unmount and additionally
+capped at `expires_in_days: 1` as a backstop for a tab closed without running cleanup (hard
+refresh, crash).
+
+**Reachability — deliberately minimal shell (coordination note).** TRO-436/PF-502 (the app
+registration/detail/rotate UI, same "Developer" portal shell) had not landed on `main` when this
+worktree was provisioned, and per this ticket's own brief was not to be blocked on. This ticket
+does NOT touch `App.tsx`'s `Mode` union or `RailIcon` set — it mounts at `/settings/developer`
+(nested under the existing Settings route, inheriting the 4-panel `AppLayout` for free) with one
+plain `<Link>` from `WorkspaceSettings.tsx`'s tab bar, matching that file's existing "Conversions"
+tab pattern. **Disclosed overlap, found via `git log`/reading the sibling worktree read-only
+(TRO-436 had a local, unpushed commit `f949eb8` at the time):** TRO-436 builds a REAL "Developer"
+Mode/RailIcon/`DeveloperSidebar`, its own `DeveloperPortalContext`/`DeveloperPortalProvider`
+(explicitly built, per that commit's own message, as "the shared extension point PF-503/TRO-439's
+subscriptions/delivery-log screens will use"), and its own additions to `web/src/lib/api.ts`
+(`oauthApps` client + `ApiToken.scopes`) — the same two additions this ticket independently made
+to the same file, before either branch knew about the other. The peer session was proactively
+messaged (SendMessage, same-repo peer) with the specifics before this branch opened its PR.
+**Whichever of the two branches merges second must reconcile**: adopt TRO-436's
+`DeveloperPortalContext`/`DeveloperSidebar`/`ShownOnceSecretModal`/api.ts additions as the kept
+version (they are the fuller, real "Developer" shell), drop this ticket's local
+`useDeveloperPortalToken.ts` and duplicate `api.ts` additions, and re-mount
+`DeveloperPortal.tsx`'s two tabs as a route/section inside TRO-436's real shell instead of the
+`/settings/developer` placeholder.
+
+**A second, independent collision — found while merging `main` forward before opening this PR:**
+`sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody` (`createSubscription()`'s
+request body) was a disclosed, not-yet-fixed gap (`url`/plural `events`, 400s against the real
+server) left out of scope by TRO-599. This ticket needed a WORKING `createSubscription()` for its
+own subscription-CRUD AC, so it fixed that gap independently — and, separately, TRO-607 (merged to
+`main` as PR #255 while this worktree was mid-flight) fixed the exact same gap, landing on the
+identical corrected shape (`{ app_id, event_type, target_url }`). Reconciled by keeping TRO-607's
+version verbatim (already reviewed and on `main`) and dropping this ticket's duplicate SDK-level
+fix entirely — this ticket's own contribution here is zero net SDK lines, only the portal code that
+*consumes* the now-correct type.
+
+**What changed (net, after both reconciliations above).**
+- `web/src/hooks/useDeveloperPortalToken.ts` (new) — mints/revokes the portal's scoped token,
+  constructs the `ShipClient`.
+- `web/src/pages/DeveloperPortal.tsx` (new) — `DeveloperPortalPage` with two tabs:
+  - `DeliveriesTab` (default tab, built first per the architect's note): server-side cursor
+    pagination (`listDeliveries({ limit, cursor, status })`, a "Load more" button driven by
+    `next_cursor`, never a client-side slice of an already-fetched full list), a status filter
+    (`pending`/`success`/`failed`/`dead`), and a Replay button per row
+    (`replayDelivery(id)` — works regardless of the row's status, `dead` included, matching the
+    real route's own contract).
+  - `SubscriptionsTab`: create (app picker sourced from the existing, real `GET /api/oauth-apps`;
+    event-type select; target-URL input), list, and delete (soft — the real `DELETE /:id` route
+    deactivates rather than hard-deletes, and this tab's own local state update was fixed to match:
+    an earlier version filtered the deleted row out of the list entirely, which disagreed with the
+    row's own `active`-based rendering and was caught red by
+    `e2e/developer-portal-dlq-replay.spec.ts`'s CRUD test before this merged).
+- `web/src/lib/api.ts`: `API_URL` now exported (so the SDK client shares the same base-URL
+  resolution as every other call in this file); `apiTokens.create()` gained an optional `scopes`
+  param; `ApiToken`/`ApiTokenCreateResponse` gained the `scopes` field the backend already
+  returned but this type never declared; a minimal read-only `oauthApps.list()` + `OAuthApp` type
+  (see the disclosed-overlap note above for why this is a duplicate of TRO-436's fuller version).
+- `web/src/main.tsx` / `web/src/pages/WorkspaceSettings.tsx`: the `/settings/developer` route and
+  its one nav `<Link>`.
+- `web/package.json`: added `@ship/sdk` as a real dependency (it was not one before — no page in
+  `web/` had ever consumed the SDK from the browser prior to this ticket).
+
+**Regression tests.**
+- `web/src/pages/DeveloperPortal.test.tsx` (vitest, jsdom + Testing Library — the tier
+  `scripts/factory/gate.sh` actually executes; an e2e-only spec would satisfy the gate's "test
+  added" grep without ever running, per `/ship-qa`). Real `useDeveloperPortalToken` +
+  `@ship/sdk` `WebhooksClient` code paths, only `global.fetch` stubbed. Six cases: a DLQ (`dead`)
+  delivery renders and Replay succeeds while preserving the original `Idempotency-Key`; the status
+  filter sends a real `status=` query param; "Load more" sends the server's own opaque cursor
+  (not a client-side slice) and disappears once `next_cursor` is null; `createSubscription()`
+  sends the real `app_id`/`event_type`/`target_url` body and shows the once-only secret; deleting a
+  subscription marks it Inactive rather than removing the row. **Red before green, actually run,
+  not asserted from memory**: with `DeveloperPortal.tsx`/`useDeveloperPortalToken.ts` temporarily
+  removed, the file fails with "Failed to resolve import" (the expected form of red for greenfield
+  work — no prior buggy behavior exists to assert against); restored, all pass. The delete-row test
+  specifically was run against the FIRST (buggy, row-filtered-out) version of `handleDelete` and
+  failed with `Unable to find an element with the text: Inactive` before the fix landed.
+- `e2e/developer-portal-dlq-replay.spec.ts` (Playwright, additive — the ticket's own literal AC).
+  Two tests: (1) seeds a 6-row dead-lettered delivery chain directly via SQL (matching migration
+  048's row-per-attempt schema exactly — real wall-clock retries were explicitly out per this
+  ticket's own brief, and the deliverer's own retry/backoff math is already proven at the unit tier
+  by `deliverer.test.ts`'s injected-clock suite), confirms it's visible in the portal's DLQ filter,
+  clicks Replay against a real, standalone, HMAC-verifying reference-subscriber HTTP listener
+  (`docs/submission/demo-webhook-listener.mjs`, the same fixture `webhook-idempotency-key-drill.spec.ts`
+  uses) now answering 2xx, and confirms success with the SAME `Idempotency-Key` preserved — verified
+  both via the UI and via the reference subscriber's own receipt (a genuine HTTP round trip, not
+  just a DB-status flip). (2) subscription CRUD through the real UI: create (asserting the
+  once-only secret banner and the real request body), list, and delete (asserting the row survives
+  as Inactive). Both passed on the first attempt (no retries — see `test-results/progress.jsonl`
+  from the run this entry was written against).
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/sdk build
+pnpm --filter @ship/web test                      # 580/580, includes the 6 new cases above
+```
+E2e (`/e2e-test-runner` convention — never run `pnpm test:e2e` directly):
+```bash
+pnpm exec playwright test e2e/developer-portal-dlq-replay.spec.ts
+```
+
+**Not verified / left for a follow-up.** No new backend routes were added — this is a pure
+consumer of the already-built, already-tested PF-302/304/305/306 surface. The DLQ chain in the
+Playwright spec is seeded via direct SQL rather than driven through 6 real, wall-clock-timed
+retries (disclosed above and in that file's own header — the retry/backoff math itself is
+out of this ticket's scope to re-prove). The shell/nav overlap with TRO-436 is disclosed, not
+resolved, in this entry — reconciliation is the job of whichever PR merges second (see above).
+
+**Rollback.** `git revert <this-commit-sha>`. No migration, no schema change, no backend route
+added or changed — purely additive frontend + a net-zero SDK reconciliation. Reverting removes
+`/settings/developer`, its nav link, and the two new frontend files; `web/package.json`'s
+`@ship/sdk` dependency can stay (harmless if unused) or be reverted along with it.
+
+---
+
 ## TRO-611 — PATCH /api/v1/documents/:id now checks visibility before writing (SECURITY)
 
 **Root cause.** `api/src/platform/api/v1/resources/documents.ts`'s `PATCH /:id` resolved its target

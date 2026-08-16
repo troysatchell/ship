@@ -50,6 +50,9 @@ const MyWeekPage = React.lazy(() => import('@/pages/MyWeekPage').then((m) => ({ 
 const AdminDashboardPage = React.lazy(() => import('@/pages/AdminDashboard').then((m) => ({ default: m.AdminDashboardPage })));
 const AdminWorkspaceDetailPage = React.lazy(() => import('@/pages/AdminWorkspaceDetail').then((m) => ({ default: m.AdminWorkspaceDetailPage })));
 const WorkspaceSettingsPage = React.lazy(() => import('@/pages/WorkspaceSettings').then((m) => ({ default: m.WorkspaceSettingsPage })));
+// TRO-439 (PF-503) — see DeveloperPortal.tsx's own header for why this
+// mounts at /settings/developer rather than as a new top-level Mode/RailIcon.
+const DeveloperPortalPage = React.lazy(() => import('@/pages/DeveloperPortal').then((m) => ({ default: m.DeveloperPortalPage })));
 const ConvertedDocumentsPage = React.lazy(() => import('@/pages/ConvertedDocuments').then((m) => ({ default: m.ConvertedDocumentsPage })));
 const UnifiedDocumentPage = React.lazy(() => import('@/pages/UnifiedDocumentPage').then((m) => ({ default: m.UnifiedDocumentPage })));
 const StatusOverviewPage = React.lazy(() => import('@/pages/StatusOverviewPage').then((m) => ({ default: m.StatusOverviewPage })));
@@ -290,6 +293,7 @@ function AppRoutes() {
         <Route path="feedback/:id" element={<FeedbackEditorPage />} />
         <Route path="settings" element={<WorkspaceSettingsPage />} />
         <Route path="settings/conversions" element={<ConvertedDocumentsPage />} />
+        <Route path="settings/developer" element={<DeveloperPortalPage />} />
         {/*
           Catch-all (A11Y-5 / TRO-219). Without this, an unmatched path under
           "/" didn't match this Route's index/children either, so <Routes>

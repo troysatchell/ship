@@ -2,7 +2,12 @@ import type { ApiResponse } from '@ship/shared';
 
 // In development, Vite proxy handles /api routes (see vite.config.ts)
 // In production, use VITE_API_URL or relative URLs
-const API_URL = import.meta.env.VITE_API_URL ?? '';
+//
+// Exported (TRO-439) so `useDeveloperPortalToken.ts` can construct its
+// `@ship/sdk` `ShipClient` against the SAME base URL every other call in
+// this file already uses, rather than a second, independently-resolved
+// constant that could drift from this one.
+export const API_URL = import.meta.env.VITE_API_URL ?? '';
 
 // CSRF token cache for state-changing requests
 let csrfToken: string | null = null;
@@ -271,11 +276,36 @@ export interface ApiToken {
   is_active: boolean;
   revoked_at: string | null;
   created_at: string;
+  // scopes (PF-107/TRO-430, migration 043's api_tokens.scopes column) — null
+  // for a legacy unscoped token (never valid at /api/v1), a non-empty array
+  // for a scoped personal token (the portal's own token-minting-on-entry
+  // hook, TRO-439, is the first caller in this package to actually SET this
+  // field on create; api-tokens.ts already returned it, this type just
+  // didn't declare it until now).
+  scopes: string[] | null;
 }
 
 export interface ApiTokenCreateResponse extends ApiToken {
   token: string; // Full token - only returned on creation
   warning: string;
+}
+
+// Minimal read-only shape of an `oauth_apps` row (PF-102, `api/src/routes/
+// oauth-apps.ts`) — enough for the developer portal's subscription-create
+// form to let a user pick an existing app by id. Full app registration/
+// rotate UI is TRO-436/PF-502's job, not this ticket's; this type and
+// `oauthApps.list()` below only read what already exists.
+export interface OAuthApp {
+  id: string;
+  client_id: string;
+  name: string;
+  client_type: 'public' | 'confidential';
+  redirect_uris: string[];
+  requested_scopes: string[];
+  is_first_party: boolean;
+  created_at: string;
+  revoked_at: string | null;
+  has_secret: boolean;
 }
 
 export interface WorkspaceMember {
@@ -516,7 +546,12 @@ export const api = {
     list: () =>
       request<ApiToken[]>('/api/api-tokens'),
 
-    create: (data: { name: string; expires_in_days?: number }) =>
+    // `scopes` (TRO-439): omitted -> legacy unscoped token (unchanged
+    // behavior). The developer portal's token-minting-on-entry hook
+    // (`useDeveloperPortalToken.ts`) is the first caller to pass this —
+    // every element must already be a scope `ScopeRegistry` knows about
+    // (validated server-side, `api-tokens.ts`'s own `scopeSchema`).
+    create: (data: { name: string; expires_in_days?: number; scopes?: string[] }) =>
       request<ApiTokenCreateResponse>('/api/api-tokens', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -526,5 +561,12 @@ export const api = {
       request('/api/api-tokens/' + tokenId, {
         method: 'DELETE',
       }),
+  },
+
+  // Read-only — see `OAuthApp`'s own doc comment above for why this is only
+  // `list()` and not the full app-registration surface.
+  oauthApps: {
+    list: () =>
+      request<OAuthApp[]>('/api/oauth-apps'),
   },
 };
