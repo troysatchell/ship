@@ -117,17 +117,16 @@
  * own header for why it is scoped to webhooks specifically rather than
  * generalized to every SDK resource in this same ticket.
  *
- * FIXED — TRO-439 (PF-503, portal subscriptions UI). TRO-599 left
- * `CreateWebhookSubscriptionBody` (`createSubscription()`'s request body)
- * out of scope, disclosed as "not yet fixed" — this is the follow-up that
- * closes it, forced by this ticket's own AC ("subscription CRUD" needs a
- * working `createSubscription()` call from the portal, not just a
- * documented gap). Verified against the real
- * `CreateWebhookSubscriptionRequestSchema` (`platform/api/v1/resources/
- * webhooks.ts`): `app_id` (uuid), singular `event_type`, `target_url`, all
- * required — replacing the old pre-PF-302 guess (`url`/plural `events`),
- * which 400'd against the real server on every call. See this interface's
- * own doc comment below and `CHANGES.md`'s TRO-439 entry.
+ * UPDATE — TRO-607 (this ticket; found while verifying TRO-599, explicitly
+ * OUT OF SCOPE for that ticket which targeted only the two RESPONSE types):
+ * `CreateWebhookSubscriptionBody` below (`createSubscription()`'s request
+ * body) has been FIXED. Was `url`/plural `events`; is now `app_id`/singular
+ * `event_type`/`target_url`, matching the real `POST /api/v1/webhooks` route's
+ * `CreateWebhookSubscriptionRequestSchema` (`platform/api/v1/resources/webhooks.ts`,
+ * verified by reading that file in full). All three fields are required. A
+ * regression test added to `sdk/src/__tests__/webhooks.liveServer.test.ts`
+ * calls the method against a real server with the corrected body shape,
+ * confirming the fix end-to-end.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -195,14 +194,12 @@ export interface CreatedWebhookSubscription extends WebhookSubscription {
 }
 
 /**
- * `createSubscription()`'s request body. FIXED (TRO-439) — matches the real
- * `POST /api/v1/webhooks` route's `CreateWebhookSubscriptionRequestSchema`
- * (`platform/api/v1/resources/webhooks.ts`) exactly: `app_id` (uuid,
- * referencing an `oauth_apps` row in the caller's own workspace — validated
- * server-side, not expressible in this type), singular `event_type`, and
- * `target_url` (http/https only), all required. Was `{ url, events }`
- * (PF-401's original pre-PF-302 guess) until this ticket; see this file's
- * header for the history and `CHANGES.md`'s TRO-439 entry.
+ * `createSubscription()`'s request body. VERIFIED (TRO-607) against
+ * `CreateWebhookSubscriptionRequestSchema` (`platform/api/v1/resources/webhooks.ts`),
+ * which requires `app_id` (uuid), singular `event_type`, and `target_url`.
+ * All three fields are required (never optional). The subscription belongs to
+ * an `app_id` (`oauth_apps`, migration 047), not directly to a workspace or
+ * user — the caller supplies it in every create request.
  */
 export interface CreateWebhookSubscriptionBody {
   readonly app_id: string;

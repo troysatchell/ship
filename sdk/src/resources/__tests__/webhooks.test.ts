@@ -18,9 +18,8 @@
  * complementary thing to a live-server integration test, not a stand-in
  * for one that's since been added. Response bodies used as fixtures below
  * are the REAL shapes (TRO-599: verified against `serializeSubscription()`/
- * `serializeDelivery()`); `createSubscription()`'s REQUEST body is the REAL
- * shape too as of TRO-439 (`app_id`/`event_type`/`target_url` — TRO-599 had
- * left it as a disclosed gap, out of that ticket's scope).
+ * `serializeDelivery()`), and request bodies are also verified REAL
+ * (TRO-607: `createSubscription()` body now matches the real server schema).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ShipClient } from '../../client.js';
@@ -77,10 +76,8 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     // Response shape is the REAL one (TRO-599: verified against
     // serializeSubscription() + the routes' own `{ ...serialized, secret,
     // warning }` construction) — app_id/singular event_type/target_url/no
-    // updated_at, plus the `warning` field. The REQUEST body below now uses
-    // the REAL `app_id`/`event_type`/`target_url` shape too (TRO-439 fixed
-    // the disclosed `url`/`events` gap TRO-599 left out of scope — see
-    // webhooks.ts's header).
+    // updated_at, plus the `warning` field. Request body (TRO-607) now also
+    // matches the real server schema exactly.
     const responseBody = {
       id: 'sub_1',
       app_id: 'app_1',
@@ -95,8 +92,15 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     vi.stubGlobal('fetch', fetchSpy);
     const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
 
+    // Request body now matches the real server schema: app_id/singular
+    // event_type/target_url (TRO-607). This mocked test proves the SDK
+    // builds the correct HTTP request and parses the response correctly.
+    // A real UUID, not a placeholder like 'app_1' — the real request schema
+    // requires app_id to be a valid UUID (CodeRabbit, TRO-607 review), and
+    // this mock should stay representative of what actually validates.
+    const appId = '11111111-1111-4111-8111-111111111111';
     const created = await client.webhooks.createSubscription({
-      app_id: 'app_1',
+      app_id: appId,
       event_type: 'document.created',
       target_url: 'https://example.com/hook',
     });
@@ -106,7 +110,7 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     expect(init?.method).toBe('POST');
     expect(init?.headers).toMatchObject({ Authorization: 'Bearer t', 'content-type': 'application/json' });
     expect(JSON.parse(String(init?.body))).toEqual({
-      app_id: 'app_1',
+      app_id: appId,
       event_type: 'document.created',
       target_url: 'https://example.com/hook',
     });
