@@ -71,6 +71,495 @@ skipped) and the never-built bucketed-filter tests.
 
 ---
 
+## TRO-600 — `FileTokenStore.set()` was not atomic — a crash mid-write could corrupt `~/.ship/credentials.json`
+
+**Root cause.** `sdk/src/fileTokenStore.ts`'s `set()` wrote directly to `filePath` via
+`fs.writeFile(this.filePath, data, { mode: 0o600 })`. `writeFile` on an existing path truncates
+first and streams the new content in over the top — a process crash between the truncate and the
+last byte left `filePath` holding a truncated/corrupt fragment permanently (exactly the state
+`get()`'s own "invalid JSON" throw exists to catch), and a concurrent `get()` from another process
+racing that same write could silently read the partial content mid-write, with no error at all.
+Found by CodeRabbit on TRO-449/PF-802's PR, triaged out of that ticket's scope (this class was
+pre-existing PF-404 code, only relocated, not written, by TRO-449's Node/browser split) and filed
+separately as this ticket.
+
+**Fix — verified CodeRabbit's suggested approach before implementing, not applied blindly.**
+`set()` now serializes to a uniquely-named temp file (`.${basename}.<16 hex chars>.tmp`, via
+`crypto.randomBytes`) in the *same* directory as `filePath` — same directory is load-bearing, not
+cosmetic: POSIX `rename(2)`'s atomicity guarantee only holds within one filesystem, and a temp
+directory elsewhere (e.g. `os.tmpdir()`) could cross a mount boundary — and Node's `fs.promises.rename()`
+has no cross-filesystem fallback of its own (unlike higher-level helpers such as `fs-extra`'s `move()`):
+crossing a mount boundary makes it *reject* with `EXDEV`, a loud failure (caught, temp file cleaned up,
+error rethrown), not a silent non-atomic copy+delete. (This paragraph's first draft claimed the latter;
+corrected — flagged by CodeRabbit review before this landed, matches the doc-comment fix in
+`fileTokenStore.ts` itself.) The temp file is created at 0600 directly (`writeFile`'s `mode` option
+actually applies here, unlike the direct-write it replaces, because a uniquely-named path is always
+the CREATE case), `chmod`ed again as the existing belt-and-suspenders umask guard, then
+`fs.rename()`d onto `filePath`. `rename(2)` atomically replaces the destination and carries the
+source's own mode bits onto it (it relinks the same inode rather than creating a new one under the
+destination's prior permissions) — so a reader of `filePath` at any point, including a concurrent
+`get()` in another process, always sees either the complete old file or the complete new one, never
+a torn/partial read, and the existing "always 0600, even overwriting a looser-permissioned file"
+guarantee (`tokenStore.test.ts`'s pre-existing "corrects an existing file's permissions" case) holds
+with no second `chmod` needed on `filePath` itself. Failed writes/renames best-effort `unlink` the
+temp file so a partial attempt doesn't leave orphaned `.tmp` files in the credentials directory.
+
+**Scope correction caught by CodeRabbit's own review, fixed before commit.** This ticket's first
+draft doc comment overclaimed the guarantee as holding "across a crash" without qualification. That
+conflates two different properties: rename-based atomicity (no reader ever observes a torn/partial
+file — true regardless of `fsync`, and what this ticket actually asks for) with full durability
+across an OS-level crash or power loss (which POSIX only promises if the temp file, and separately
+the directory entry, are `fsync`ed before/after the rename — this implementation deliberately does
+not do that; adding it was judged out of scope for a Low-priority, narrowly-scoped ticket, and
+cross-platform directory-fsync support is not uniform). The doc comments (class header and the
+`rename()` call site) now state the narrower, accurate claim: atomicity and safety against an
+ordinary process crash, not power-loss durability.
+
+**CodeRabbit round 2 (2 findings, on the corrected diff) — 2 adopted, 1 dismissed with reason,
+plus one gate-blocking static-analysis fix.**
+- *Minor, CHANGES.md/`fileTokenStore.ts` doc comments*: this entry's and the source's own first
+  draft additionally claimed a temp dir outside `filePath`'s directory would "silently fall back to
+  a non-atomic copy+delete" on crossing a filesystem boundary. Checked against Node's actual
+  behavior before accepting the correction (not deferred to CodeRabbit blindly): `fs.promises.rename()`
+  is a thin wrapper over the `rename(2)` syscall with no such fallback — unlike higher-level helpers
+  (`fs-extra`'s `move()`) that add one deliberately, plain Node `rename()` *rejects* with `EXDEV`
+  on a cross-filesystem attempt, which this code's own `try`/`catch` already turns into a loud,
+  correct failure (temp file cleaned up, error rethrown) rather than a silent one. Adopted; both
+  this entry's and `fileTokenStore.ts`'s doc comments corrected above.
+- *Major, `fileTokenStore.ts`, part 1 (adopted)*: use exclusive creation for the temp file
+  (`flag: 'wx'`) so an — astronomically unlikely, given 64 bits of random entropy in the name, but
+  not impossible — name collision fails loudly (`EEXIST`) instead of silently overwriting whatever
+  was already at that path. One-line change, directly strengthens a guarantee this ticket already
+  makes; adopted.
+- *Major, `fileTokenStore.ts`, part 2 (dismissed, with reason)*: the same finding also asked for
+  validating that `filePath`'s parent directory is owned by the current user and non-world-writable
+  before writing, plus a full EEXIST-retry loop. Dismissed as out of scope for this ticket: (1) this
+  is a *different* threat model (a directory already under attacker control) than TRO-600's own
+  finding (crash/concurrent-read safety) and was true of the pre-fix code identically — the original
+  direct `writeFile(filePath, ...)` had zero directory-trust validation either, and an attacker with
+  write access to the directory could already have planted a symlink at the fixed `filePath` itself,
+  same threat, unaffected by this change; (2) the randomized temp filename this fix already adds
+  makes a pre-planting attack *harder* than before, not easier — this is a scope-neutral-or-better
+  change on that axis, not a regression; (3) `process.getuid()`-based ownership checks don't exist on
+  Windows, and this package explicitly supports non-POSIX platforms (`integrations/cli`'s `ship login`
+  is the one named consumer) — implementing it naively would need per-platform branching for a
+  hardening step outside this Low-priority ticket's stated scope ("`sdk/src/fileTokenStore.ts` only
+  ... regression test for the atomicity property"). Not filed as a follow-up ticket: this is
+  general input-trust hardening with no report of a real exploit path specific to this class, not a
+  concrete, scoped defect the way TRO-607 was for TRO-599.
+- *`defect-gate` (blocking, not a CodeRabbit finding)*: the first draft's two array-destructures off
+  `.mock.calls[0]` used a `!` non-null assertion each — this repo's `TS-4` static rule tracks and
+  blocks new ones. Rewritten as guard clauses (`if (!call) throw ...`), matching the exact convention
+  already used by `sdk/src/clientCredentials.test.ts` and five other test files in this package.
+
+**Regression tests (`sdk/src/tokenStore.test.ts`, new `describe('set() atomicity (TRO-600)')`
+block, 2 new cases; existing 13 untouched).**
+1. *"writes to a uniquely-named temp file in the same directory and renames it into place, rather
+   than writing filePath directly"* — spies on `fs.writeFile`/`fs.rename`, asserts the write target
+   is never `filePath` itself, lives in the same directory, and is exactly what gets renamed onto
+   `filePath`; also confirms the end state is a valid 0600 file with no orphaned temp file left in
+   the directory.
+2. *"an interrupted write (rename fails, simulating a crash mid-publish) leaves the prior valid
+   file readable, never truncated or partial"* — establishes a valid baseline file via a real
+   `set()`, mocks `fs.rename` to reject once (simulating a crash between the write and the publish
+   step), asserts `set()` rejects, and then asserts `get()` still returns the ORIGINAL content
+   intact and the raw file is still valid JSON — plus that the failed attempt's temp file was
+   cleaned up.
+
+**Red-before-green, verified by actual revert-and-rerun, not asserted from memory.** Temporarily
+restored the pre-fix `fileTokenStore.ts` (`git show HEAD:sdk/src/fileTokenStore.ts`, HEAD being
+this branch's unmodified base) with the new tests still in place: both new tests failed as
+expected — test 1 failed because `writeFileSpy`'s recorded path *was* `filePath` (`expected ...
+not to be ...`); test 2 failed because `store.set()` resolved instead of rejecting (the old code
+never calls `rename`, so mocking it to reject has no effect). All 13 pre-existing tests still
+passed unchanged. Restored the fix; all 15 tests in the file pass again.
+
+**Evidence.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`: 15/15 pass,
+re-verified after each CodeRabbit-driven correction above. Full `@ship/sdk` suite (25 files, incl.
+the 4 `*.liveServer.test.ts` files against this worktree's real Postgres): 227/227 pass.
+`pnpm type-check` / `pnpm build`: clean. `scripts/factory/gate.sh` run three times against this
+worktree: (1) pre-commit — correctly failed `regression-test`/`scope`, an artifact of running the
+gate before `git commit` existed, not a real gap; (2) post first commit (`15130bd`) — `tests:api`
+showed 1 new failure (`webhooks.test.ts`'s pre-existing "rotation invalidates the old secret"
+case, unrelated to this diff), confirmed PASSED standalone by the gate's own re-run logic —
+load-sensitive (TRO-277 class); `defect-gate` failed on 2 `!` non-null assertions in the new test
+file (fixed in the CodeRabbit-round-2 commit above); (3) post second commit (`8d4f643`, this
+branch's head) — **clean pass, verdict `"pass"` in `.factory/gate-result.json`**: every gate green
+including `tests:api` (no flake this run either) and `defect-gate`; `coderabbit` reported `warn`
+("review did not complete, rc=1 — kept 2 finding(s) from an earlier run"), which is this repo's
+documented non-blocking behavior for a transient CodeRabbit CLI failure (`gate.sh`'s own comment,
+matching TRO-605 attempt 3's precedent) — the 2 kept findings are the exact 2 from round 2, already
+triaged and addressed above, not new ones.
+
+**How to run it.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`.
+
+**Rollback.** Revert this commit. `sdk/src/fileTokenStore.ts`'s `set()` goes back to the direct
+`writeFile`+`chmod` path (reintroducing the non-atomic-write hazard this ticket fixes); the two new
+test cases in `sdk/src/tokenStore.test.ts` are removed with it. No schema, no migration, no change
+to any other package — `FileTokenStore`'s only consumer is `integrations/cli`'s `ship login`
+(`~/.ship/credentials.json`), whose own behavior is unaffected (same `ITokenStore` interface, same
+on-disk JSON shape, same 0600 guarantee).
+
+---
+
+## TRO-610 — Absolute session-timeout "I Understand" button silently extended the session it says cannot be extended
+
+**The bug.** `SessionTimeoutModal.tsx`'s action button was wired unconditionally to
+`onClick={onStayLoggedIn}`, regardless of `warningType`. For `warningType === 'absolute'`, the
+modal's own copy says "This timeout cannot be extended" — but clicking "I Understand" called the
+exact same handler as "Stay Logged In" for the inactivity case, which is `useSessionTimeout.ts`'s
+`resetTimer()`: it calls `POST /api/auth/extend-session`, genuinely extending the server-side
+session. A user hitting the 12-hour absolute cap, clicking through the warning, silently got their
+session extended anyway.
+
+**The fix.**
+- `web/src/hooks/useSessionTimeout.ts` — added `dismissAbsoluteWarning()`, a new returned function
+  that hides the warning WITHOUT calling `resetTimer()`/extend-session and without touching the
+  running countdown interval. Internally, `showWarning`'s externally-visible value is now a
+  computed field (`showWarning && !(warningType === 'absolute' && absoluteWarningDismissed)`) —
+  dismissal sets a separate `absoluteWarningDismissed` flag rather than the underlying `showWarning`
+  state, because flipping `showWarning` itself would re-trigger `scheduleAbsoluteWarning`'s own
+  effect (dependent on `[sessionCreatedAt, showWarning, warningType]`), whose "already past the
+  threshold" branch treats any `warningType !== 'inactivity'` as a reason to unconditionally
+  re-show — an infinite re-show loop, found and fixed during this ticket, not present before this
+  ticket's own dismiss path existed.
+- `web/src/components/SessionTimeoutModal.tsx` — new `onDismissAbsolute` prop; the button's
+  `onClick` now routes on `warningType`: `isInactivity ? onStayLoggedIn : onDismissAbsolute`.
+- `web/src/pages/App.tsx` — wires `dismissAbsoluteWarning` from the hook through to the modal's new
+  `onDismissAbsolute` prop.
+
+**How to run it.**
+
+```
+pnpm --filter @ship/web exec vitest run src/hooks/useSessionTimeout.test.ts src/components/SessionTimeoutModal.test.tsx
+```
+
+**Regression tests, red before green:**
+- `web/src/hooks/useSessionTimeout.test.ts` — two new cases in the "Absolute Timeout" describe
+  block: `dismissAbsoluteWarning()` hides the warning without calling `extend-session` (asserts
+  `mockFetch` never called), and does not prevent the real 12-hour timeout from firing (asserts
+  `onTimeout` fires once the remaining 5 minutes elapse in the background). Both reverted to
+  `TypeError: result.current.dismissAbsoluteWarning is not a function` against pre-fix code.
+- `web/src/components/SessionTimeoutModal.test.tsx` — new file, component-level per this ticket's
+  own note that this behavior should be gate-verified, not e2e-only. Asserts the absolute case
+  calls `onDismissAbsolute` and never `onStayLoggedIn`; the inactivity case calls `onStayLoggedIn`
+  and never `onDismissAbsolute`. Reverting just `SessionTimeoutModal.tsx`'s wiring reproduces the
+  exact original bug: `onDismissAbsolute` gets called 0 times instead of 1 (`expected "vi.fn()" to
+  be called 1 times, but got 0 times`), confirming the click landed on `onStayLoggedIn` instead.
+- `e2e/session-timeout.spec.ts`'s pre-existing `clicking I Understand on absolute warning does NOT
+  extend session` test (added before this ticket, never weakened) is unaffected by this change and
+  should now genuinely pass rather than coincidentally pass.
+
+**Rollback.** Revert this commit — the three modified files (`useSessionTimeout.ts`,
+`SessionTimeoutModal.tsx`, `App.tsx`) return to the prior unconditional-button-wiring behavior, and
+delete the new `SessionTimeoutModal.test.tsx` file. No migration, no config, no API change.
+
+---
+
+## TRO-437 — PF-906: Per-epic write-ups + three discoveries, provenance-disciplined
+
+**What this closes.** PF-906's AC: "committed; claims follow CLAUDE.md provenance discipline
+(observed vs derived, evidence linked)." Two new submission docs, each backed by evidence read
+directly from this worktree rather than recalled from the PRD or prior sessions' summaries.
+
+**What changed.**
+- Added `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` — before → fix → after → proof for the 7
+  epics with genuine closing proof as of this writing: E0, E1, E2, E3, E4, E6, E8. E5 and E7 are
+  **explicitly deferred**, not silently omitted — PF-503 (E5's remaining screen) wasn't merged and
+  PF-704 (E7's own proof — the audit rows) was still Backlog when this was written; writing E7's
+  section against rows that don't exist yet would be exactly the unmarked-inference failure
+  `.claude/CLAUDE.md` names as this project's own recurring failure mode. Every claim is anchored
+  to a real `file.ts:NN`/`.sql`/`.json` citation, verified by reading the file or running the
+  command in this worktree — not copied from PLUGFORGE.MD's own prose. One correction the research
+  turned up: the PRD's E3 write-up says "at least nine" route files had inline document SQL;
+  `grep -rln "INSERT INTO documents\|UPDATE documents SET\|DELETE FROM documents" api/src/routes/*.ts`
+  (excluding tests) returns 12 — stated as the actually-observed count, not the PRD's estimate.
+  E6's proof includes a live number, not a claimed one: `pnpm drill ttfe` run directly in this
+  ticket's own worktree returned `total: 1998ms / 60000ms budget, verdict: pass`.
+- Added `docs/submission/PLUGFORGE-DISCOVERIES.md` — three essays (OAuth Device Authorization
+  Grant in TypeScript; zod-driven OpenAPI with bidirectional fitness-test parity; Stripe-style HMAC
+  signing and the encrypt-not-hash trade-off), chosen from the PRD's four candidates as the three
+  with the most specific, file-cited stories rather than the most generic. A genuinely new
+  document — `docs/submission/DISCOVERY.md` is a leftover Week-4 document on an unrelated subject
+  and is untouched. The Device Grant essay surfaces a real, disclosed asymmetry found while
+  researching it: `api/src/platform/oauth/device.ts:212-214` stores `user_code` in plaintext
+  alongside the hashed `device_code_hash` — a defensible design (a human types it into an already-
+  trusted page) but a genuinely open Backlog finding, named honestly rather than glossed over.
+- Added `api/src/__tests__/epicWriteupsAndDiscoveries.test.ts` — a structural presence lint over
+  both docs (pattern: `architectureDocSections.test.ts` / TRO-424, itself modeled on
+  `pinnedDependencies.test.ts`): asserts every closed-epic section has the mandated
+  Before/Fix/After/Proof labels, that E5/E7 are explicitly deferred rather than absent, a
+  file-citation-density floor, exactly three discovery sections, Observed/Derived provenance
+  markers present, and that the new discoveries doc is distinct from the stale one. 19 `it()` test
+  cases (several with multiple `expect()`s each — e.g. the shape check alone is 4 per epic), all
+  real. **Red before green, genuinely produced while writing this suite** (not asserted from
+  memory): the shape-check caught 3 of the 7 epic sections (E2, E6, E8) using an embellished label
+  — e.g. `**Fix — all 5 committed integrations, verified present:**` instead of the plain `**Fix.**`
+  every other section used — each failure naming exactly which label was missing per epic; a fourth
+  failure caught the citation-count regex undercounting real `.sql`/`.json`/`.mjs` citations
+  alongside `.ts`. Both were fixed for real (the doc's labels normalized, the regex broadened to
+  match the doc's actual citation shapes) rather than by loosening the check to fit the draft.
+
+**CodeRabbit round (real, completed — not rate-limited), 7 findings, all fixed:** the "explicitly
+defers E5/E7" check only looked for deferral prose, not absence of a real `## Epic E5`/`## Epic E7`
+heading — added the absence assertion. The citation-density check made the `:line` suffix optional,
+so filename-only references (real or invented) could satisfy it — now `.ts` code citations require
+a real `:NN`; 3 previously-bare citations (`rate-limit.ts`, `documentService.ts`,
+`bearerAuth.ts`, `signer.ts`) were given their actual line numbers in the doc itself rather than
+just loosened in the test, and the threshold was set to the genuine resulting count (14), not
+padded. The Observed/Derived check counted document-wide instead of per-section — now every
+discovery section is checked individually. The "distinct from the stale doc" check only matched
+self-descriptive words — now it actually reads `docs/submission/DISCOVERY.md` and asserts zero
+heading overlap. Two doc-accuracy findings: CHANGES.md called the suite's 19 `it()` blocks "19
+assertions" (corrected — several blocks carry multiple `expect()`s); both docs' route-fitness
+description said "five things as five blocks" then called one of those five "a sixth block," which
+is self-contradictory — reworded to state five properties across six total `it()` blocks (five
+properties + one sanity check) precisely. One markdownlint finding (missing blank lines around two
+fences, missing language tag on a plain-output fence) fixed.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/__tests__/epicWriteupsAndDiscoveries.test.ts
+```
+
+**Rollback.** `git rm docs/submission/PLUGFORGE-EPIC-WRITEUPS.md docs/submission/PLUGFORGE-DISCOVERIES.md api/src/__tests__/epicWriteupsAndDiscoveries.test.ts`,
+revert this entry. No schema, no migration, no other file touched.
+
+---
+
+## TRO-439 — PF-503: developer portal — delivery log, DLQ, replay, subscription CRUD
+
+**What this is.** The developer portal's read-facing surface for webhooks (PLUGFORGE.MD §4/§2.9):
+a delivery log with server-side cursor pagination + status filter, a DLQ view (`status=dead`), a
+Replay button, and subscription CRUD (create/list/delete). Architect's note (Linear, TRO-443's
+written rationale): "even under the kill-criterion, the read-only delivery-log viewer + replay
+SURVIVES — build log+replay first within this ticket, CRUD second." This entry follows that order.
+
+**Reconciled onto TRO-436/PF-502's real "Developer" shell after that ticket merged.** This ticket's
+worktree was provisioned before TRO-436 landed and, per its own brief, was not blocked on it — the
+first version of this work built a standalone placeholder (`/settings/developer`, a local
+`useDeveloperPortalToken.ts` hook, its own `web/src/lib/api.ts` additions) with the collision
+explicitly disclosed in this same entry and the peer session messaged directly before this PR
+opened (see git history / PR #260's description for that earlier disclosure). Once TRO-436 (PR
+#259) merged to `main`, this ticket merged `main` forward and reconciled onto the real, shared
+shell rather than keeping its own placeholder:
+- **Token minting**: dropped `useDeveloperPortalToken.ts` entirely. `web/src/pages/DeveloperPortal.tsx`
+  now calls `usePortalToken()` (`web/src/contexts/DeveloperPortalContext.tsx`, TRO-436) for its
+  `callV1<T>(path, init)` — a bearer-authed `/api/v1/*` call using the ONE token
+  `DeveloperPortalProvider` mints per mount of the whole `/developer/*` subtree (all 8 scopes,
+  including `webhooks:manage`), not a second, independently-minted token per screen.
+- **Wire shape**: swapped `@ship/sdk`'s `WebhooksClient` (typed resource methods) for hand-rolled
+  `callV1<T>()` calls building the query string/body directly, matching TRO-436's own established
+  pattern (`v1Request()`/`V1Result<T>` in `api.ts`) rather than introducing a second, parallel v1
+  HTTP mechanism alongside it. `web/package.json`'s `@ship/sdk` dependency (added by the placeholder
+  version) is removed — nothing in `web/` uses it anymore. Response/request field types
+  (`WebhookDelivery`, `WebhookSubscription`, `CreatedWebhookSubscription`, `WebhookEventType`) are
+  now declared locally in `DeveloperPortal.tsx` rather than imported from `@ship/sdk` — this
+  repo's own established convention for the `web`/`sdk` package boundary (`sdk/src/types.ts`'s own
+  header: "duplicated rather than imported... zero-workspace-dependency"), and consistent with how
+  `api.ts` already declares its own `OAuthApp`/`ApiToken` rather than importing `@ship/sdk`'s.
+- **Routing/nav**: dropped the `/settings/developer` placeholder route and its `WorkspaceSettings.tsx`
+  nav `<Link>`. Mounted instead at `/developer/webhooks` — a sibling of TRO-436's `apps`/`apps/:id`
+  routes, inside the SAME `<DeveloperPortalProvider><Outlet /></DeveloperPortalProvider>` block in
+  `main.tsx` — and added a one-line `{ to: '/developer/webhooks', label: 'Webhooks' }` entry to
+  `DeveloperSidebar.tsx`'s `DEVELOPER_NAV` array, exactly the "shared extension point... a one-line
+  diff" that file's own header predicted this ticket would need.
+- **Secret display**: the subscription-create flow's shown-once signing secret now renders through
+  the shared `ShownOnceSecretModal` (TRO-436) instead of this ticket's own inline banner — same
+  warn-before-close UX app registration/secret rotation already use.
+- **`web/src/lib/api.ts`**: this ticket's duplicate `oauthApps.list()`/`ApiToken.scopes`/`API_URL`
+  export additions are gone — `api.ts` is TRO-436's version, unmodified by this ticket.
+
+**A second, independent collision, found while merging `main` forward before this ticket's PR
+first opened:** `sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody`
+(`createSubscription()`'s request body) was a disclosed gap (`url`/plural `events`, 400s against
+the real server) left out of scope by TRO-599. TRO-607 (merged to `main` as PR #255) fixed the
+exact same gap independently, landing on the identical corrected shape
+(`{ app_id, event_type, target_url }`) — reconciled by keeping TRO-607's version verbatim and
+dropping this ticket's duplicate fix. Since the reconciliation above also removed this ticket's
+`@ship/sdk` usage entirely, this ticket's final net contribution to the SDK package is zero lines.
+
+**What changed (net, final state).**
+- `web/src/pages/DeveloperPortal.tsx` (new) — `DeveloperPortalPage` with two tabs, mounted at
+  `/developer/webhooks` inside TRO-436's `DeveloperPortalProvider`:
+  - `DeliveriesTab` (default tab, built first per the architect's note): server-side cursor
+    pagination (`callV1('/webhooks/deliveries?limit=...&cursor=...')`, a "Load more" button driven
+    by `next_cursor`, never a client-side slice of an already-fetched full list), a status filter
+    (`pending`/`success`/`failed`/`dead`), and a Replay button per row (works regardless of the
+    row's status, `dead` included, matching the real route's own contract).
+  - `SubscriptionsTab`: create (app picker sourced from the existing, real `GET /api/oauth-apps`;
+    event-type select; target-URL input; shown-once secret via `ShownOnceSecretModal`), list, and
+    delete (soft — the real `DELETE /:id` route deactivates rather than hard-deletes, and this
+    tab's own local state update was fixed to match: an earlier version filtered the deleted row
+    out of the list entirely, which disagreed with the row's own `active`-based rendering and was
+    caught red by both the vitest and Playwright CRUD tests before either merge).
+- `web/src/main.tsx`: `developer/webhooks` route added as a sibling of `apps`/`apps/:id` inside
+  TRO-436's provider block.
+- `web/src/components/sidebars/DeveloperSidebar.tsx`: `DEVELOPER_NAV` gained the Webhooks entry.
+- `web/src/pages/WorkspaceSettings.tsx`: the placeholder "Developer" tab-bar `<Link>` removed (the
+  real rail icon/sidebar supersede it).
+
+**Regression tests.**
+- `web/src/pages/DeveloperPortal.test.tsx` (vitest, jsdom + Testing Library — the tier
+  `scripts/factory/gate.sh` actually executes; an e2e-only spec would satisfy the gate's "test
+  added" grep without ever running, per `/ship-qa`). Mocks `usePortalToken()` directly (same
+  "test one thing" boundary `DeveloperApps.test.tsx` uses for the sibling `/developer/apps`
+  screen — token-minting itself has its own dedicated coverage in
+  `DeveloperPortalContext.test.tsx`); only `api.oauthApps.list()`'s real internal
+  `GET /api/oauth-apps` call goes over a stubbed `global.fetch`. Six cases: a DLQ (`dead`)
+  delivery renders and Replay succeeds while preserving the original `Idempotency-Key`; the status
+  filter sends a real `status=` query param; "Load more" sends the server's own opaque cursor (not
+  a client-side slice) and disappears once `next_cursor` is null; `createSubscription()` sends the
+  real `app_id`/`event_type`/`target_url` body and shows the once-only secret via
+  `ShownOnceSecretModal`; deleting a subscription marks it Inactive rather than removing the row;
+  a portal-session error surfaces instead of silently rendering empty tabs. **Red before green,
+  actually run, not asserted from memory** — twice: (1) with `DeveloperPortal.tsx` temporarily
+  removed, the file fails with "Failed to resolve import" (the expected form of red for greenfield
+  work — no prior buggy behavior exists to assert against); restored, all pass. (2) the delete-row
+  test was run against the buggy, row-filtered-out version of `handleDelete` (both before AND
+  again after the TRO-436 reconciliation rewrite) and failed both times with `Unable to find an
+  element with the text: Inactive` before the fix; restored, passes.
+- `e2e/developer-portal-dlq-replay.spec.ts` (Playwright, additive — the ticket's own literal AC).
+  Two tests, navigating to `/developer/webhooks`: (1) seeds a 6-row dead-lettered delivery chain
+  directly via SQL (matching migration 048's row-per-attempt schema exactly — real wall-clock
+  retries were explicitly out per this ticket's own brief, and the deliverer's own retry/backoff
+  math is already proven at the unit tier by `deliverer.test.ts`'s injected-clock suite), confirms
+  it's visible in the portal's DLQ filter, clicks Replay against a real, standalone,
+  HMAC-verifying reference-subscriber HTTP listener (`docs/submission/demo-webhook-listener.mjs`,
+  the same fixture `webhook-idempotency-key-drill.spec.ts` uses) now answering 2xx, and confirms
+  success with the SAME `Idempotency-Key` preserved — verified both via the UI and via the
+  reference subscriber's own receipt (a genuine HTTP round trip, not just a DB-status flip). (2)
+  subscription CRUD through the real UI: create (asserting the once-only secret through the shared
+  `ShownOnceSecretModal`'s two-step warn-before-close flow), list, and delete (asserting the row
+  survives as Inactive). Both passed on the first attempt pre-reconciliation (no retries — see
+  `test-results/progress.jsonl` from that run); re-run post-reconciliation to confirm the route/UI
+  changes didn't regress them.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/web test                      # includes the 6 new/updated cases above
+```
+E2e (`/e2e-test-runner` convention — never run `pnpm test:e2e` directly):
+```bash
+pnpm exec playwright test e2e/developer-portal-dlq-replay.spec.ts
+```
+
+**Not verified / left for a follow-up.** No new backend routes were added — this is a pure
+consumer of the already-built, already-tested PF-302/304/305/306 surface. The DLQ chain in the
+Playwright spec is seeded via direct SQL rather than driven through 6 real, wall-clock-timed
+retries (disclosed above and in that file's own header — the retry/backoff math itself is out of
+this ticket's scope to re-prove).
+
+**Rollback.** `git revert <this-commit-sha>`. No migration, no schema change, no backend route
+added or changed — purely additive frontend, mounted inside TRO-436's own shell. Reverting removes
+`/developer/webhooks`, its `DeveloperSidebar` nav entry, and `DeveloperPortal.tsx`/its test — does
+NOT need to touch anything TRO-436 itself owns (`DeveloperPortalContext`, `DeveloperSidebar`'s
+other entries, `ShownOnceSecretModal`).
+
+---
+
+## TRO-436 — PF-502: Developer portal — OAuth app registration, detail, and secret rotation
+
+**What was built.** A new "Developer" section (5th Icon Rail entry, Contextual Sidebar content) in
+the existing 4-panel Ship web app — no new panel, per the philosophy constraint. Three screens:
+`GET /developer/apps` (list + registration form), `GET /developer/apps/:id` (detail — redirect
+URIs, requested scopes, rotate, revoke). Registration and rotation both show the client secret
+exactly once in a modal with a copy button that warns before every close path (Escape,
+overlay-click, and the explicit dismiss button all route through a confirmation step — matches the
+ticket's own AC literally, not just "warn if not copied").
+
+**Architectural clarification — not everything the portal does goes through `/api/v1` (disclosed
+decision, not a silent shortcut).** PLUGFORGE.MD §2.9 says the portal "mints a short-lived scoped
+personal token ... and uses it for /api/v1 calls," and this ticket's own AC says "portal calls go
+through /api/v1 (network-tab evidence)." Verified directly against the real backend
+(`api/src/routes/oauth-apps.ts`, built by PF-102/TRO-408, already Done and reviewed) that OAuth
+*app* registration/rotation is a session-authed **internal** `/api/oauth-apps` admin endpoint, not
+`/api/v1` — deliberately, per that file's own header comment: registering an app that can act for
+the workspace is a workspace-admin action, and the public scope model (`documents:read`,
+`webhooks:manage`, etc.) has no "manage my workspace's OAuth apps" equivalent, exactly like
+personal API tokens (`api-tokens.ts`) already work the same way. Building a parallel `/api/v1`
+route for this would duplicate already-reviewed backend work to satisfy AC wording written before
+that backend decision existed. What this ticket built to genuinely satisfy the AC instead: a
+`DeveloperPortalProvider` (`web/src/contexts/DeveloperPortalContext.tsx`) that mints the portal's
+own scoped personal token on entry to `/developer/*` (via the extended `api.apiTokens.create({
+scopes })`, migration 043's `scopes text[]` column) and immediately proves it against
+`GET /api/v1/me` — real network-tab evidence that the mechanism works, verified in the e2e spec
+below. This provider is the shared extension point PF-503/TRO-439's subscriptions/delivery-log
+screens (built in parallel) will spend the same token on for their own genuine `/api/v1` reads.
+
+**Files added:**
+- `web/src/contexts/DeveloperPortalContext.tsx` — token mint + `/api/v1/me` identity check + `callV1()` helper for future screens.
+- `web/src/components/ShownOnceSecretModal.tsx` — shared by registration and rotation.
+- `web/src/components/sidebars/DeveloperSidebar.tsx` — the Contextual Sidebar nav list (currently one entry, "Apps"; PF-503/TRO-439 adds "Webhooks" alongside it as a one-line diff).
+- `web/src/pages/DeveloperApps.tsx`, `web/src/pages/DeveloperAppDetail.tsx`.
+
+**Files changed:**
+- `web/src/pages/App.tsx` — `Mode` union, rail icon, sidebar header/content wiring for `'developer'`.
+- `web/src/main.tsx` — lazy-loaded routes under a `DeveloperPortalProvider` layout route.
+- `web/src/lib/api.ts` — `api.oauthApps` client (list/create/get/rotateSecret/revoke against the
+  internal admin surface), `v1Request()`/`V1Result<T>` (the public `/api/v1` wire contract is a
+  genuinely different shape from the internal `{success, data|error}` envelope — raw resource body
+  on success, `ApiErrorBody` directly on failure, bearer auth not cookies — so it's a new helper,
+  not a variant of the existing `request()`), `apiTokens.create()` extended to accept `scopes`.
+- `scripts/check-api-coverage.sh` — the pre-commit hook's route-coverage checker only ever parsed
+  the legacy `api/src/routes/*.ts` + `app.ts` mount convention; it has no awareness of the
+  `api/src/platform/api/v1/` nested sub-router tree at all, so it flagged this ticket's genuinely
+  real `${API_URL}/api/v1${path}` call (`v1Request()`, `DeveloperPortalContext.tsx`'s `/me` call)
+  as missing coverage. Added `v1` to the file's own existing skip-list for "template literal with
+  params" false positives (three prior precedents already there) rather than teaching it the full
+  nested router tree, which is a real follow-up, not a one-line fix.
+- **Real pre-existing gap found and fixed along the way:** `ApiToken`/`ApiTokenCreateResponse` never
+  declared the `scopes` field the backend (`api/src/routes/api-tokens.ts`, PF-107/TRO-430) has
+  returned since that ticket — a frontend type-drift gap that only surfaced now because this ticket
+  is the first caller to actually need `scopes` on the request side and a strict-mode test mock
+  caught the response-side gap at compile time. Fixed by adding `scopes: string[] | null` to
+  `ApiToken`.
+
+**Regression tests** (`web` vitest — 17 new test cases across 4 files, all currently green; not a
+strict red-before-green TDD pass, verified passing against the finished implementation):
+`ShownOnceSecretModal.test.tsx` (copy button; Escape/dismiss-button both require confirmation before
+`onDismiss` fires; "go back" preserves the secret view), `DeveloperApps.test.tsx` (list render,
+empty state, confidential registration shows the modal, public registration shows the no-secret
+notice instead, list-load error surfaces), `DeveloperAppDetail.test.tsx` (detail render, 404
+handling, rotate shows the modal with the new secret, no rotate button for public clients, revoke
+requires confirmation), `DeveloperPortalContext.test.tsx` (mints with the full scope set, calls
+`/me`, surfaces a mint failure instead of hanging, throws outside the provider). Full `web` suite
+(83 files / 592 tests) re-run clean after these additions — zero regressions.
+
+**Additive e2e** (`e2e/developer-portal-apps.spec.ts`, outside both vitest configs — same
+"real proof is vitest, this is additive" convention as `oauth-authorize.spec.ts`): register →
+shown-once secret → Escape-requires-confirmation → detail → rotate → revoke, an axe pass on the
+Apps list (0 critical/serious violations), and a network-tab assertion that `/api/v1/me` is
+actually called. **Verified genuinely green** via `/e2e-test-runner` against a real running server —
+not assumed. Two real defects caught and fixed while getting there, neither hidden: (1) the spec's
+first draft used an unscoped `page.locator('code')`, which the Apps page's own description text
+(`<code>/api/v1/openapi.json</code>`) made ambiguous — scoped to `page.getByRole('dialog')`; (2) a
+TypeScript strict-mode failure surfaced by the `ApiToken.scopes` fix above (an incomplete test
+mock), fixed by completing the mock.
+
+**AC coverage:** registration/detail/rotate ✅; shown-once modal with copy + warn-before-close ✅;
+Playwright flow ✅; axe pass ✅; portal→public-API network evidence ✅ (via `/api/v1/me`, see the
+architectural clarification above for what does and doesn't route through `/api/v1`).
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/web exec vitest run \
+  src/pages/DeveloperApps.test.tsx \
+  src/pages/DeveloperAppDetail.test.tsx \
+  src/components/ShownOnceSecretModal.test.tsx \
+  src/contexts/DeveloperPortalContext.test.tsx
+pnpm exec playwright test e2e/developer-portal-apps.spec.ts --project=chromium
+```
+
+**Rollback.** `git revert <this commit>` — new files only plus additive edits to `App.tsx`,
+`main.tsx`, `api.ts` (new exports/fields, no existing call sites changed). No migration, no schema
+change. Removing the Developer rail icon and routes fully reverts the user-visible surface.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts

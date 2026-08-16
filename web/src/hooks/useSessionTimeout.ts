@@ -16,6 +16,7 @@ export interface SessionTimeoutState {
   timeRemaining: number | null;
   warningType: WarningType | null;
   resetTimer: () => void;
+  dismissAbsoluteWarning: () => void;
   lastActivity: number;
 }
 
@@ -29,6 +30,14 @@ export function useSessionTimeout(onTimeout: () => void): SessionTimeoutState {
   const [showWarning, setShowWarning] = useState(false);
   const [timeRemaining, setTimeRemaining] = useState<number | null>(null);
   const [warningType, setWarningType] = useState<WarningType | null>(null);
+  // Separate from `showWarning`: an absolute warning's own countdown keeps
+  // running in the background after dismissal (TRO-610 — the deadline can't
+  // be extended). Flipping `showWarning` itself would re-trigger
+  // `scheduleAbsoluteWarning`'s effect, whose "already past the threshold"
+  // branch treats any `warningType !== 'inactivity'` as a reason to show
+  // again — an unconditional re-show loop. This flag only affects what's
+  // rendered, never the internal scheduling state.
+  const [absoluteWarningDismissed, setAbsoluteWarningDismissed] = useState(false);
   const [lastActivity, setLastActivity] = useState(() => Date.now());
   const [sessionCreatedAt, setSessionCreatedAt] = useState<number | null>(null);
 
@@ -120,6 +129,17 @@ export function useSessionTimeout(onTimeout: () => void): SessionTimeoutState {
       extendingSessionRef.current = false;
     }
   }, [clearAllTimers]);
+
+  // Dismiss the absolute-timeout warning WITHOUT extending the session or
+  // touching any timer — the absolute deadline is, by design, not
+  // extendable (TRO-610). Sets the dismissed flag only; `showWarning`/
+  // `warningType`/`timeRemaining`/`countdownIntervalRef` are all left alone,
+  // so the running interval keeps ticking in the background and still fires
+  // `onTimeout()` at zero — the real 12-hour cutoff is unaffected by the
+  // user acknowledging the warning.
+  const dismissAbsoluteWarning = useCallback(() => {
+    setAbsoluteWarningDismissed(true);
+  }, []);
 
   // Schedule inactivity warning
   const scheduleInactivityWarning = useCallback(() => {
@@ -323,10 +343,14 @@ export function useSessionTimeout(onTimeout: () => void): SessionTimeoutState {
   }, [sessionCreatedAt]);
 
   return {
-    showWarning,
+    // Dismissing an absolute warning hides it without touching the
+    // internal `showWarning` state itself — see `absoluteWarningDismissed`'s
+    // own comment above for why.
+    showWarning: showWarning && !(warningType === 'absolute' && absoluteWarningDismissed),
     timeRemaining,
     warningType,
     resetTimer,
+    dismissAbsoluteWarning,
     lastActivity,
   };
 }
