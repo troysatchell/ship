@@ -6,6 +6,68 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-552 — v1-exemption boundary predicate now tested at segment edges
+
+**What was built.** `isLegacyLimiterExemptPath` (`api/src/middleware/rate-limit.ts`) — the
+predicate that exempts `/api/v1/*` from the two legacy `/api/` rate limiters (PF-004 / TRO-401) —
+was already segment-boundary-correct (`path === '/v1' || path.startsWith('/v1/')`, per its own
+top-of-file doc), but nothing in `rate-limit-v1-exemption.test.ts` ever mounted a route whose
+mount-relative path shares the `/v1` string as a prefix without actually being it, so the boundary
+behavior was asserted only in a code comment. A regression to a bare `path.startsWith('/v1')`
+(dropping the exact-match branch and the trailing-slash check) would have passed every existing
+AC-1..AC-3b case in that file unchanged, because none of them ever requests a path only a substring
+match would wrongly admit.
+
+Added two new cases to that same file, matching its existing `limitOverrides` (TRO-494) seam and
+AC-numbering convention:
+- **AC-4a**: a test app mounts `/api/v10/example` behind both legacy limiters with
+  `identityLimit`/`sourceIpLimit` both overridden to a small cap (3), and asserts the route DOES
+  throttle past that cap (i.e., is NOT exempted).
+- **AC-4b**: same shape for `/api/v1foo/example`.
+
+No production code changed — this is a pure test-only addition; `rate-limit.ts` itself is
+unmodified by this ticket.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/rate-limit-v1-exemption.test.ts
+```
+
+All 6 tests (the 4 pre-existing AC-1/AC-2/AC-3a/AC-3b plus the new AC-4a/AC-4b) pass.
+
+**Confirmed red before green.** Temporarily mutated `isLegacyLimiterExemptPath` in
+`api/src/middleware/rate-limit.ts` to a bare substring match:
+
+```ts
+export function isLegacyLimiterExemptPath(path: string): boolean {
+  return path.startsWith('/v1');
+}
+```
+
+Re-ran the suite: AC-4a and AC-4b failed —
+
+```
+AssertionError: never saw a 429 in 4 requests to /api/v10/example against a cap of 3 — a bare
+startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom:
+expected -1 not to be -1
+
+AssertionError: never saw a 429 in 4 requests to /api/v1foo/example against a cap of 3 — a bare
+startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom:
+expected -1 not to be -1
+```
+
+— while AC-1/AC-2/AC-3a/AC-3b stayed green, confirming the mutation is a real, targeted regression
+that only the new boundary tests catch. Reverted the mutation (`git diff` on `rate-limit.ts` empty
+afterward) and re-ran: 6/6 pass.
+
+**Rollback.** Revert this commit. `rate-limit-v1-exemption.test.ts` returns to its prior 4-case
+form; `rate-limit.ts` is untouched by this ticket either way, so there is no production behavior to
+roll back.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth
