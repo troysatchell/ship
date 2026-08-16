@@ -468,6 +468,44 @@ clean revert. No data was changed by this migration; only the index needs removi
 
 ---
 
+## TRO-444 — PlugForge final demo script + social post drafts, with a real captured `✓ verified` frame (PF-908)
+
+**What.** Docs-only. `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` is rewritten from the stale W5
+curl rehearsal (it still said PF-600 was failing CI and PF-602 was not started — both are merged)
+into the FINAL 3–5 min script: Act 1 the literal five-line CLI story (`ship login` → `ship
+webhooks tail` → `ship docs create` → `✓ verified … document.created`) with the real strings from
+`integrations/cli/src/commands/*.ts`, Act 2 the developer portal (`/developer/webhooks`: Delivery
+log → **Dead (DLQ)** filter → **Replay**, labels from `web/src/pages/DeveloperPortal.tsx`), Act 3
+the CI job **`drill · TTFE (PF-603)`** and its per-stage table (`scripts/drill/thresholds.ts`);
+plus a pre-stage checklist (ports/env, `SECRET_ENCRYPTION_KEY`, tarball SDK install, `client_id`
+recipe, a `generate_series` SQL recipe to force one dead-lettered delivery for the replay shot),
+a fallback per act, a shot list, and a provenance section separating observed from derived. New
+`docs/submission/PLUGFORGE-SOCIAL-POST.md`: a ≤280-char X variant and a longer LinkedIn variant
+tagging @GauntletAI, plus the 3-line "what Troy does" checklist. New
+`docs/submission/social-assets/w6/`: `five-line-story-transcript.txt` and
+`webhooks-tail-verified.txt` (verbatim stdout of the real CLI against a real API in this worktree,
+commit b68da413) and `webhooks-tail-verified.png` (a Playwright render of that text — a drawn
+terminal window, not a photo; stated as such in the docs and in the image footer).
+
+Also `integrations/cli/src/__tests__/demoScript.drift.test.ts`: a filesystem-only drift guard
+that pins every CLI output line the script quotes to the command source that prints it, checks
+the captured frame matches `formatDeliveryLine()`'s exact shape, and asserts the stale W5 claims
+are gone (red against the pre-rewrite script — it contained "PF-600 is failing CI"; green now).
+
+**Why.** PF-908 is a human checkpoint (Troy records and posts); the agent-side halves — accurate
+script, real screenshot, post text — were stale or missing.
+
+**How to verify.** `cat docs/submission/social-assets/w6/webhooks-tail-verified.txt` shows the
+`✓ verified` line; open the PNG. To reproduce the capture: build shared/sdk/cli, start the API
+with `SECRET_ENCRYPTION_KEY`, follow the script's P2 for a `client_id`, then run `ship login`,
+`ship webhooks tail`, `ship docs create --title "PlugForge demo"` per Act 1. Not run here: the
+portal clicks and the CI job (both derived from source and labeled so in the script).
+
+**Rollback.** `git revert` the commit — docs and static assets only; no code, schema, or config
+touched.
+
+---
+
 ## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
 
 **What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:
