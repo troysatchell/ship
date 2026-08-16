@@ -6,6 +6,65 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-619 — Epic write-ups E5 + E7 added, E6 proof moved to CI run IDs, README portal path, PR template
+
+**What was wrong.** Docs/process only — no `api/`, `web/`, or `shared/` runtime code changed.
+- **Observed:** `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` had H2s for E0/E1/E2/E3/E4/E6/E8 only,
+  with an intro paragraph explicitly deferring E5 and E7 (correct when written — PF-503 and PF-704
+  had not landed). Both have since merged (PF-503 via TRO-439 / PR #260, PF-704 via TRO-440), so
+  the deferral was stale. E6's proof cited a *local* `pnpm drill ttfe` run (1998ms); PLUGFORGE.MD
+  §4 (PF-906) says E6's proof is "TTFE green **in CI**".
+- **Observed:** `README.md`'s "Portal reachability" bullet said the developer portal "doesn't exist
+  on this branch yet" — false since TRO-436 (`/developer/apps`) and TRO-439 (`/developer/webhooks`)
+  merged; the routes are mounted at `web/src/main.tsx:305-323`.
+- **Observed:** no `.github/PULL_REQUEST_TEMPLATE.md` existed (`.github/` held only `workflows/`),
+  so nothing prompted a PR author for the AC advanced / fitness test / evidence / rollback that
+  PLUGFORGE.MD p.12 asks every PR to state.
+
+**What changed.**
+- `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` — intro rewritten (no longer "two epics absent");
+  new `## Epic E5 — Rate limiting, audit, portal (PF-500–504)` and
+  `## Epic E7 — Agent as platform citizen (PF-700–704)` in the same Before/Fix/After/Proof shape.
+  E7's proof quotes what `agent/src/__tests__/auditTrailProof.liveServer.test.ts` actually asserts,
+  with line numbers (reads under `ship_app_fleetgraph` with `user_id` null `:302-305`; the write
+  under the human `user_id` with `app_client_id` null `:330-332`; `x-ratelimit-*` present
+  `:346-348`; no row attributed to both `:381-383`), links `PF-704-COST-LEDGER-DELTA.md`, and states
+  plainly that token-volume equality between modes is **not yet measured** (TRO-620 owns it).
+  E5's proof cites the ratelimit/audit vitest suites and the two portal e2e specs, records the
+  PF-504 go decision as **derived** (both route trees on `main`; no separate memo exists), and
+  says the portal Audit page is TRO-616, in flight. E6's proof now cites GitHub Actions runs
+  `31949732432` (main @ `9d744017`, drill job completed 2026-08-16T13:37:33Z) and `31935025680`
+  (main @ `8592393f`, 2026-08-16T08:06:16Z), both `success` — **observed** via
+  `GH_REPO=troysatchell/ship gh run view <id> --json conclusion,headSha,createdAt` and the job
+  log (`total: 3988ms / 60000ms budget`, `verdict: pass`).
+- `api/src/__tests__/epicWriteupsAndDiscoveries.test.ts` — the structural lint that (by its own
+  comment) had to flip when E5/E7 landed: E5/E7 added to the required-heading list; the "must NOT
+  have `## Epic E5/E7`" guard replaced by a presence check; two new `it()`s pin the E7 proof
+  citations (`auditTrailProof.liveServer.test.ts`, `PF-704-COST-LEDGER-DELTA.md`, `TRO-620`, "not yet
+  measured") and the E6 CI run IDs. Red-before-green: with the test updated and the doc untouched,
+  6 of 25 failed (`has a heading for Epic E5`, `Epic E5/E7 has the mandated ... shape`, and the
+  three new `it()`s); after the doc edit, `Tests  25 passed (25)`.
+- `README.md` — the stale bullet replaced with the grader path: log in → **Developer** in the icon
+  rail → `/developer/apps` (register, shown-once secret, rotate) → `/developer/webhooks`
+  (subscriptions, delivery log, DLQ, Replay). `/developer/audit` deliberately not mentioned
+  (TRO-616 not merged).
+- `.github/PULL_REQUEST_TEMPLATE.md` — new, 26 lines: Ticket(s) / Acceptance criterion this slice
+  advances / Fitness test / Evidence / Rollback.
+
+**How to verify.**
+```bash
+pnpm --filter @ship/api exec vitest run src/__tests__/epicWriteupsAndDiscoveries.test.ts
+grep -n '^## Epic' docs/submission/PLUGFORGE-EPIC-WRITEUPS.md        # E0..E8, nine H2s
+GH_REPO=troysatchell/ship gh run view 31949732432 --json conclusion,headSha,createdAt
+GH_REPO=troysatchell/ship gh run view 31935025680 --json conclusion,headSha,createdAt
+test -f .github/PULL_REQUEST_TEMPLATE.md && wc -l .github/PULL_REQUEST_TEMPLATE.md
+```
+
+**Rollback.** Revert the PR. Docs, one structural test, and a PR template only — no schema, no
+migration, no runtime code.
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
