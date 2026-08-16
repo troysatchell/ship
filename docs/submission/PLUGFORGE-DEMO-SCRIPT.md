@@ -74,8 +74,16 @@ registry**. "Install `@ship/sdk` in a fresh terminal" is real, but it is a *tarb
 ```bash
 pnpm build:shared && pnpm build:sdk && pnpm --filter @ship/cli build
 (cd sdk && npm pack --pack-destination /tmp)            # → /tmp/ship-sdk-0.0.0.tgz
-alias ship="node $PWD/integrations/cli/dist/bin.js"      # `ship` in every terminal you open on camera
+alias ship="node $PWD/integrations/cli/dist/bin.js"      # LEFT terminal only — run this in the repo root
 ```
+
+**The alias does not cross terminals.** It's shell-local: a brand-new terminal (including the
+`mktemp -d` one Act 1's Install step opens) has never seen it, and installing the `/tmp/ship-sdk-
+*.tgz` tarball does **not** provide it either — `ship` is `@ship/cli`'s bin, a separate package
+`npm install`-ing the SDK never touches. Confirmed live: following only P1 + the Install step below
+reproduces `zsh: command not found: ship`. Run this P1 block in the **LEFT** terminal only, since
+that's where `ship webhooks tail` runs (1:05–1:20 below); the RIGHT terminal defines its own copy
+inline, from the repo root, before it `cd`s away — see the Install step immediately below.
 
 (If you prefer a real binary on PATH: `cd integrations/cli && npm link` — not tested for this
 script; the alias is what was run.)
@@ -159,11 +167,16 @@ readable in a 1280-wide export.
 versioned API, signed webhooks. Here's the whole developer experience in five commands, from a
 fresh terminal."*
 
-**0:15–0:35 Install** (right terminal, `cd $(mktemp -d)`):
+**0:15–0:35 Install** (right terminal, starting from the repo root):
 ```bash
+alias ship="node $PWD/integrations/cli/dist/bin.js"      # set BEFORE cd — $PWD expands now, survives the cd below
+cd $(mktemp -d)
 npm init -y >/dev/null && npm install /tmp/ship-sdk-0.0.0.tgz
 ```
-SAY: *"That's the same tarball install the CI drill times every push."*
+SAY: *"That's the same tarball install the CI drill times every push."* (The `alias` line is setup,
+not part of the on-camera "five commands" — it's why `ship` resolves in a terminal that never ran
+P1 itself. Skipping it, or opening this terminal already inside the `mktemp -d` directory, is what
+throws `zsh: command not found: ship` — confirmed live, not hypothetical.)
 
 **0:35–1:05 Login** (right):
 ```bash
