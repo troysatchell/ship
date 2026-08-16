@@ -6,6 +6,47 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-429 — PF-904 pre-search document pre-filled from the PRD and repo (🔔 human checkpoint, Troy's answers still owed)
+
+**What was missing.** The Week 6 brief's Appendix ("Pre-Search Checklist", three phases) had no
+answer document — only Week 5's `PRESEARCH.MD` existed at repo root, and PF-904's AC
+(`PLUGFORGE.MD:300`) requires the pre-search complete with Troy's real answers plus the saved AI
+conversation attached as a reference artifact.
+
+**What changed.**
+- `docs/submission/PLUGFORGE-PRESEARCH.md` — new. Every one of the Appendix's questions, in order,
+  with the answer that is derivable from `PLUGFORGE.MD` (§1.4 decisions, §2 architecture, §7 risks,
+  §8 out-of-scope), `docs/architecture.md`, `docs/IAM-ADAPTATION-RENDER.md`,
+  `docs/submission/PF-905-AI-COST-ANALYSIS.md`, and the code (`api/src/platform/**`, `sdk/`,
+  `integrations/`, CI files, README) — each answer tagged **observed** / **derived** / **not-run** per
+  `.claude/CLAUDE.md`'s provenance rule and cited `file:line`. The eleven questions only Troy can
+  answer (hours/day, honest skill inventory, budget ceilings, personal preferences, the conversation
+  export) are left as visible `> **[TROY — needs your answer]**` blocks with a one-line prompt each.
+  Structure and voice follow Week 5's `PRESEARCH.MD`; no W5 answers are reused. A final "Reference
+  artifact — saved AI conversation" section explains which conversations qualify (the PRD
+  research/review sessions), gives the export steps for Claude Code (`/export`, or the JSONL under
+  `~/.claude/projects/`) and claude.ai, names the target path
+  `docs/submission/presearch-conversation-<date>.md`, and leaves a placeholder link — no
+  conversation is fabricated or embedded.
+- `README.md` — one bullet under "## Documentation" pointing at the pre-search doc.
+
+**Two findings surfaced while pre-filling, disclosed rather than smoothed over:** (1) `PLUGFORGE.MD:228`
+specifies `frame-ancestors 'none'` on the consent page, but `api/src/app.ts:330-345`'s helmet CSP
+sets no explicit `frame-ancestors`; the effective value is helmet's default `'self'` (derived from
+helmet's documented defaults, not verified by a live header dump) — same-origin framing is still
+permitted; (2) the deliverer dead-letters every non-2xx/non-5xx including 429 and 410
+(`deliverer.ts:707`, `:852`) — a documented simplification, replay is the recovery. Neither is
+changed by this ticket; both are named in the doc's answers.
+
+**How to verify.** `grep -c '\[TROY' docs/submission/PLUGFORGE-PRESEARCH.md` → 11. Spot-check any
+`file:line` citation against the tree. `git diff --stat` shows only the two docs files plus this
+entry — no code, no tests, no schema.
+
+**Rollback.** `git rm docs/submission/PLUGFORGE-PRESEARCH.md`, drop the README bullet, delete this
+entry. Docs-only; nothing runtime depends on the file.
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
