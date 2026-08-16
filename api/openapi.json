@@ -3730,9 +3730,21 @@
             "type": "array",
             "nullable": true,
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "documents:read",
+                "documents:write",
+                "issues:read",
+                "issues:write",
+                "sprints:read",
+                "sprints:write",
+                "webhooks:manage",
+                "audit:read"
+              ],
+              "description": "A scope name registered in ScopeRegistry.",
+              "example": "documents:read"
             },
-            "description": "Scopes granted to this token (e.g. \"documents:read\"). Null = legacy unscoped token, never valid at /api/v1.",
+            "description": "Scopes granted to this token. Null = legacy unscoped token, never valid at /api/v1.",
             "example": [
               "documents:read"
             ]
@@ -3744,7 +3756,8 @@
           "prefix",
           "last_used_at",
           "created_at",
-          "expires_at"
+          "expires_at",
+          "scopes"
         ]
       },
       "CreateAPIToken": {
@@ -3766,7 +3779,19 @@
           "scopes": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "documents:read",
+                "documents:write",
+                "issues:read",
+                "issues:write",
+                "sprints:read",
+                "sprints:write",
+                "webhooks:manage",
+                "audit:read"
+              ],
+              "description": "A scope name registered in ScopeRegistry.",
+              "example": "documents:read"
             },
             "minItems": 1,
             "description": "Scopes to grant this token, from ScopeRegistry (e.g. \"documents:read\"). Omit for a legacy unscoped token — never valid at /api/v1.",

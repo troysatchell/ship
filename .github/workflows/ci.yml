@@ -588,11 +588,88 @@ jobs:
           # README) and is the fastest/simplest option that still fully
           # analyzes web/, api/, shared/, and e2e/.
           build-mode: none
+          # TRO-590: excludes test files (scratch Express apps that mount
+          # real middleware for proof-of-behavior only, never reachable in
+          # production) from queries like js/missing-rate-limiting.
+          config-file: ./.github/codeql/codeql-config.yml
 
       - name: Perform CodeQL analysis
         uses: github/codeql-action/analyze@a2983b8bed1923f44751c5c43237f479442827b3 # v3.37.4
         with:
           category: '/language:javascript-typescript'
+
+  drill-ttfe-image:
+    name: drill · TTFE image-mode (TRO-621)
+    runs-on: ubuntu-latest
+    # `needs: build-image` (transitively `verify`): a doomed PR never spends
+    # minutes here, and — the point — this job only ever runs once the SAME
+    # root Dockerfile has just been proved buildable by build-image, whose
+    # `cache-to: type=gha,mode=max` layers this job's own build reads back
+    # (`cache-from: type=gha` below), so the rebuild here is mostly cache
+    # hits, not a second cold build.
+    needs: build-image
+    timeout-minutes: 20
+
+    # TRO-621 (W6-R55, ruling I-07 "containerized Ship instance"): the TTFE
+    # drill with the api running FROM THE CONTAINER IMAGE (the artifact
+    # build-image builds and main pushes to GHCR), not from `tsx src/index.ts`
+    # in the checkout — the existing `drill-ttfe` job above stays on that tsx
+    # default, unchanged, so both modes run on every PR.
+    #
+    # Why rebuild-with-shared-cache here rather than exporting build-image's
+    # result as a tar artifact: build-image's single build step already
+    # toggles `push` by event (main push vs PR). Adding an unconditional
+    # `outputs: type=docker,dest=…` there would ask buildx for two exporters
+    # at once on main pushes (registry + docker), which the runner's default
+    # (non-containerd) image store does not support; making it conditional
+    # would leave main-push runs with no artifact for THIS job to consume;
+    # and either way it round-trips a ~500 MB tar through actions/upload-
+    # artifact on every PR. `load: true` + `cache-from: type=gha` against
+    # build-image's warmed cache is event-agnostic, touches build-image not
+    # at all, and lands the identical image (same Dockerfile, same context,
+    # same cache keys) in this job's local docker daemon under `ship-api:ci`.
+    #
+    # Why NO `services:` Postgres here (unlike drill-ttfe above): the image
+    # runs `NODE_ENV=production`, and `api/src/db/ssl.ts` REQUIRES TLS to
+    # Postgres in production; a `services:` `postgres:15-alpine` is
+    # plaintext-only, and services can't take server args to turn ssl on. So
+    # `DATABASE_URL` is left UNSET and `scripts/drill/ttfe.ts` starts its own
+    # TLS-enabled testcontainers Postgres on a private docker network the api
+    # container joins by alias (GitHub's hosted runners DO have a reachable
+    # Docker daemon — the same fact e2e-agent's own comment records; GitLab's
+    # shared runner does not, which is why this job is GitHub-only — see
+    # .gitlab-ci.yml's drill-ttfe comment). See scripts/drill/ttfe-api-mode.ts's
+    # header for the full mode/TLS design.
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@bb05f3f5519dd87d3ba754cc423b652a5edd6d2c # v4.2.0
+
+      - name: Build the api image into the local docker daemon (cache shared with build-image)
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ship-api:ci
+          cache-from: type=gha
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the TTFE drill against the container image
+        env:
+          DRILL_TTFE_API_IMAGE: ship-api:ci
+        run: pnpm drill ttfe
 
   build-image:
     name: build · push image (GHCR)

@@ -1,0 +1,158 @@
+
+> ship@0.0.0 test:sdk /Users/troy/repos/GAUNTLET/Ship
+> pnpm --filter @ship/sdk test
+
+
+> @ship/sdk@0.0.0 test /Users/troy/repos/GAUNTLET/Ship/sdk
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv4.0.17 [39m[90m/Users/troy/repos/GAUNTLET/Ship/sdk[39m
+
+ [32m✓[39m src/deviceLogin.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/verifyWebhook.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/tokenStore.test.ts [2m([22m[2m15 tests[22m[2m)[22m[32m 80[2mms[22m[39m
+ [32m✓[39m src/resources/__tests__/iterate.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 25[2mms[22m[39m
+ [32m✓[39m src/client.clientCredentials.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/client.refresh.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 65[2mms[22m[39m
+ [32m✓[39m src/resources/__tests__/webhooks.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/authorizationCodeFlow.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/resources/__tests__/audit.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/clientCredentials.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/resources/__tests__/issuesAssigneeFilter.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 18[2mms[22m[39m
+ [32m✓[39m src/resources/__tests__/pf205.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 16[2mms[22m[39m
+ [32m✓[39m src/client.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/pkce.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/errors.test.ts [2m([22m[2m16 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/__tests__/sizeGate.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+ [32m✓[39m src/__tests__/webhookResponseShape.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+ [32m✓[39m src/__tests__/parity.test.ts [2m([22m[2m57 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+[90mstdout[2m | src/__tests__/client.authorizationCodeFlow.liveServer.test.ts[2m > [22m[2mPF-404: authorizationCodeFlow() PKCE redemption end-to-end against a real running Ship API + the seeded worktree DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/client.deviceLogin.liveServer.test.ts[2m > [22m[2mPF-404: ShipClient.deviceLogin() end-to-end against a real running Ship API + the seeded worktree DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/client.liveServer.test.ts[2m > [22m[2mPF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/client.clientCredentials.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient.clientCredentials() against a real running Ship API
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/audit.liveServer.test.ts[2m > [22m[2mPF-501: AuditClient against a real running Ship API + the seeded worktree DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB
+[22m[39mServing SPA from /Users/troy/repos/GAUNTLET/Ship/web/dist
+CAIA not configured, skipping initialization
+
+[90mstdout[2m | src/__tests__/client.liveServer.test.ts[2m > [22m[2mPF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)[2m > [22m[2mnew ShipClient({ token, baseUrl }).me() returns the typed user for a real bearer token, over a real TCP round trip
+[22m[39m[api/v1] request_id=1b28282f-9a5a-4fb2-a422-90a6a8d91d6e GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/audit.liveServer.test.ts[2m > [22m[2mPF-501: AuditClient against a real running Ship API + the seeded worktree DB[2m > [22m[2maudit.list() returns the seeded row for a super-admin ('owner') token
+[22m[39m[api/v1] request_id=f4152baf-67a5-4810-9013-582b50cd8032 GET /api/v1/audit
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mcreateSubscription() (TRO-452 fix) POSTs app_id/event_type/target_url and returns EXACTLY CreatedWebhookSubscription's real fields, without 400ing — the exact real-server round trip the pre-fix request body could never complete
+[22m[39m[api/v1] request_id=0aa16d8c-2b79-4f8e-be15-d1025ce4c982 POST /api/v1/webhooks
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.create() POSTs a real document and returns the real typed response
+[22m[39m[api/v1] request_id=9f7e0b6b-1b0f-4db7-b11e-087223099268 POST /api/v1/documents
+
+[90mstdout[2m | src/__tests__/client.liveServer.test.ts[2m > [22m[2mPF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)[2m > [22m[2man invalid token maps to a ShipSdkError with kind "auth" (unauthorized -> auth), still over a real TCP round trip
+[22m[39m[api/v1] request_id=a6f6f1f1-c06c-4f52-ae6b-13be087cb299 GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/client.liveServer.test.ts[2m > [22m[2mPF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)[2m > [22m[2man invalid token maps to a ShipSdkError with kind "auth" (unauthorized -> auth), still over a real TCP round trip
+[22m[39m[api/v1] request_id=08b2a1d6-4b4a-4b87-bfde-63488a849b67 GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/client.clientCredentials.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient.clientCredentials() against a real running Ship API[2m > [22m[2mmints a real app-identity token and a real /api/v1/me call resolves user: null, app: populated
+[22m[39m[api/v1] request_id=a0e2a65e-4638-45ad-a650-44241da09cca GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/audit.liveServer.test.ts[2m > [22m[2mPF-501: AuditClient against a real running Ship API + the seeded worktree DB[2m > [22m[2maudit.list() rejects with kind "forbidden" for a plain workspace member (not admin/owner)
+[22m[39m[api/v1] request_id=69f26826-b60e-4399-88d3-6bce6a7b33d0 GET /api/v1/audit
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.create() POSTs a real document and returns the real typed response
+[22m[39m[api/v1] request_id=95fda30a-49b8-40ce-873e-94c10cd75c51 GET /api/v1/documents/fa50557f-fa1e-4637-91ea-70da7c3702c9
+
+[90mstdout[2m | src/__tests__/client.authorizationCodeFlow.liveServer.test.ts[2m > [22m[2mPF-404: authorizationCodeFlow() PKCE redemption end-to-end against a real running Ship API + the seeded worktree DB[2m > [22m[2mredeems a real authorization code with the matching PKCE verifier and returns working, scoped tokens
+[22m[39m[api/v1] request_id=fe050adc-4a68-47e0-9f6a-92bb2d7d0869 GET /api/v1/me
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.create() POSTs a real document and returns the real typed response
+[22m[39m[api/v1] request_id=969c45eb-a219-4f9a-8a85-e510d103211d GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/client.clientCredentials.liveServer.test.ts[2m > [22m[2mPF-702: ShipClient.clientCredentials() against a real running Ship API[2m > [22m[2mthe minted token can actually read through a real resource client (documents.list)
+[22m[39m[api/v1] request_id=59eab53b-695f-4e6d-86b9-343b2deee989 GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mlistSubscriptions() returns the seeded subscription with EXACTLY WebhookSubscription's real fields
+[22m[39m[api/v1] request_id=8fad9665-4f19-416f-83af-47524fe5bfb0 GET /api/v1/webhooks
+
+[90mstdout[2m | src/__tests__/client.deviceLogin.liveServer.test.ts[2m > [22m[2mPF-404: ShipClient.deviceLogin() end-to-end against a real running Ship API + the seeded worktree DB[2m > [22m[2mfull RFC 8628 round trip: device code issued -> onUserCode fires -> approved mid-flight -> polling succeeds -> the returned ShipClient works against /api/v1/me, and its tokens (incl. a real refresh token) reach the supplied tokenStore
+[22m[39m[api/v1] request_id=c425d3e9-0ada-4c33-89fc-92ea4924525b GET /api/v1/me
+
+ [32m✓[39m src/__tests__/client.liveServer.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+ [32m✓[39m src/__tests__/client.authorizationCodeFlow.liveServer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 93[2mms[22m[39m
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mgetSubscription() returns EXACTLY WebhookSubscription's real fields, never a secret or updated_at
+[22m[39m[api/v1] request_id=eb1a67f8-6db1-49e6-ad98-2f3712a33aa4 GET /api/v1/webhooks/e2a68360-9260-4908-8d74-c81180adcd2b
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mrotateSecret() returns EXACTLY CreatedWebhookSubscription's real fields, including 'warning' (the second, unnamed field TRO-599 fixed)
+[22m[39m[api/v1] request_id=3da42078-2f04-4854-9243-4a96bcd8ac49 POST /api/v1/webhooks/e2a68360-9260-4908-8d74-c81180adcd2b/rotate
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.create() with an empty title maps to a ShipSdkError with kind "validation"
+[22m[39m[api/v1] request_id=88fa3bdb-9437-4439-9367-b1e8cf8b02f1 POST /api/v1/documents
+
+ [32m✓[39m src/__tests__/audit.liveServer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 95[2mms[22m[39m
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.get() with a well-formed but nonexistent id maps to a ShipSdkError with kind "not_found"
+[22m[39m[api/v1] request_id=4463df0f-fc01-4d5c-a4f7-b9e30f59f9d9 GET /api/v1/documents/00000000-0000-0000-0000-000000000000
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mcreateSubscription() (TRO-607) creates a real subscription with the corrected request body shape and returns EXACTLY CreatedWebhookSubscription
+[22m[39m[api/v1] request_id=8920a9a0-466b-4bd8-831b-76dde365d43f POST /api/v1/webhooks
+
+ [32m✓[39m src/__tests__/client.clientCredentials.liveServer.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 98[2mms[22m[39m
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.get() with a well-formed but nonexistent id maps to a ShipSdkError with kind "not_found"
+[22m[39m[api/v1] request_id=fab95d7f-9232-41f5-b4aa-87fa487f5cfb GET /api/v1/documents/00000000-0000-0000-0000-000000000000
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mcreateSubscription() (TRO-607) creates a real subscription with the corrected request body shape and returns EXACTLY CreatedWebhookSubscription
+[22m[39m[api/v1] request_id=48b3c516-c862-4f39-b9b0-583b725256c2 GET /api/v1/webhooks/2b77762a-54b5-465b-8c17-6ab2c314bb16
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2missues.list() returns the seeded issue with state/priority/assignee_id lifted to typed top-level fields
+[22m[39m[api/v1] request_id=93b00a11-957c-4d38-9a7d-d30edcd25f5e GET /api/v1/issues
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mlistDeliveries() returns EXACTLY WebhookDelivery's real fields, and the real 'dead' status literal (not the old guessed 'dead_letter')
+[22m[39m[api/v1] request_id=350f9bef-ee6a-4836-b08a-39e488628318 GET /api/v1/webhooks/deliveries
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2msprints.list() returns the seeded sprint with document_type "sprint" and its raw properties
+[22m[39m[api/v1] request_id=6f205e86-8802-4527-8ea0-f883a7d7746e GET /api/v1/sprints
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mreplayDelivery() re-runs a REAL HTTP attempt against a real local target and returns the new row with EXACTLY WebhookDelivery's real fields
+[22m[39m[api/v1] request_id=bfaf7b90-a3f0-4b74-9111-9980c0d27cb7 POST /api/v1/webhooks/deliveries/d68d6a30-06e0-4c46-917f-144ba37b5016/replay
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.iterate() transparently walks 3+ real pages and yields every seeded document exactly once, newest-first
+[22m[39m[api/v1] request_id=7ad0e7a2-9b0a-477e-ba05-5bbfad15aa32 GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.iterate() transparently walks 3+ real pages and yields every seeded document exactly once, newest-first
+[22m[39m[api/v1] request_id=4f151837-2081-4ae2-b771-a9e0314fd8b4 GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/resources.liveServer.test.ts[2m > [22m[2mPF-401: DocumentsClient/IssuesClient/SprintsClient against a real running Ship API + the seeded worktree DB[2m > [22m[2mdocuments.iterate() transparently walks 3+ real pages and yields every seeded document exactly once, newest-first
+[22m[39m[api/v1] request_id=943c703a-9795-4dae-a7d0-f5c26e35728d GET /api/v1/documents
+
+[90mstdout[2m | src/__tests__/webhooks.liveServer.test.ts[2m > [22m[2mTRO-599: WebhooksClient against a real running Ship API + the seeded worktree DB[2m > [22m[2ma non-2xx response still maps to a ShipSdkError through webhooks, same as ShipClient.me() (missing scope)
+[22m[39m[api/v1] request_id=ceb880f7-9dd3-4088-b67a-3f8aefc87d8c GET /api/v1/webhooks
+
+ [32m✓[39m src/__tests__/resources.liveServer.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 126[2mms[22m[39m
+ [32m✓[39m src/__tests__/webhooks.liveServer.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 127[2mms[22m[39m
+ [32m✓[39m src/__tests__/client.deviceLogin.liveServer.test.ts [2m([22m[2m2 tests[22m[2m)[22m[33m 5112[2mms[22m[39m
+     [33m[2m✓[22m[39m a denied device code rejects deviceLogin() with a ShipSdkError, never resolving to a client [33m 5014[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m25 passed[39m[22m[90m (25)[39m
+[2m      Tests [22m [1m[32m229 passed[39m[22m[90m (229)[39m
+[2m   Start at [22m 08:41:49
+[2m   Duration [22m 6.57s[2m (transform 5.65s, setup 0ms, import 11.28s, tests 6.15s, environment 2ms)[22m
+

@@ -30,6 +30,11 @@
 export { ShipClient } from './client.js';
 export type { ShipClientOptions } from './client.js';
 
+// TRO-618 — runtime mirrors of the `IssueState`/`IssuePriority` unions
+// (`as const`), for callers that need to iterate/validate the members
+// (CLI flag choices, form selects) without re-typing them.
+export { ISSUE_STATES, ISSUE_PRIORITIES } from './types.js';
+
 export type {
   Me,
   MeUser,
@@ -105,6 +110,10 @@ export type { ApiErrorCode, ApiErrorBody, SdkErrorKind, SdkErrorShape } from './
 
 export { MemoryTokenStore } from './tokenStore.js';
 export type { ITokenStore, TokenSet } from './tokenStore.js';
+// TRO-617 (ruling I-06): the browser store ships in the SDK. Zero deps, no
+// top-level `localStorage` access, so this barrel stays Node-importable.
+export { LocalStorageTokenStore } from './localStorageTokenStore.js';
+export type { LocalStorageTokenStoreOptions } from './localStorageTokenStore.js';
 
 export { generatePkcePair } from './pkce.js';
 export type { PkcePair } from './pkce.js';

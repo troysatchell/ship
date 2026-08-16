@@ -1,0 +1,24 @@
+                             Table "public.api_tokens"
+    Column    |           Type           | Collation | Nullable |      Default      
+--------------+--------------------------+-----------+----------+-------------------
+ id           | uuid                     |           | not null | gen_random_uuid()
+ user_id      | uuid                     |           | not null | 
+ workspace_id | uuid                     |           | not null | 
+ name         | text                     |           | not null | 
+ token_hash   | text                     |           | not null | 
+ token_prefix | text                     |           | not null | 
+ last_used_at | timestamp with time zone |           |          | 
+ expires_at   | timestamp with time zone |           |          | 
+ revoked_at   | timestamp with time zone |           |          | 
+ created_at   | timestamp with time zone |           |          | now()
+ scopes       | text[]                   |           |          | 
+Indexes:
+    "api_tokens_pkey" PRIMARY KEY, btree (id)
+    "api_tokens_user_id_workspace_id_name_key" UNIQUE CONSTRAINT, btree (user_id, workspace_id, name)
+    "idx_api_tokens_token_prefix" btree (token_prefix)
+    "idx_api_tokens_user_id" btree (user_id)
+    "idx_api_tokens_workspace_id" btree (workspace_id)
+Foreign-key constraints:
+    "api_tokens_user_id_fkey" FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    "api_tokens_workspace_id_fkey" FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+

@@ -1,0 +1,630 @@
+
+[Memory] Total: 24.0GB, Available: 0.2GB
+⚠️  WARNING: Low memory (0.2GB free)
+   Consider closing other apps or reducing workers.
+   Each worker needs ~500MB (Postgres + API + Preview)
+
+Building API for tests...
+
+> ship@0.0.0 build:api /Users/troy/repos/GAUNTLET/Ship
+> pnpm run build:shared && pnpm --filter @ship/api build
+
+
+> ship@0.0.0 build:shared /Users/troy/repos/GAUNTLET/Ship
+> pnpm --filter @ship/shared build
+
+
+> @ship/shared@0.0.0 build /Users/troy/repos/GAUNTLET/Ship/shared
+> tsc
+
+
+> @ship/api@0.0.0 build /Users/troy/repos/GAUNTLET/Ship/api
+> tsc && cp src/db/schema.sql dist/db/schema.sql && cp -r src/db/migrations dist/db/migrations
+
+✓ API build complete
+
+Building Web for tests (enables lightweight preview servers)...
+
+> ship@0.0.0 build:web /Users/troy/repos/GAUNTLET/Ship
+> pnpm run build:shared && pnpm --filter @ship/web build
+
+
+> ship@0.0.0 build:shared /Users/troy/repos/GAUNTLET/Ship
+> pnpm --filter @ship/shared build
+
+
+> @ship/shared@0.0.0 build /Users/troy/repos/GAUNTLET/Ship/shared
+> tsc
+
+
+> @ship/web@0.0.0 build /Users/troy/repos/GAUNTLET/Ship/web
+> tsc && VITE_API_URL= vite build
+
+vite v6.4.1 building for production...
+(node:75115) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/postcss@8.5.25/node_modules/postcss/lib/input.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/nanoid@6.0.1/node_modules/nanoid/non-secure/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+transforming...
+Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+✓ 763 modules transformed.
+rendering chunks...
+[plugin vite:reporter] 
+(!) /Users/troy/repos/GAUNTLET/Ship/web/src/services/upload.ts is dynamically imported by /Users/troy/repos/GAUNTLET/Ship/web/src/components/editor/SlashCommands.tsx but also statically imported by /Users/troy/repos/GAUNTLET/Ship/web/src/components/editor/FileAttachment.tsx, /Users/troy/repos/GAUNTLET/Ship/web/src/components/editor/ImageUpload.tsx, dynamic import will not move module into another chunk.
+
+[plugin vite:reporter] 
+(!) /Users/troy/repos/GAUNTLET/Ship/web/src/components/editor/FileAttachment.tsx is dynamically imported by /Users/troy/repos/GAUNTLET/Ship/web/src/components/editor/SlashCommands.tsx but also statically imported by /Users/troy/repos/GAUNTLET/Ship/web/src/components/Editor.tsx, dynamic import will not move module into another chunk.
+
+computing gzip size...
+dist/assets/inter-vietnamese-400-normal-DMkecbls.woff2      4.97 kB
+dist/assets/inter-vietnamese-600-normal-Cc8MFFhd.woff2      5.10 kB
+dist/assets/inter-vietnamese-500-normal-DOriooB6.woff2      5.11 kB
+dist/assets/inter-greek-ext-400-normal-DGGRlc-M.woff2       5.26 kB
+dist/assets/inter-greek-ext-500-normal-C4iEst2y.woff2       5.43 kB
+dist/assets/inter-greek-ext-600-normal-DRtmH8MT.woff2       5.43 kB
+dist/assets/inter-vietnamese-400-normal-Bbgyi5SW.woff       6.50 kB
+dist/index.html                                             6.58 kB │ gzip:   2.15 kB
+dist/assets/inter-vietnamese-500-normal-mJboJaSs.woff       6.60 kB
+dist/assets/inter-vietnamese-600-normal-BuLX-rYi.woff       6.64 kB
+dist/assets/inter-greek-ext-400-normal-KugGGMne.woff        7.06 kB
+dist/assets/inter-greek-ext-500-normal-2j5mBUwD.woff        7.19 kB
+dist/assets/inter-greek-ext-600-normal-B8X0CLgF.woff        7.21 kB
+dist/assets/inter-cyrillic-400-normal-obahsSVq.woff2        7.71 kB
+dist/assets/inter-greek-400-normal-B4URO6DV.woff2           7.78 kB
+dist/assets/inter-cyrillic-500-normal-BasfLYem.woff2        7.90 kB
+dist/assets/inter-greek-500-normal-BIZE56-Y.woff2           7.92 kB
+dist/assets/inter-greek-600-normal-plRanbMR.woff2           7.94 kB
+dist/assets/inter-cyrillic-600-normal-CWCymEST.woff2        7.97 kB
+dist/assets/inter-cyrillic-400-normal-HOLc17fK.woff         9.78 kB
+dist/assets/inter-greek-400-normal-q2sYcFCs.woff            9.92 kB
+dist/assets/inter-cyrillic-600-normal-4D_pXhcN.woff         9.94 kB
+dist/assets/inter-cyrillic-500-normal-CxZf_p3X.woff         9.94 kB
+dist/assets/inter-greek-500-normal-Xzm54t5V.woff            9.98 kB
+dist/assets/inter-greek-600-normal-BZpKdvQh.woff           10.03 kB
+dist/assets/inter-cyrillic-ext-400-normal-BQZuk6qB.woff2   10.23 kB
+dist/assets/inter-cyrillic-ext-500-normal-B0yAr1jD.woff2   10.43 kB
+dist/assets/inter-cyrillic-ext-600-normal-Dfes3d0z.woff2   10.48 kB
+dist/assets/inter-cyrillic-ext-400-normal-DQukG94-.woff    13.34 kB
+dist/assets/inter-cyrillic-ext-500-normal-BmqWE9Dz.woff    13.45 kB
+dist/assets/inter-cyrillic-ext-600-normal-Bcila6Z-.woff    13.46 kB
+dist/assets/inter-latin-400-normal-C38fXH4l.woff2          23.66 kB
+dist/assets/inter-latin-500-normal-Cerq10X2.woff2          24.27 kB
+dist/assets/inter-latin-600-normal-LgqL8muc.woff2          24.45 kB
+dist/assets/inter-latin-400-normal-CyCys3Eg.woff           30.70 kB
+dist/assets/inter-latin-600-normal-CiBQ2DWP.woff           31.26 kB
+dist/assets/inter-latin-500-normal-BL9OpVg8.woff           31.28 kB
+dist/assets/inter-latin-ext-400-normal-C1nco2VV.woff2      35.00 kB
+dist/assets/inter-latin-ext-500-normal-CV4jyFjo.woff2      36.02 kB
+dist/assets/inter-latin-ext-600-normal-D2bJ5OIk.woff2      36.26 kB
+dist/.vite/manifest.json                                   45.22 kB │ gzip:   4.16 kB
+dist/assets/inter-latin-ext-400-normal-77YHD8bZ.woff       47.56 kB
+dist/assets/inter-latin-ext-500-normal-BxGbmqWO.woff       48.49 kB
+dist/assets/inter-latin-ext-600-normal-CIVaiw4L.woff       48.67 kB
+dist/assets/vendor-editor-BHH8rdGj.css                      1.41 kB │ gzip:   0.53 kB
+dist/assets/index-DGGpjwio.css                             74.45 kB │ gzip:  14.08 kB
+dist/assets/FeedbackEditor-FfabdcF7.js                      0.22 kB │ gzip:   0.20 kB
+dist/assets/linkOptions-DQHfpkKL.js                         0.27 kB │ gzip:   0.24 kB
+dist/assets/statusColors-CQb8KAr2.js                        0.29 kB │ gzip:   0.17 kB
+dist/assets/EmojiPickerBody-DZCihRAg.js                     0.32 kB │ gzip:   0.26 kB
+dist/assets/WeekStandupsTab-09o6xHUP.js                     0.35 kB │ gzip:   0.24 kB
+dist/assets/ArchiveIcon-DDjMFP2L.js                         0.35 kB │ gzip:   0.26 kB
+dist/assets/documentTree-IS5C7lHD.js                        0.39 kB │ gzip:   0.24 kB
+dist/assets/useStandupStatusQuery-BQkkLm8n.js               0.51 kB │ gzip:   0.34 kB
+dist/assets/useTeamMembersQuery-BSOwdLel.js                 0.52 kB │ gzip:   0.37 kB
+dist/assets/SelectionPersistenceContext-DQfjIuyE.js         0.53 kB │ gzip:   0.32 kB
+dist/assets/NotFound-oPDQS_R0.js                            0.56 kB │ gzip:   0.35 kB
+dist/assets/date-utils-DtF-oSDF.js                          1.03 kB │ gzip:   0.40 kB
+dist/assets/ProjectIssuesTab-CM2AdMMN.js                    1.04 kB │ gzip:   0.59 kB
+dist/assets/accountability-vdsSsuLJ.js                      1.11 kB │ gzip:   0.60 kB
+dist/assets/ProgramIssuesTab-BTGJ8JNM.js                    1.19 kB │ gzip:   0.67 kB
+dist/assets/ErrorBoundary-Cc8z9WNY.js                       1.27 kB │ gzip:   0.67 kB
+dist/assets/Issues-B12uOaCC.js                              1.35 kB │ gzip:   0.74 kB
+dist/assets/ConfirmDialog-DqKTCxYn.js                       1.42 kB │ gzip:   0.67 kB
+dist/assets/WeekIssuesTab-DU_2Z-3Y.js                       1.94 kB │ gzip:   1.02 kB
+dist/assets/ProgramOverviewTab-Ci3FSwJl.js                  2.19 kB │ gzip:   1.05 kB
+dist/assets/WeekOverviewTab-DvAlQCeu.js                     2.40 kB │ gzip:   1.16 kB
+dist/assets/FilterTabs-fSjHzxun.js                          2.58 kB │ gzip:   1.10 kB
+dist/assets/ConversionDialog-vHIPBr8n.js                    2.61 kB │ gzip:   1.19 kB
+dist/assets/ShownOnceSecretModal-BFh_Em8L.js                2.80 kB │ gzip:   1.12 kB
+dist/assets/Combobox-0dHdgUOd.js                            3.15 kB │ gzip:   1.34 kB
+dist/assets/OAuthDeviceVerify-W_gpZctY.js                   3.31 kB │ gzip:   1.22 kB
+dist/assets/PublicFeedback-B1VtyY5X.js                      3.57 kB │ gzip:   1.24 kB
+dist/assets/WeekPlanningTab-De_Wnwve.js                     3.62 kB │ gzip:   1.77 kB
+dist/assets/OAuthConsent-62z2Rq0v.js                        3.88 kB │ gzip:   1.43 kB
+dist/assets/ProjectDetailsTab-Cb_XVybP.js                   4.06 kB │ gzip:   1.70 kB
+dist/assets/ContextMenu-DiBQ_YT1.js                         4.09 kB │ gzip:   1.70 kB
+dist/assets/ProgramProjectsTab-DE_wUQgF.js                  4.48 kB │ gzip:   1.59 kB
+dist/assets/Setup-BhXaoda9.js                               4.59 kB │ gzip:   1.56 kB
+dist/assets/index-BO6CODJd.js                               4.71 kB │ gzip:   1.70 kB
+dist/assets/DeveloperAppDetail-DoCc0py1.js                  4.79 kB │ gzip:   1.77 kB
+dist/assets/useWeeksQuery-DVZAEkwN.js                       4.80 kB │ gzip:   1.57 kB
+dist/assets/DeveloperApps-CH3ZHMQn.js                       5.76 kB │ gzip:   2.18 kB
+dist/assets/ConvertedDocuments-BUD3aIxk.js                  5.85 kB │ gzip:   1.66 kB
+dist/assets/TeamDirectory-fBIZHkq-.js                       5.95 kB │ gzip:   2.16 kB
+dist/assets/PersonEditor-BFYiDRPg.js                        6.01 kB │ gzip:   2.40 kB
+dist/assets/PropertyRow-Cz6lKwPB.js                         6.07 kB │ gzip:   2.38 kB
+dist/assets/ProjectWeeksTab-DiA9rFz9.js                     6.81 kB │ gzip:   2.39 kB
+dist/assets/Programs-BhvsvqWL.js                            7.40 kB │ gzip:   2.64 kB
+dist/assets/Tooltip-BE0BL0qJ.js                             8.47 kB │ gzip:   3.18 kB
+dist/assets/ProjectRetroTab-CWZjJXWY.js                     9.16 kB │ gzip:   2.46 kB
+dist/assets/StatusOverviewPage-B5AynSCd.js                  9.69 kB │ gzip:   3.25 kB
+dist/assets/StandupFeed-CW2wnftn.js                         9.84 kB │ gzip:   2.97 kB
+dist/assets/InviteAccept-CbjsRM4F.js                        9.90 kB │ gzip:   2.13 kB
+dist/assets/Documents-C7tahyHq.js                          11.14 kB │ gzip:   3.75 kB
+dist/assets/MyWeekPage-DTwYEwu2.js                         11.16 kB │ gzip:   2.87 kB
+dist/assets/DocumentListToolbar-_yKr7OWw.js                11.64 kB │ gzip:   3.99 kB
+dist/assets/OrgChartPage-DYKstZbD.js                       11.64 kB │ gzip:   4.32 kB
+dist/assets/AdminDashboard-CH7r9Bn4.js                     11.83 kB │ gzip:   3.18 kB
+dist/assets/AdminWorkspaceDetail-ASb-LbZM.js               12.51 kB │ gzip:   3.26 kB
+dist/assets/WeekReviewTab--J4ufx6c.js                      12.77 kB │ gzip:   3.72 kB
+dist/assets/Projects-DIjig6gP.js                           12.99 kB │ gzip:   4.33 kB
+dist/assets/DeveloperPortal-B3DfeHDQ.js                    13.33 kB │ gzip:   3.81 kB
+dist/assets/Dashboard--psK4CP9.js                          14.45 kB │ gzip:   4.11 kB
+dist/assets/ProgramWeeksTab-DBBWEOrt.js                    17.56 kB │ gzip:   5.89 kB
+dist/assets/WorkspaceSettings-DCP5ATcE.js                  18.95 kB │ gzip:   4.80 kB
+dist/assets/TeamMode-WvoPKbjp.js                           22.14 kB │ gzip:   6.77 kB
+dist/assets/ReviewsPage-Ccr3CqKQ.js                        28.66 kB │ gzip:   7.35 kB
+dist/assets/index-BEXqhYqJ.js                              33.34 kB │ gzip:  11.53 kB
+dist/assets/index-D-MJKVd4.js                              39.44 kB │ gzip:  14.90 kB
+dist/assets/core.esm-2sxWdHba.js                           43.70 kB │ gzip:  14.51 kB
+dist/assets/vendor-query-BWpGYmw9.js                       46.02 kB │ gzip:  13.82 kB
+dist/assets/IssuesList-DAojpS7y.js                         54.37 kB │ gzip:  15.94 kB
+dist/assets/vendor-highlight-tzdVFObp.js                   70.64 kB │ gzip:  22.58 kB
+dist/assets/index-DNxFXUVS.js                              81.97 kB │ gzip:  24.72 kB
+dist/assets/Editor-BXS-WcRg.js                             84.45 kB │ gzip:  24.91 kB
+dist/assets/App-sOB50ciJ.js                               118.61 kB │ gzip:  30.61 kB
+dist/assets/UnifiedDocumentPage-CgIK_HU_.js               141.48 kB │ gzip:  37.39 kB
+dist/assets/vendor-react-cnGD3TIn.js                      180.69 kB │ gzip:  59.42 kB
+dist/assets/vendor-emoji-kAHBRRWH.js                      270.70 kB │ gzip:  63.92 kB
+dist/assets/vendor-editor-C9_RJLiY.js                     577.50 kB │ gzip: 185.41 kB
+
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rollupOptions.output.manualChunks to improve chunking: https://rollupjs.org/configuration-options/#output-manualchunks
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✓ built in 3.51s
+✓ Web build complete
+
+✓ Global setup complete. Starting tests...
+
+⚠️  Low memory (0.6GB). Consider reducing workers.
+(node:73917) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/e2e/fixtures/isolated-env.ts is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/get-port@7.1.0/node_modules/get-port/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 14 tests using 2 workers
+
+[1A[2K⚠️  Low memory (0.6GB). Consider reducing workers.
+
+[1A[2K⚠️  Low memory (0.6GB). Consider reducing workers.
+
+[1A[2K[1/14] [chromium] › e2e/browser-demo-pkce.spec.ts:42:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › Connect to Ship -> consent -> documents list, real browser round trip
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:42:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › Connect to Ship -> consent -> documents list, real browser round trip
+(node:75262) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/e2e/fixtures/isolated-env.ts is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/get-port@7.1.0/node_modules/get-port/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1A[2K[2/14] [chromium] › e2e/developer-portal-apps.spec.ts:31:7 › Developer portal — OAuth app registration › register, view shown-once secret, rotate, and revoke
+[1A[2K[chromium] › e2e/developer-portal-apps.spec.ts:31:7 › Developer portal — OAuth app registration › register, view shown-once secret, rotate, and revoke
+(node:75263) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/e2e/fixtures/isolated-env.ts is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/get-port@7.1.0/node_modules/get-port/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:42:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › Connect to Ship -> consent -> documents list, real browser round trip
+
+> @ship/sdk@0.0.0 build /Users/troy/repos/GAUNTLET/Ship/sdk
+> tsc
+
+
+
+[1A[2K[chromium] › e2e/developer-portal-apps.spec.ts:31:7 › Developer portal — OAuth app registration › register, view shown-once secret, rotate, and revoke
+[Worker 1] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[Worker 1] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[3/14] [chromium] › e2e/developer-portal-apps.spec.ts:88:7 › Developer portal — OAuth app registration › Developer > Apps has no critical accessibility violations
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:42:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › Connect to Ship -> consent -> documents list, real browser round trip
+
+> @ship/browser-demo@0.0.0 build /Users/troy/repos/GAUNTLET/Ship/integrations/browser-demo
+> tsc && vite build
+
+
+
+[1A[2K[chromium] › e2e/developer-portal-apps.spec.ts:88:7 › Developer portal — OAuth app registration › Developer > Apps has no critical accessibility violations
+[Worker 1] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:42:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › Connect to Ship -> consent -> documents list, real browser round trip
+[36mvite v6.4.1 [32mbuilding for production...[36m[39m
+
+
+[1A[2Ktransforming...
+
+
+[1A[2K[32m✓[39m 21 modules transformed.
+
+
+[1A[2Krendering chunks...
+
+
+[1A[2Kcomputing gzip size...
+
+
+[1A[2K[2mdist/[22m[32mindex.html                [39m[1m[2m 0.34 kB[22m[1m[22m[2m │ gzip: 0.26 kB[22m
+
+
+[1A[2K[2mdist/[22m[2massets/[22m[36mindex-BfFgAGMC.js  [39m[1m[2m19.88 kB[22m[1m[22m[2m │ gzip: 5.78 kB[22m
+
+
+[1A[2K[32m✓ built in 84ms[39m
+
+
+[1A[2K[4/14] [chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)
+[1A[2K[chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)
+[Worker 1] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:42:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › Connect to Ship -> consent -> documents list, real browser round trip
+[Worker 0] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[TRO-449] Browser demo PKCE round trip (click -> documents rendered): 214ms
+
+[1A[2K[5/14] [chromium] › e2e/browser-demo-pkce.spec.ts:95:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › negative: unregistered redirect_uri never silently succeeds
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:95:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › negative: unregistered redirect_uri never silently succeeds
+[Worker 0] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[6/14] [chromium] › e2e/browser-demo-pkce.spec.ts:127:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › a failed leg-2 exchange clears the stale ?code= so retrying starts a fresh login
+[1A[2K⚠️  Low memory (0.2GB). Consider reducing workers.
+
+[1A[2K[7/14] [chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC) (retry #1)
+[1A[2K[chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)
+(node:75782) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/e2e/fixtures/isolated-env.ts is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/get-port@7.1.0/node_modules/get-port/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1A[2K[chromium] › e2e/browser-demo-pkce.spec.ts:127:7 › Browser SDK demo: authorizationCodeFlow() PKCE round trip (TRO-449/PF-802) › a failed leg-2 exchange clears the stale ?code= so retrying starts a fresh login
+[Worker 0] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K⚠️  Low memory (0.3GB). Consider reducing workers.
+
+[1A[2K[8/14] [chromium] › e2e/developer-portal-dlq-replay.spec.ts:169:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key
+[1A[2K[chromium] › e2e/developer-portal-dlq-replay.spec.ts:169:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key
+(node:75823) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/e2e/fixtures/isolated-env.ts is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/get-port@7.1.0/node_modules/get-port/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1A[2K[chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)
+[Worker 2] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[Worker 2] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K  1) [chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC) 
+
+    Error: [2mexpect([22m[31mreceived[39m[2m).[22mtoBe[2m([22m[32mexpected[39m[2m) // Object.is equality[22m
+
+    Expected: [32mtrue[39m
+    Received: [31mfalse[39m
+
+      117 |     await page.waitForLoadState('networkidle')
+      118 |
+    > 119 |     expect(v1Requests.some((url) => url.includes('/api/v1/me'))).toBe(true)
+          |                                                                  ^
+      120 |   })
+      121 | })
+      122 |
+        at /Users/troy/repos/GAUNTLET/Ship/e2e/developer-portal-apps.spec.ts:119:66
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/developer-portal-apps-Deve-ea63e-ork-tab-evidence-PF-502-AC--chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/developer-portal-apps-Deve-ea63e-ork-tab-evidence-PF-502-AC--chromium/error-context.md
+
+
+[1A[2K[chromium] › e2e/developer-portal-dlq-replay.spec.ts:169:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[9/14] [chromium] › e2e/developer-portal-dlq-replay.spec.ts:254:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › subscription CRUD from the portal UI: create, list, delete
+[1A[2K[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[chromium] › e2e/developer-portal-dlq-replay.spec.ts:254:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › subscription CRUD from the portal UI: create, list, delete
+[Worker 2] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[10/14] [chromium] › e2e/oauth-authorize.spec.ts:102:7 › OAuth authorize + consent (PF-103) › login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)
+[1A[2K[chromium] › e2e/oauth-authorize.spec.ts:102:7 › OAuth authorize + consent (PF-103) › login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[11/14] [chromium] › e2e/oauth-authorize.spec.ts:168:7 › OAuth authorize + consent (PF-103) › deny path redirects with error=access_denied
+[1A[2K[chromium] › e2e/oauth-authorize.spec.ts:168:7 › OAuth authorize + consent (PF-103) › deny path redirects with error=access_denied
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[12/14] [chromium] › e2e/oauth-pkce-chain.spec.ts:172:7 › OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/me (TRO-597) › graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me
+[1A[2K[chromium] › e2e/oauth-pkce-chain.spec.ts:172:7 › OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/me (TRO-597) › graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[TRO-597] PKCE round trip (authorize nav -> token response): 95ms
+
+[1A[2K[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[13/14] [chromium] › e2e/oauth-pkce-chain.spec.ts:265:7 › OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/me (TRO-597) › negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant
+[1A[2K[chromium] › e2e/oauth-pkce-chain.spec.ts:265:7 › OAuth PKCE full chain: authorize -> consent -> token -> /api/v1/me (TRO-597) › negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[14/14] [chromium] › e2e/oauth-refresh-rotation-stolen-token.spec.ts:153:7 › OAuth refresh-rotation stolen-token drill (TRO-445 / PF-800) › rotate -> replay the old refresh token -> family invalidated, active session killed, distinguishable error
+[1A[2K[chromium] › e2e/oauth-refresh-rotation-stolen-token.spec.ts:153:7 › OAuth refresh-rotation stolen-token drill (TRO-445 / PF-800) › rotate -> replay the old refresh token -> family invalidated, active session killed, distinguishable error
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[Worker 3] API ERROR: [bearerAuth] bearerAuth: rejected revoked oauth token
+
+[1A[2K[15/14] (retries) [chromium] › e2e/webhook-idempotency-key-drill.spec.ts:197:7 › Webhook Idempotency-Key drill (TRO-447 / PF-801) › deliver -> replay via API -> reference subscriber dedupes on the key; delivery log distinguishes fresh vs replayed
+[1A[2K[chromium] › e2e/webhook-idempotency-key-drill.spec.ts:197:7 › Webhook Idempotency-Key drill (TRO-447 / PF-801) › deliver -> replay via API -> reference subscriber dedupes on the key; delivery log distinguishes fresh vs replayed
+[Worker 3] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K⚠️  Low memory (0.4GB). Consider reducing workers.
+
+[1A[2K[16/14] (retries) [chromium] › e2e/developer-portal-dlq-replay.spec.ts:254:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › subscription CRUD from the portal UI: create, list, delete (retry #1)
+[1A[2K[chromium] › e2e/developer-portal-dlq-replay.spec.ts:254:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › subscription CRUD from the portal UI: create, list, delete
+(node:76746) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/e2e/fixtures/isolated-env.ts is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/get-port@7.1.0/node_modules/get-port/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+[1A[2K[Worker 4] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K[Worker 4] API ERROR: [agent-proxy] failed to reach agent service for /inbox: TypeError: fetch failed
+[90m    at node:internal/deps/undici/undici:13468:13[39m
+[90m    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)[39m
+    at async [90mfile:///Users/troy/repos/GAUNTLET/Ship/api/[39mdist/routes/agent.js:331:26 {
+  [cause]: AggregateError [ECONNREFUSED]: 
+  [90m    at internalConnectMultiple (node:net:1128:18)[39m
+  [90m    at afterConnectMultiple (node:net:1693:7)[39m {
+    code: [32m'ECONNREFUSED'[39m,
+    [errors]: [ [36m[Error][39m, [36m[Error][39m ]
+  }
+}
+
+[1A[2K  2) [chromium] › e2e/developer-portal-dlq-replay.spec.ts:254:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › subscription CRUD from the portal UI: create, list, delete 
+
+    Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+    Locator: getByLabel(/^app$/i)
+    Expected: visible
+    Timeout: 15000ms
+    Error: element(s) not found
+
+    Call log:
+    [2m  - Expect "toBeVisible" with timeout 15000ms[22m
+    [2m  - waiting for getByLabel(/^app$/i)[22m
+
+
+      264 |     // existing `GET /api/oauth-apps` — TRO-436/PF-502's own app-registration
+      265 |     // UI is not required for this to work, only for CREATING new apps).
+    > 266 |     await expect(page.getByLabel(/^app$/i)).toBeVisible({ timeout: 15000 });
+          |                                             ^
+      267 |     await page.getByLabel(/^app$/i).selectOption({ label: 'TRO-439 E2E crud App' });
+      268 |     await page.getByLabel(/event type/i).selectOption('issue.created');
+      269 |     await page.getByLabel(/target url/i).fill(targetUrl);
+        at /Users/troy/repos/GAUNTLET/Ship/e2e/developer-portal-dlq-replay.spec.ts:266:45
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    test-results/developer-portal-dlq-repla-3dd98-ortal-UI-create-list-delete-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: test-results/developer-portal-dlq-repla-3dd98-ortal-UI-create-list-delete-chromium/error-context.md
+
+
+[1A[2K  2 flaky
+    [chromium] › e2e/developer-portal-apps.spec.ts:108:7 › Developer portal — OAuth app registration › portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC) 
+    [chromium] › e2e/developer-portal-dlq-replay.spec.ts:254:7 › Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503) › subscription CRUD from the portal UI: create, list, delete 
+  12 passed (55.2s)
+e2e exit=0

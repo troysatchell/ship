@@ -1,0 +1,18 @@
+== Sun Aug 16 13:37:34 UTC 2026 create scratch db ==
+NOTICE:  database "ship_req_audit_w6b_scratch" does not exist, skipping
+DROP DATABASE
+CREATE DATABASE
+== Sun Aug 16 13:37:35 UTC 2026 migrate ==
+migrate exit=0
+ applied 
+---------
+      56
+(1 row)
+
+== Sun Aug 16 13:37:37 UTC 2026 type-check ==
+typecheck exit=0
+== Sun Aug 16 13:37:47 UTC 2026 pnpm test ==
+test exit=1
+== Sun Aug 16 13:40:03 UTC 2026 drop scratch db ==
+DROP DATABASE
+== Sun Aug 16 13:40:03 UTC 2026 DONE ==

@@ -6,16 +6,14 @@ command / read the file directly, cited by path) or **Derived** (reasoning from 
 per `.claude/CLAUDE.md`'s claim-provenance rule — this document is graded on exactly that
 discipline, not just on the underlying engineering.
 
-Two epics are deliberately absent:
-
-- **E5 (Rate limiting, audit, portal)** — not closed. PF-500/501/502/504 are Done; PF-503
-  (subscriptions/delivery-log/DLQ/replay UI) was still landing as of this writing. A partial
-  write-up against an unfinished epic would misrepresent the proof, so this section waits.
-- **E7 (Agent as platform citizen)** — PF-704 (the flag-matrix + audit-trail proof — literally
-  *the* proof this epic's write-up needs) was still Backlog/in-progress as of this writing. Writing
-  "the audit rows are the proof" before the audit rows exist would be exactly the kind of
-  unmarked-inference failure `.claude/CLAUDE.md` warns about. This section is added once PF-704
-  lands.
+All nine epics (E0–E8) are covered. E5 and E7 were deliberately absent from the first cut of
+this document (TRO-437, 2026-08-16 morning) because neither had closing proof in hand — PF-503's
+portal UI was still landing and PF-704's audit-trail proof was still Backlog. Both have since
+merged to `main` (PF-503 via PR #260 / TRO-439; PF-704 via TRO-440), so their sections were added
+by TRO-619 later the same day, in the same before → fix → after → proof shape, and with the same
+provenance discipline. E6's proof was also upgraded at that point from a local drill run to CI run
+IDs — PLUGFORGE.MD §4 (PF-906) says E6's proof is "TTFE green in CI", and a local run, however
+real, is not that.
 
 ---
 
@@ -192,6 +190,76 @@ missing method rather than only a wildly wrong one.
 
 ---
 
+## Epic E5 — Rate limiting, audit, portal (PF-500–504)
+
+**Before.** `/api/v1` had no per-app / per-token ceilings — only the legacy `/api/` IP/identity
+limiters that PF-004 exempted it from (E0 above), so after that exemption v1 briefly had *no*
+ceiling at all — no record of who called what, and no UI for a third-party developer to register
+an app or watch a delivery fail. Every one of PLUGFORGE.MD §2.9's portal screens was a `curl`
+walkthrough in the README.
+
+**Fix.** **Observed:** `api/src/platform/api/v1/router.ts:87-89` mounts, in order,
+`requestIdMiddleware`, `rateLimitDefaults`, `auditLogMiddleware` on the v1 router *before* any
+resource route attaches — so a request that 401s in `bearerAuth`, or 404s, or 429s, still carries
+`X-RateLimit-*` (`api/src/platform/ratelimit/middleware.ts:22-24` names the three headers) and
+still writes an audit row. The per-app (120/min) / per-token (60/min) defaults are the §2.7
+figures verbatim (`api/src/platform/ratelimit/config.ts:39-40`), overridable via
+`RATE_LIMIT_APP_RPM` / `RATE_LIMIT_TOKEN_RPM`; a 429 sets `Retry-After` (`middleware.ts:202`).
+The audit row is written fire-and-forget on `res.on('finish')` (`api/src/platform/audit/middleware.ts:111`,
+`INSERT INTO public_api_audit` at `:61`) so it can never delay or fail the response it records.
+Migration `049_public_api_audit.sql` (PLUGFORGE.MD calls it 046; that number was already taken —
+the migration's own header explains the renumbering) carries exactly §2.7's listed columns:
+`request_id, app_client_id, user_id, method, route, scope_used, status, latency_ms, created_at`.
+`GET /api/v1/audit` (PF-501) is admin/owner-scoped and app-filterable. The portal is real UI in
+the existing 4-panel shell: a "Developer" icon in the rail (`web/src/pages/App.tsx:503`), a
+contextual sidebar with two entries — `/developer/apps`, `/developer/webhooks`
+(`web/src/components/sidebars/DeveloperSidebar.tsx:20-24`) — mounted under one
+`DeveloperPortalProvider` (`web/src/main.tsx:305-323`) that mints the portal's own short-lived
+scoped `/api/v1` token once, so the portal *consumes the public API like any other client* (§2.9),
+not the internal `/api/*`.
+
+**After.** A developer logs in, opens Developer mode, registers an app and sees the client secret
+exactly once (`ShownOnceSecretModal`, reused by rotate — `web/src/pages/DeveloperAppDetail.tsx:4,9`),
+creates a webhook subscription, watches deliveries in a paginated log with a status filter whose
+`dead` option is labeled "Dead (DLQ)" (`web/src/pages/DeveloperPortal.tsx:127`), and presses
+Replay (`handleReplay`, `:296`) — which re-emits under the original `Idempotency-Key` (E3 above).
+**PF-504 (portal scope checkpoint) — go, not cut.** The kill-criterion (§2.9: collapse to
+read-only delivery log + replay if E5 is behind after E6 is green) was *not* invoked: both PF-502
+(apps) and PF-503 (subscriptions + deliveries + DLQ + replay) shipped in full. **Derived**, from
+the presence of both route trees on `main`, not from a separate written go/cut memo — no such memo
+exists in this repo as of this writing, so this paragraph is the written decision PF-504's AC asks
+for. **Stated plainly:** the audit-trail *portal page* (`/developer/audit`, a UI over
+`GET /api/v1/audit`) is TRO-616 and was still in flight when this section was written — the API
+endpoint is done and tested; the "queryable in the portal" clause of §2.7 is not yet a screen.
+
+**Proof.** Four independent suites, none of them the same test:
+- `api/src/platform/ratelimit/__tests__/tokenBucket.test.ts` — bucket exhaustion/refill under an
+  injected clock (PF-500's AC verbatim), 11 `it(...)` blocks including "refill: never exceeds
+  capacity even after a very long idle period" and "retryAfterMs counts down linearly while
+  exhausted." `api/src/platform/ratelimit/__tests__/middleware.test.ts:127-220` — 429 + `Retry-After`
+  once a per-token bucket is exhausted, and the subtle one: two tokens issued to the same app
+  share one app bucket but keep independent token buckets, and the app bucket is not partially
+  debited when the token bucket is what denied. Header presence on 100% of v1 responses is E2's
+  route-fitness property **(e)** (`route-fitness.test.ts`, described above), not re-proven here.
+- `api/src/platform/api/v1/resources/__tests__/audit.test.ts:41-286` — PF-501's authorization
+  matrix: 401 with no bearer; 403 for a token *holding* `audit:read` that belongs to a plain
+  workspace member; 403 for a third-party app credential even with the scope (first-party
+  required); an admin sees only their own workspace's rows; a super-admin sees rows unscoped; a
+  first-party app sees only its own workspace.
+- `e2e/developer-portal-apps.spec.ts:31,88,108` — register → shown-once secret → rotate → revoke;
+  an axe pass with zero critical violations; and PF-502's literal AC, "portal calls go through
+  `/api/v1` (network-tab evidence)": the spec listens on `page.on('request')` and asserts a
+  request to `/api/v1/me` was made from `/developer/apps`.
+- `e2e/developer-portal-dlq-replay.spec.ts:169,254` — PF-503's literal AC: "a delivery
+  dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target
+  succeeds and preserves the Idempotency-Key", plus subscription CRUD from the portal UI.
+
+The two e2e specs are counted but not executed by the factory gate (`e2e/*.spec.ts` runs in the
+Playwright CI job, not vitest) — that is a statement about *where* they run, not whether they
+exist; the four vitest suites above are what the gate executes.
+
+---
+
 ## Epic E6 — CLI + TTFE drill (PF-600–603)
 
 **Before.** No CLI, no automated proof the whole install→auth→webhook→document→signature pipeline
@@ -208,23 +276,107 @@ plus six independent per-stage budgets that intentionally sum to more than the t
 so a single slow stage on a loaded CI runner doesn't have to be individually pathological to still
 pass overall, while still naming *which* stage regressed if one blows its own budget.
 
-**Proof.** Ran the drill directly in this ticket's own worktree, against real infrastructure (not
-a simulation): `pnpm drill ttfe` —
+**Proof.** PLUGFORGE.MD §4 (PF-906) names E6's proof as *"TTFE green in CI"* — so the proof is
+the CI job, not a local run. **Observed** (TRO-619, 2026-08-16, via
+`GH_REPO=troysatchell/ship gh run view <id> --json conclusion,headSha,createdAt`): two `CI`
+workflow runs on `main`, both `"conclusion":"success"`, each with a job named exactly
+`drill · TTFE (PF-603)` (`.github/workflows/ci.yml:419`) that concluded `success`:
+
+| Run ID | Trigger | `headSha` | Run created | Drill job completed |
+|---|---|---|---|---|
+| `31949732432` | push to `main` | `9d744017` (PR #279 merge) | 2026-08-16T13:24:39Z | 2026-08-16T13:37:33Z |
+| `31935025680` | push to `main` | `8592393f` (PR #276 merge) | 2026-08-16T07:53:04Z | 2026-08-16T08:06:16Z |
+
+The drill's own stage output from run `31949732432`'s job log (`gh run view 31949732432 --log`,
+filtered to the drill job):
 
 ```text
-install_sdk: 1171ms
-device_login: 34ms
-webhook_create: 6ms
-document_create: 5ms
-wait_for_delivery: 781ms
-verify_webhook: 1ms
-total: 1998ms / 60000ms budget
+install_sdk: 3193ms
+device_login: 75ms
+webhook_create: 16ms
+document_create: 14ms
+wait_for_delivery: 690ms
+verify_webhook: 0ms
+total: 3988ms / 60000ms budget
 verdict: pass
 ```
 
-Total wall-clock: **1998ms against a 60,000ms budget** — roughly 30x margin, on a local run (CI
-timing will differ, but this is a genuine, directly-observed, end-to-end pass of the graded path
-moments before this write-up, not a remembered or assumed number).
+**3988ms against a 60,000ms budget on a GitHub-hosted runner** — ~15x margin. For comparison, the
+first cut of this write-up cited a local worktree run (`pnpm drill ttfe`) at 1998ms; the CI number
+is roughly 2x slower, entirely in `install_sdk` (3193ms vs 1171ms — a cold `pnpm` store on the
+runner), and every other stage is within a few ms of local. **Derived:** two green runs on `main`
+half a day apart is evidence the drill is *stable* in CI, not just that it passed once; it is not a
+P95 over a statistically meaningful sample, and this write-up does not claim it is.
+
+---
+
+## Epic E7 — Agent as platform citizen (PF-700–704)
+
+**Before.** FleetGraph, Ship's own agent, was a privileged insider: every read went to the
+internal `/api/*` with an internal secret, every write via a minted internal token. Nothing it did
+was visible in the public audit trail, and nothing forced its needs onto the public surface — the
+"if our own agent doesn't need it in `/api/v1`, no third party gets it either" gap the PRD's E7
+prose names.
+
+**Fix.** PF-700 was a human checkpoint (before/after call-path diagram + scope defense, acked
+before any E7 code). **Observed:** PF-701 seeds a first-party app with a fixed, well-known
+`client_id` — `export const FLEETGRAPH_CLIENT_ID = 'ship_app_fleetgraph'`
+(`api/src/platform/oauth/seedFirstPartyApp.ts:84`, mirrored at `agent/src/config.ts:222`) —
+Client Credentials enabled, read-only scopes exactly
+`['documents:read', 'issues:read', 'sprints:read']` (`agent/src/config.ts:223`), secret from env
+only. PF-702 adds `AGENT_PLATFORM_MODE=sdk|internal` (parsed at `agent/src/config.ts:343-366`,
+default `internal`); in `sdk` mode the agent's boot path mints a real `client_credentials` grant
+via `@ship/sdk` (`SdkShipClient.clientCredentials(...)`, `agent/src/index.ts:216`) and routes all
+ten reads through it. PF-703 keeps writes on the *human's* identity: `GateShipClient` takes an
+optional `sdkClientFactory` (`agent/src/gate.ts:1083`) and each of its three writes builds a fresh
+per-call SDK client from the acting human's short-lived scoped personal token (`gate.ts:1114,1160,1185`)
+— the gate holds no token of its own, and the graph still cannot write (`graphWriteBoundary.test.ts`,
+`gateWriteBoundary.dbRoundTrip.test.ts`, both green in both modes).
+
+**After.** In `sdk` mode the agent is indistinguishable, at the API boundary, from any third-party
+integration: app-identity reads under `ship_app_fleetgraph`, human-identity writes under the user
+who accepted the draft, every call rate-limited and audited like everyone else's. CI runs the
+whole agent suite twice — once default, once with `AGENT_PLATFORM_MODE: sdk`
+(`.github/workflows/ci.yml:183-200`) — the PF-704 flag matrix. Production still defaults to
+`internal` (`agent/src/config.ts:343`) — a disclosed, deliberate choice, not an oversight.
+
+**Proof.** PLUGFORGE.MD §4 (PF-704/PF-906): *"the audit rows are the Epic 7 submission proof."*
+**Observed** — `agent/src/__tests__/auditTrailProof.liveServer.test.ts` boots the real `createApp()`
+on an ephemeral port against the seeded worktree DB, calls PF-701's real `seedFirstPartyApp` (`:210`),
+mints a real `POST /oauth/token` `grant_type=client_credentials` token for `ship_app_fleetgraph`
+(`:215-220`), and then asserts, in four `it(...)` blocks:
+
+1. **Reads under the app's identity, never a user's** (`:284-310`) — after
+   `documents.list()`, `issues.list()`, `sprints.list()` via the app-identity SDK client, every
+   matching `public_api_audit` row has `app_client_id === 'ship_app_fleetgraph'`,
+   `user_id === null`, `status === 200` (`:302-305`).
+2. **The one accepted write under the human's identity, never the app's** (`:312-337`) —
+   `postStandup` + `setStandupContent` with the human's scoped write token; the
+   `POST /api/v1/documents` audit row has `user_id === <the human>` and `app_client_id === null`
+   (`:330-332`), status 2xx.
+3. **Rate-limit headers were present on the app credential this turn used** (`:339-349`) — a raw
+   `fetch()` with the same bearer token (the SDK deliberately does not expose response headers, per
+   the file's own header note) asserts `x-ratelimit-limit`, `-remaining`, `-reset` are all non-null
+   (`:346-348`).
+4. **The proof artifact itself** (`:351-384`) — logs the exact `SELECT ... FROM public_api_audit
+   WHERE (app_client_id = 'ship_app_fleetgraph' OR user_id = '<human>') AND created_at > NOW() -
+   INTERVAL '1 minute'` and its rows to stdout for pasting into the PR, then asserts ≥4 rows, ≥3
+   app rows, ≥1 user row, and that **no row is attributed to both** (`:381-383`) — app-identity and
+   human-identity are mutually exclusive by construction.
+
+The audit-row query in (4) is built from the same two values the assertion uses (the file's own
+comment at `:352-356` records that an earlier draft printed a query that didn't match the one it
+ran — a CodeRabbit catch, fixed by making one string serve both).
+
+**What is NOT proven, stated plainly.** PF-704's second AC clause — *"cost-ledger before/after
+shows unchanged token volume"* — is **not yet measured**. `docs/submission/PF-704-COST-LEDGER-DELTA.md`
+is the honest version of that delta: the committed ledger (`agent/cost-ledger-snapshot.jsonl`, 7
+invocations, 2026-08-05..07) predates all E7 work, so "before" and "after" are the same number
+because no `sdk`-mode LLM traffic has been recorded — and that document traces one real path
+(`buildExpansionPrompt` ← `textSnippet` ← `getDocument().content`, a field v1 does not carry) by
+which `sdk` mode's token count *could* differ from `internal` mode's for the `on_demand` trigger.
+Token-volume equality between modes is therefore an open measurement, not a closed proof; **TRO-620
+owns it**. This section does not claim otherwise.
 
 ---
 

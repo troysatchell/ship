@@ -384,9 +384,16 @@ curl -s -X POST "$API_URL/api/v1/documents" -H "authorization: Bearer $TOKEN" \
 The full public surface is browsable at `GET /api/v1/openapi.json` (no auth required) — every
 route the token above can reach, plus request/response schemas.
 
-- **Portal reachability** is a DoD item for a deployed instance and depends on E5 (developer
-  portal), which doesn't exist on this branch yet — there's no UI to click through; the walkthrough
-  above (and `/api/v1/openapi.json`) is the full grader-facing surface until E5 lands. See
+- **Developer portal (E5, PF-502/PF-503) — the click-through path.** The portal is real UI inside
+  the normal Ship shell (it consumes `/api/v1` like any third-party client — see
+  `PLUGFORGE.MD` §2.9). To reach it: log in as any user (e.g. `alice.chen`, credentials above) →
+  click **Developer** in the icon rail (bottom, above Settings) → you land on **`/developer/apps`**:
+  register an app, see its client secret **exactly once** (shown-once modal with copy button, never
+  re-fetchable), open the app to **rotate** the secret or revoke → the sidebar's **Webhooks** entry
+  (**`/developer/webhooks`**) has subscription CRUD, the delivery log (server-side pagination +
+  status filter, including "Dead (DLQ)"), and a **Replay** button per delivery that re-emits under
+  the original `Idempotency-Key`. Playwright covers both screens
+  (`e2e/developer-portal-apps.spec.ts`, `e2e/developer-portal-dlq-replay.spec.ts`). See
   `PLUGFORGE.MD` §4 (PF-907) and §6 (MVP cut line) for the full epic breakdown.
 
 **Working credentials for the deployed site**, same disclosure basis as `alice.chen`'s web-login
@@ -462,6 +469,7 @@ We welcome contributions. See [CONTRIBUTING.md](./CONTRIBUTING.md) for guideline
 - [Week Documentation Philosophy](./docs/week-documentation-philosophy.md) — Why weekly plans and retros work the way they do
 - [Accountability Philosophy](./docs/accountability-philosophy.md) — How Ship enforces accountability
 - [Accountability Manager Guide](./docs/accountability-manager-guide.md) — Using approval workflows
+- [PlugForge Pre-Search (Week 6)](./docs/submission/PLUGFORGE-PRESEARCH.md) — The three-phase pre-search checklist for the platform work, pre-filled from the PRD and repo with `file:line` citations; `[TROY — needs your answer]` blocks mark the personal answers still owed
 - [Contributing Guidelines](./CONTRIBUTING.md) — How to contribute
 - [Security Policy](./SECURITY.md) — Vulnerability reporting
 

@@ -1,0 +1,21 @@
+                              Table "public.webhook_subscriptions"
+          Column           |           Type           | Collation | Nullable |      Default      
+---------------------------+--------------------------+-----------+----------+-------------------
+ id                        | uuid                     |           | not null | gen_random_uuid()
+ app_id                    | uuid                     |           | not null | 
+ event_type                | text                     |           | not null | 
+ target_url                | text                     |           | not null | 
+ signing_secret_ciphertext | text                     |           | not null | 
+ active                    | boolean                  |           | not null | true
+ created_at                | timestamp with time zone |           | not null | now()
+Indexes:
+    "webhook_subscriptions_pkey" PRIMARY KEY, btree (id)
+    "idx_webhook_subscriptions_app_id" btree (app_id)
+    "idx_webhook_subscriptions_created_at_id" btree (created_at DESC, id DESC)
+    "idx_webhook_subscriptions_event_type" btree (event_type) WHERE active
+    "idx_webhook_subscriptions_unique_active" UNIQUE, btree (app_id, event_type, target_url) WHERE active
+Foreign-key constraints:
+    "webhook_subscriptions_app_id_fkey" FOREIGN KEY (app_id) REFERENCES oauth_apps(id) ON DELETE CASCADE
+Referenced by:
+    TABLE "webhook_deliveries" CONSTRAINT "webhook_deliveries_subscription_id_fkey" FOREIGN KEY (subscription_id) REFERENCES webhook_subscriptions(id) ON DELETE CASCADE
+

@@ -1,0 +1,47 @@
+{"test":"browser-demo-pkce.spec.ts","title":"Connect to Ship -> consent -> documents list, real browser round trip","status":"pending","ts":1786887797616}
+{"test":"browser-demo-pkce.spec.ts","title":"negative: unregistered redirect_uri never silently succeeds","status":"pending","ts":1786887797616}
+{"test":"browser-demo-pkce.spec.ts","title":"a failed leg-2 exchange clears the stale ?code= so retrying starts a fresh login","status":"pending","ts":1786887797616}
+{"test":"developer-portal-apps.spec.ts","title":"register, view shown-once secret, rotate, and revoke","status":"pending","ts":1786887797616}
+{"test":"developer-portal-apps.spec.ts","title":"Developer > Apps has no critical accessibility violations","status":"pending","ts":1786887797616}
+{"test":"developer-portal-apps.spec.ts","title":"portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)","status":"pending","ts":1786887797616}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key","status":"pending","ts":1786887797616}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"subscription CRUD from the portal UI: create, list, delete","status":"pending","ts":1786887797616}
+{"test":"oauth-authorize.spec.ts","title":"login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)","status":"pending","ts":1786887797616}
+{"test":"oauth-authorize.spec.ts","title":"deny path redirects with error=access_denied","status":"pending","ts":1786887797616}
+{"test":"oauth-pkce-chain.spec.ts","title":"graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me","status":"pending","ts":1786887797616}
+{"test":"oauth-pkce-chain.spec.ts","title":"negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant","status":"pending","ts":1786887797616}
+{"test":"oauth-refresh-rotation-stolen-token.spec.ts","title":"rotate -> replay the old refresh token -> family invalidated, active session killed, distinguishable error","status":"pending","ts":1786887797616}
+{"test":"webhook-idempotency-key-drill.spec.ts","title":"deliver -> replay via API -> reference subscriber dedupes on the key; delivery log distinguishes fresh vs replayed","status":"pending","ts":1786887797616}
+{"test":"browser-demo-pkce.spec.ts","title":"Connect to Ship -> consent -> documents list, real browser round trip","status":"running","ts":1786887798165}
+{"test":"developer-portal-apps.spec.ts","title":"register, view shown-once secret, rotate, and revoke","status":"running","ts":1786887798189}
+{"test":"developer-portal-apps.spec.ts","title":"register, view shown-once secret, rotate, and revoke","status":"passed","ts":1786887803931,"duration":5261}
+{"test":"developer-portal-apps.spec.ts","title":"Developer > Apps has no critical accessibility violations","status":"running","ts":1786887803933}
+{"test":"developer-portal-apps.spec.ts","title":"Developer > Apps has no critical accessibility violations","status":"passed","ts":1786887805088,"duration":1150}
+{"test":"developer-portal-apps.spec.ts","title":"portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)","status":"running","ts":1786887805089}
+{"test":"browser-demo-pkce.spec.ts","title":"Connect to Ship -> consent -> documents list, real browser round trip","status":"passed","ts":1786887806198,"duration":7554}
+{"test":"browser-demo-pkce.spec.ts","title":"negative: unregistered redirect_uri never silently succeeds","status":"running","ts":1786887806200}
+{"test":"developer-portal-apps.spec.ts","title":"portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)","status":"failed","ts":1786887806253,"duration":840,"error":"developer-portal-apps.spec__portal_calls_hit_the_real__api_v1_surface__network.log"}
+{"test":"browser-demo-pkce.spec.ts","title":"negative: unregistered redirect_uri never silently succeeds","status":"passed","ts":1786887806590,"duration":386}
+{"test":"browser-demo-pkce.spec.ts","title":"a failed leg-2 exchange clears the stale ?code= so retrying starts a fresh login","status":"running","ts":1786887806590}
+{"test":"developer-portal-apps.spec.ts","title":"portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)","status":"running","ts":1786887806787}
+{"test":"browser-demo-pkce.spec.ts","title":"a failed leg-2 exchange clears the stale ?code= so retrying starts a fresh login","status":"passed","ts":1786887806949,"duration":354}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key","status":"running","ts":1786887807674}
+{"test":"developer-portal-apps.spec.ts","title":"portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)","status":"passed","ts":1786887811751,"duration":4784}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"subscription CRUD from the portal UI: create, list, delete","status":"running","ts":1786887811756}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key","status":"passed","ts":1786887812152,"duration":4358}
+{"test":"oauth-authorize.spec.ts","title":"login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)","status":"running","ts":1786887812156}
+{"test":"oauth-authorize.spec.ts","title":"login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)","status":"passed","ts":1786887812550,"duration":390}
+{"test":"oauth-authorize.spec.ts","title":"deny path redirects with error=access_denied","status":"running","ts":1786887812551}
+{"test":"oauth-authorize.spec.ts","title":"deny path redirects with error=access_denied","status":"passed","ts":1786887812941,"duration":386}
+{"test":"oauth-pkce-chain.spec.ts","title":"graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me","status":"running","ts":1786887812945}
+{"test":"oauth-pkce-chain.spec.ts","title":"graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me","status":"passed","ts":1786887813369,"duration":418}
+{"test":"oauth-pkce-chain.spec.ts","title":"negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant","status":"running","ts":1786887813370}
+{"test":"oauth-pkce-chain.spec.ts","title":"negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant","status":"passed","ts":1786887813788,"duration":414}
+{"test":"oauth-refresh-rotation-stolen-token.spec.ts","title":"rotate -> replay the old refresh token -> family invalidated, active session killed, distinguishable error","status":"running","ts":1786887813791}
+{"test":"oauth-refresh-rotation-stolen-token.spec.ts","title":"rotate -> replay the old refresh token -> family invalidated, active session killed, distinguishable error","status":"passed","ts":1786887814180,"duration":384}
+{"test":"webhook-idempotency-key-drill.spec.ts","title":"deliver -> replay via API -> reference subscriber dedupes on the key; delivery log distinguishes fresh vs replayed","status":"running","ts":1786887814184}
+{"test":"webhook-idempotency-key-drill.spec.ts","title":"deliver -> replay via API -> reference subscriber dedupes on the key; delivery log distinguishes fresh vs replayed","status":"passed","ts":1786887816297,"duration":2108}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"subscription CRUD from the portal UI: create, list, delete","status":"failed","ts":1786887827417,"duration":15405,"error":"developer-portal-dlq-replay.spec__subscription_CRUD_from_the_portal_UI__create__list.log"}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"subscription CRUD from the portal UI: create, list, delete","status":"running","ts":1786887828070}
+{"test":"developer-portal-dlq-replay.spec.ts","title":"subscription CRUD from the portal UI: create, list, delete","status":"passed","ts":1786887833398,"duration":5098}
+{"test":"__summary__","title":"Final Results","status":"passed","ts":1786887833715}

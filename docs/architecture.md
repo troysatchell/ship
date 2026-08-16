@@ -263,7 +263,7 @@ published package (`sdk/` stays a workspace package; npm-publishing is explicitl
 |---|---|---|
 | `ShipClient` constructor, `me()`, `documents` / `issues` / `sprints` resource clients, `verifyWebhook`, async-iterator pagination (`iterate()`) | **stable** | Directly mirrors the OpenAPI spec; PF-405's parity fitness test keeps it that way. Shape is fixed by the resources in §2.4 and shouldn't change without a spec change. |
 | `webhooks` resource client (subscriptions / deliveries / replay CRUD) | **stable** once PF-401 lands | Same parity guarantee as above — called out separately only because it ships slightly later (E4). |
-| `deviceLogin()` / `authorizationCodeFlow()` auth helpers, `ITokenStore` (`MemoryTokenStore` / `FileTokenStore`) | **pre-1.0** | Hand-written against the OAuth flows, not generated from the spec — §2.8 names this openly as a trade-off (type quality over generated drift-safety). Signatures may still move during E4/E6 build-out (CLI, browser demo) before they're proven against real integrations. |
+| `deviceLogin()` / `authorizationCodeFlow()` auth helpers, `ITokenStore` with three built-in stores — `MemoryTokenStore` and `LocalStorageTokenStore` (browser, `{ storageKey? }`) from `@ship/sdk`, `FileTokenStore` from `@ship/sdk/node` (TRO-617) | **pre-1.0** | Hand-written against the OAuth flows, not generated from the spec — §2.8 names this openly as a trade-off (type quality over generated drift-safety). Signatures may still move during E4/E6 build-out (CLI, browser demo) before they're proven against real integrations. |
 
 ---
 
@@ -291,6 +291,24 @@ each of the 3 writes under the acting human's `user_id` — now lands a row in `
 (PF-704) is literally querying that audit trail for the agent's `client_id` and showing every
 action it took — a fact that was structurally unobservable before this rewire, because internal
 routes carry no such trail.
+
+**TTFE drill — two API modes (TRO-621, W6-R55).** `pnpm drill ttfe` (`scripts/drill/ttfe.ts`,
+PLUGFORGE.MD §4/§5's timed install → device login → webhook → document → signed delivery →
+`verifyWebhook` proof) runs the API under test in one of two modes, printed as `api: tsx child`
+or `api: image <ref>` in its header and above its per-stage table. The default (`tsx`) spawns
+`api/src/index.ts` from the checkout, unchanged since TRO-455 — what `gate.sh` G12, GitLab's
+`drill-ttfe`, and GitHub's `drill-ttfe` job run. Setting `DRILL_TTFE_API_IMAGE=<image ref>` (ruling
+I-07, "containerized Ship instance") instead starts that image — the root `Dockerfile`, the same
+artifact CI's `build-image` job pushes — with testcontainers' `GenericContainer` under the image's
+own `NODE_ENV=production`, waits for `GET /health` 200, and runs the identical six stages against
+the host-mapped port; GitHub's `drill-ttfe-image` job does this on every PR (GitHub-only: GitLab's
+shared runner cannot start containers). Production mode is what makes this a real proof and what
+constrains it: `api/src/db/ssl.ts` requires TLS to Postgres in production, so the drill either
+reuses an ambient `DATABASE_URL` whose server accepts TLS (reached from the container via
+`host.docker.internal`) or — when the ambient server is plaintext-only, or no `DATABASE_URL` is
+set — starts its own `ssl=on` Postgres on a private docker network the API container joins by
+alias, saying which it did and why. Mode selection, the container env, and that TLS decision are
+pure functions in `scripts/drill/ttfe-api-mode.ts` (unit-tested; see its header).
 
 ---
 
