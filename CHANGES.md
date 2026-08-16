@@ -49,6 +49,38 @@ violation with `field: 'optionalDependencies'` in the updated test file.
 
 ---
 
+## TRO-623 — Demo script's Install step left the `ship` alias undefined in a fresh terminal
+
+**Non-code / doc-only ticket — a real reproduced-then-fixed terminal session, not vitest** (same
+disclosed-exception class as TRO-622/TRO-590/TF-1..10: no unit test exercises a markdown runbook).
+
+**Found live, not hypothesized.** Troy ran `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`'s own
+pre-stage + Act 1 steps exactly as written and hit `zsh: command not found: ship` on the first
+`ship login`. Root cause: `ship` is a shell alias (`alias ship="node $PWD/integrations/cli/dist/
+bin.js"`) defined once in step P1 — aliases don't cross terminals, and Act 1's Install step opens a
+brand-new one (`cd $(mktemp -d)`) without redeclaring it. Installing the `@ship/sdk` tarball there
+doesn't help either — `ship` is `@ship/cli`'s bin, a separate package the SDK install never touches.
+
+**Fix.** `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`: P1 now says the alias is LEFT-terminal-only;
+the "0:15–0:35 Install" step defines its own copy inline, from the repo root, before `cd`ing away
+(`$PWD` expands immediately at alias-definition time, so the resulting absolute path survives the
+`cd`).
+
+**Verified for real.** Reproduced the failure in a real interactive `zsh` session running the old
+steps verbatim, then confirmed the new steps work in the same kind of session (`ship --help`
+resolved and printed real CLI output). A first verification attempt via `zsh -c "<script>"` gave a
+false negative — a parse-time alias-expansion quirk specific to `-c` scripts, not a flaw in the fix
+— caught and re-verified against a line-by-line interactive session instead, matching how a human
+actually types into a terminal.
+
+**How to run it.** From the repo root: `alias ship="node $PWD/integrations/cli/dist/bin.js"; cd
+$(mktemp -d); npm init -y >/dev/null && npm install /tmp/ship-sdk-0.0.0.tgz; ship --help` (build the
+CLI first if `integrations/cli/dist/bin.js` doesn't exist: `pnpm --filter @ship/cli build`).
+
+**Roll back.** Revert this commit; the Install step returns to assuming the alias is already global.
+
+---
+
 ## TRO-622 — Demo run-through: three `pnpm dev` / demo-environment breakers fixed
 
 **What was wrong (all three observed 2026-08-16 by executing `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`
