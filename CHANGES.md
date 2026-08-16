@@ -71,6 +71,75 @@ skipped) and the never-built bucketed-filter tests.
 
 ---
 
+## TRO-612 — `webhooks.liveServer.test.ts`: `oauthAppId` setup guard fails loudly, not skips
+
+**Root cause.** `sdk/src/__tests__/webhooks.liveServer.test.ts`'s TRO-607 `createSubscription()`
+case (then around lines 309-310, now ~360-361 after TRO-452's later edits to this file) guarded
+its `oauthAppId` precondition with `expect(oauthAppId, 'oauthAppId must be set in beforeAll').toBeDefined();`
+followed by `if (!oauthAppId) return;`. `toBeDefined()` on a defined-but-falsy `oauthAppId` (e.g.
+empty string) would have passed the assertion, and even on `undefined` the conditional `return`
+right after it meant a broken `beforeAll` (bad DB insert, bad env, etc.) made this test SKIP the
+entire `createSubscription()` round-trip silently — reported green, having asserted nothing. A
+CodeRabbit finding from TRO-607's gate run (minor severity, filed as a non-blocking follow-up),
+flagged separately from the case's actual behavior because it was working correctly at the time —
+this only mattered the day setup broke.
+
+**The fix.** Replaced the `toBeDefined()` + conditional-`return` pair with
+`if (!oauthAppId) throw new Error('oauthAppId was not set in beforeAll');` — a hard throw that
+fails the test loudly with a clear message the moment `oauthAppId` is falsy, instead of quietly
+skipping past the assertions that follow. This matches the guard the TRO-452 `createSubscription()`
+case earlier in the same file (line 276) already uses for the identical variable, and the repo's
+stated "no silent skip" convention (`.claude/CLAUDE.md`'s seed-data guidance: fail with a clear,
+actionable message rather than skip). No other guard in this file was touched — this ticket's scope
+is the one `oauthAppId` setup guard named in the finding, not the file's other `.find()`-result
+`toBeDefined()`/early-`return` pairs (`found`/`success`/`dead`), which guard a different thing
+(an item's presence in a paginated response) and were out of scope.
+
+**Proof — observed, not just reasoned.** PostgreSQL was reachable in this worktree
+(`ship_wt_tro_612` on `localhost:5433`, confirmed via a direct `pg` connection), so the real
+live-server suite is runnable end-to-end here, unlike some worktree environments. Ran
+`pnpm --filter @ship/sdk exec vitest run src/__tests__/webhooks.liveServer.test.ts` (spawns the
+real `createApp()` server + a real local HTTP stub target, against the real worktree DB) twice:
+
+1. **Before the fix reverted (i.e. old skip pattern), baseline:** 8/8 passed — the guard never
+   fired in normal operation, matching the finding's own framing (a latent defect, not a currently
+   failing test).
+2. **With the real fix in place, setup deliberately broken:** temporarily shadowed `oauthAppId`
+   inside the TRO-607 `it()` block with a local `const oauthAppId = undefined` (isolated to that
+   one test, so `beforeAll`/the other seven cases were undisturbed), reran with
+   `vitest run ... -t "TRO-607"`. Result: the test **FAILED** (not skipped) —
+   `Error: oauthAppId was not set in beforeAll` at the `throw` line, reported under vitest's
+   `Failed Tests` section. This is the proof the guard now fails loudly instead of silently
+   skipping.
+3. **Reverted the temporary shadow**, reran the full file: 8/8 passed again, confirming the real
+   fix doesn't change behavior when setup succeeds (the normal case).
+
+All three runs were executed directly, not derived — outputs captured in the terminal, not
+inferred from reading the code alone. **Not verified:** this suite's execution inside CI/
+`scripts/factory/gate.sh`'s full (non-`--fast`) run in this exact session — `run_tests sdk` wires
+`pnpm --filter @ship/sdk test` (i.e. this same file) into the gate zero-tolerance, per that
+script's own TRO-405 comment, so the gate run itself is expected to re-exercise this file the same
+way, but that specific gate invocation's log is the artifact of record for that claim, not this entry.
+
+**How to run it.**
+```bash
+source .factory-env   # or set DATABASE_URL yourself; requires a reachable Postgres
+pnpm --filter @ship/sdk exec vitest run src/__tests__/webhooks.liveServer.test.ts
+```
+Requires a real running Postgres (spins up the real `createApp()` server and a local HTTP stub
+target in-process — no separately-running server needed). To reproduce the "fails loudly" proof
+itself, temporarily shadow the variable inside the TRO-607 `it()` block with
+`const oauthAppId = undefined as string | undefined;` right before the guard, then rerun with
+`-t "TRO-607"` — the test fails with `Error: oauthAppId was not set in beforeAll` instead of
+skipping. Remove the shadow line afterward.
+
+**Rollback.** Revert this commit. The change is confined to one guard clause (six lines, one test
+file) plus this CHANGES.md entry — no production code, schema, or other test case touched, so
+reverting restores the prior `toBeDefined()` + conditional-`return` guard exactly, with nothing
+else to undo.
+
+---
+
 ## TRO-434 — PF-905: AI cost analysis (figures traceable to ledger/CI data, not vibes)
 
 **What was built.** `docs/submission/PF-905-AI-COST-ANALYSIS.md` — the PRD-mandated AI/infra
