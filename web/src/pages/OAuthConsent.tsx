@@ -1,10 +1,19 @@
+import { useEffect, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { cn } from '@/lib/cn';
 
 const API_URL = import.meta.env.VITE_API_URL ?? '';
 
+const GENERIC_APP_NAME = 'This application';
+
+type AppInfoState =
+  | { status: 'loading' }
+  | { status: 'loaded'; name: string }
+  | { status: 'error' };
+
 /**
- * `/oauth-consent` — PF-103 (TRO-412, PLUGFORGE.MD §4).
+ * `/oauth-consent` — PF-103 (TRO-412, PLUGFORGE.MD §4), app-name lookup
+ * TRO-550.
  *
  * A dedicated, minimal, standalone route — deliberately NOT nested inside
  * `AppLayout` (see `main.tsx`: registered alongside `/setup`/`/invite/:token`,
@@ -20,8 +29,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? '';
  * (issuing a code, validating client_id/redirect_uri/code_challenge again
  * from scratch) is server-side in `api/src/routes/oauth-authorize.ts`; this
  * component only displays what `GET /oauth/authorize` already validated
- * (carried here as query params, including `app_name` for display) and
- * submits the human's decision.
+ * (carried here as query params) and submits the human's decision.
  *
  * Submission is a plain HTML `<form>` POST, not `fetch()` — see the header
  * comment in `oauth-authorize.ts` for the full reasoning (avoids both a CORS
@@ -30,6 +38,33 @@ const API_URL = import.meta.env.VITE_API_URL ?? '';
  * `redirect_uri`). The browser's own top-level navigation is what lands the
  * user on the third-party `redirect_uri` with `?code=...` or
  * `?error=access_denied`.
+ *
+ * ── App name: TRO-550 ──
+ *
+ * This page is directly reachable with attacker-chosen query params — it is
+ * a client-side SPA route with no server-side re-validation of its own, so
+ * `client_id`/`redirect_uri` here may not have gone through `GET
+ * /oauth/authorize` at all (a hand-crafted link can point straight at
+ * `/oauth-consent?...`). A display name taken from the query string is
+ * therefore not bound to the actual `client_id` — a crafted link could set
+ * `app_name` to anything, spoofing a trusted app's name. PR #183 (TRO-412
+ * PM-triaged review finding) fixed that by dropping the query param and
+ * showing generic "This application" copy. This restores a real name
+ * *safely*: `GET /oauth/app-info?client_id=...` (`oauth-authorize.ts`) looks
+ * the name up server-side against `oauth_apps` and is the ONLY source of
+ * truth for what's rendered below — there is deliberately no `app_name`
+ * read from `useSearchParams()` anywhere in this file, and none should ever
+ * be reintroduced. On any lookup failure (unknown/revoked client_id,
+ * network error) this falls back to the same generic copy PR #183 used —
+ * never to a client-supplied string.
+ *
+ * A bare `fetch()`, not `credentials: 'include'`: `/oauth` carries the
+ * public, credential-less CORS policy (`createPublicApiCors()`, app.ts) —
+ * see `oauth-authorize.ts`'s module header for why a credentialed fetch to
+ * `/oauth/*` would be silently blocked. No session is needed for this
+ * lookup anyway: `client_id` is already a public, URL-visible identifier,
+ * and the name returned is exactly what's about to be shown to this same
+ * user before they decide anything.
  */
 export function OAuthConsentPage() {
   const [searchParams] = useSearchParams();
@@ -45,15 +80,44 @@ export function OAuthConsentPage() {
   const responseType = searchParams.get('response_type') || 'code';
   const scope = searchParams.get('scope') || '';
   const state = searchParams.get('state') || '';
-  // Deliberately NOT read from the URL (`app_name` used to be a query param
-  // GET /oauth/authorize forwarded here): a display name sourced from the
-  // query string is not bound to the validated `client_id` at all — a
-  // malicious link could set `app_name` to anything, spoofing a trusted
-  // app's name on this consent screen. Generic copy plus the visible
-  // `Client`/`Redirect` values below (both real, validated fields) let the
-  // user verify what they're actually authorizing instead. Security interim
-  // fix, PM-triaged review finding on TRO-412.
-  const appName = 'This application';
+
+  const [appInfo, setAppInfo] = useState<AppInfoState>({ status: 'loading' });
+
+  useEffect(() => {
+    if (!clientId) {
+      setAppInfo({ status: 'error' });
+      return;
+    }
+
+    let cancelled = false;
+    const query = new URLSearchParams({ client_id: clientId });
+
+    fetch(`${API_URL}/oauth/app-info?${query.toString()}`)
+      .then((res) => {
+        if (!res.ok) throw new Error(`GET /oauth/app-info failed: ${res.status}`);
+        return res.json() as Promise<{ name: string }>;
+      })
+      .then((data) => {
+        if (!cancelled) setAppInfo({ status: 'loaded', name: data.name });
+      })
+      .catch(() => {
+        // Unknown/revoked client_id, network failure, or a malformed
+        // response: fall back to generic copy. Never fabricate a name from
+        // anything client-supplied — the Approve/Deny form below still
+        // re-validates client_id/redirect_uri server-side regardless (see
+        // oauth-authorize.ts), so this only affects what's displayed.
+        if (!cancelled) setAppInfo({ status: 'error' });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [clientId]);
+
+  // The ONLY two possible values: the real, server-verified name, or the
+  // same generic fallback PR #183 introduced. Never `searchParams.get(
+  // 'app_name')` — see the header comment above.
+  const appName = appInfo.status === 'loaded' ? appInfo.name : GENERIC_APP_NAME;
 
   const requestedScopes = scope.split(' ').filter(Boolean);
 
@@ -86,14 +150,16 @@ export function OAuthConsentPage() {
           </p>
         </div>
 
-        {/* The display name above is deliberately generic (not taken from
-          * the URL — see the `appName` comment). These two fields ARE the
-          * validated, server-checked values (client_id resolved to a real
-          * registered app, redirect_uri matched exactly against that app's
-          * registered list) — showing them lets the user verify what
-          * they're authorizing even though the friendly name can't be
-          * trusted. Security interim fix, PM-triaged review finding on
-          * TRO-412. */}
+        {/* Client/Redirect below are still shown alongside the name (not
+          * replaced by it): `client_id` is what GET /oauth/app-info's name
+          * lookup is actually keyed on, and `redirect_uri` is what
+          * POST /oauth/authorize/decision re-validates by exact match against
+          * the app's registered list (oauth-authorize.ts) before ever
+          * issuing a code — showing both lets the user cross-check what
+          * they're authorizing even with a trustworthy name now in place.
+          * TRO-412 (PM-triaged review finding) originally added this box
+          * when the name itself couldn't be trusted; TRO-550 restores the
+          * name without removing it. */}
         <div className="mb-6 space-y-1 rounded-md border border-border bg-background px-4 py-3 text-xs text-muted">
           <p className="break-all">
             <span className="font-medium uppercase tracking-wider">Client:</span> {clientId}

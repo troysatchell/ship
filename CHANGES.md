@@ -6,6 +6,85 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-550 — OAuth consent screen: restore the real app name, safely, via server-verified lookup
+
+**What was built.** `GET /oauth/app-info?client_id=...` — a new endpoint, added to the existing
+PF-103 authorize router (`api/src/routes/oauth-authorize.ts`, mounted at `/oauth` per `app.ts`),
+that looks up `oauth_apps.name` for a `client_id` and returns `{ name }`, or a proper 4xx (never a
+500) for a missing/unknown/revoked one. Full OpenAPI registration in its own schema file,
+`api/src/openapi/schemas/oauth-app-info.ts` (zod query/response/error schemas +
+`registry.registerPath`, `security: []`, `ROOT_SERVER` override — same pattern as PF-103's own two
+operations, added to `schemas/index.ts`'s barrel, verified present in the regenerated
+`api/openapi.json`/`openapi.yaml`, both committed). The consent screen
+(`web/src/pages/OAuthConsent.tsx`) now fetches this endpoint on mount and renders **only** what it
+returns — the query-string `app_name` param is not read anywhere in the file, and the header
+comment says explicitly that none should ever be reintroduced.
+
+**Why this was needed, and why it's safe.** PR #183 (TRO-412, PM-triaged review finding) fixed a
+real consent-phishing hole: `/oauth-consent` is a client-side SPA route with no server-side
+re-validation of its own — it's directly reachable with a hand-crafted URL, not only via the
+validated `GET /oauth/authorize` redirect — so a display name taken straight from the query string
+was never bound to the actual `client_id`. PR #183's fix was to stop trusting it and show generic
+"This application" copy instead, which is safe but a real UX regression (a legitimate app's name
+no longer shows at all). Folding the name back into `GET /oauth/authorize`'s own redirect (the
+ticket's other proposed option) would have reintroduced the exact hole PR #183 closed, because
+`/oauth-consent` can be reached without ever going through that redirect — so this ticket does not
+do that. Instead, `GET /oauth/app-info` is looked up **client-side, keyed only on `client_id`**,
+which is already a public, URL-visible identifier either way; there is no `name`/`app_name` input
+to the endpoint anywhere, so the response can only ever be the real, registered name for whichever
+real `client_id` was asked about. An attacker can pick which registered app's name is shown, but
+cannot fabricate a name for it.
+
+**Error shape decision (a deliberate deviation from the ticket text, flagged for review).** The
+ticket's brief asked for "the `ApiError` failure shape" on invalid/unknown `client_id`. This
+repo's `ApiError` class (`api/src/platform/api/v1/errors.ts`) carries an explicit, already-recorded
+PM boundary decision (TRO-416) in its own header: that contract governs `/api/v1` only, and
+"`/oauth` endpoints speak RFC 6749's own error shape (`error`/`error_description`)... not this
+one." `oauth-token.ts` (PF-104/PF-105) follows that same rule for its own JSON (non-redirect)
+errors. `GET /oauth/app-info` is not itself an RFC 6749-defined operation, but it lives in the same
+`/oauth` family and returns JSON errors the same way its neighbor does, so it follows that
+established, already-documented precedent (`{ error, error_description }`, 400 for missing
+`client_id`, 404 — indistinguishable from "unknown" — for a revoked one) rather than introducing a
+third shape into one small router. Flagged here rather than silently deviating from the literal
+ticket text.
+
+**Regression test — the actual security property, not just "returns the right name for valid
+input."** Backend: `api/src/platform/oauth/__tests__/authorize.test.ts`, new `GET /oauth/app-info`
+describe block (5 cases, reusing that file's existing fixtures) — including "a spoofed `app_name`
+query param has no effect" directly against the route, and revoked-vs-unknown-client_id
+indistinguishability. Frontend: `web/src/pages/OAuthConsent.test.tsx` (new file, 3 cases) — mocks
+`GET /oauth/app-info` and asserts the rendered `<h1>` shows the *mocked server response's* name,
+never the `app_name` query-string value, in both the success case and two failure-fallback cases
+(404 and a network error). **Confirmed red before the fix**: the pre-TRO-550 component hardcoded
+`const appName = 'This application'` and called no endpoint at all, so the first frontend case
+(`findByRole('heading', { name: /Authorize Real Trusted App/i })`) times out and fails against that
+code — it never becomes anything but the generic string. The second and third cases would have
+passed against the *old* code by coincidence (it never rendered `app_name` either), but are the
+direct proof against the regression this fix could otherwise reintroduce (a naive "restore
+`app_name` from the query string on lookup failure" implementation) — verified by inspection of
+what each assertion pins, not just by running green once.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/authorize.test.ts
+pnpm --filter @ship/web exec vitest run src/pages/OAuthConsent.test.tsx
+pnpm --filter @ship/api openapi:generate   # regenerates openapi.yaml/openapi.json; diff should be empty after this change is committed
+```
+
+**Rollback.** Revert this commit. Changes are localized to: `api/src/routes/oauth-authorize.ts`
+(adds the `GET /app-info` handler + `sendAppInfoError` helper, plus header-comment updates — the
+existing `/authorize` and `/authorize/decision` handlers are untouched), `api/src/openapi/schemas/
+oauth-app-info.ts` (new) and its `schemas/index.ts` barrel export, `api/openapi.yaml`/`openapi.json`
+(regenerated), `api/src/platform/oauth/__tests__/authorize.test.ts` (new describe block, additive),
+`web/src/pages/OAuthConsent.tsx` (the fetch + `appInfo` state, replacing the hardcoded generic
+string — the Approve/Deny form and its server-side re-validation are untouched), and
+`web/src/pages/OAuthConsent.test.tsx` (new). Reverting restores the PR #183 interim behavior exactly
+(generic "This application" copy, unconditionally) — no data migration, no schema change, nothing
+else to undo.
+
+---
+
 ## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
 
 **What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
