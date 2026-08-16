@@ -74,6 +74,219 @@ ticket is proof/CI/docs only, exactly as its own `Tier: investigate` / doc-and-t
 
 ---
 
+## TRO-492 — PF-102 follow-up: OAuth app rotation lost-update race (concurrent `/rotate` calls)
+
+**Root cause.** `api/src/platform/oauth/appRegistration.ts`'s `rotateOAuthAppSecret` UPDATEd
+`client_secret_hash` under `WHERE id = $1 AND revoked_at IS NULL` — this closes the revoke-vs-rotate
+race (CodeRabbit, TRO-408 review) but not rotate-vs-rotate: rotation never touches `revoked_at`, so
+two concurrent `/rotate` calls on the same app both matched that predicate, both got `ok: true` and a
+200, and only the last UPDATE to actually commit persisted — the other caller's just-returned raw
+secret was already dead the moment it reached them. Verified, not cross-tenant: every predicate in
+this function was already workspace-scoped via the SELECT feeding it, before or after this fix.
+
+**Claim provenance — what the ticket text assumed vs. what was actually found by reading the file.**
+The ticket text said to "restore `workspace_id` to the rotation predicate... it's apparently missing
+there currently — verify this yourself." Read `appRegistration.ts` as it exists now, before touching
+it (per this repo's CLAUDE.md on unmarked inference): confirmed `workspace_id` was in fact absent
+from the UPDATE's own WHERE clause (present only on the SELECT that fed it) — the ticket's assumption
+was accurate, not stale. Also confirmed, independently, that the rotation UPDATE already carried
+`WHERE id = $2 AND revoked_at IS NULL` as the ticket's orchestrator amendment stated — this ticket
+only needed to extend that predicate, not introduce it.
+
+**What changed.**
+- `api/src/platform/oauth/appRegistration.ts`'s `rotateOAuthAppSecret`:
+  - Restored `workspace_id = $3` to the UPDATE's own WHERE clause (defense-in-depth; the preceding
+    SELECT already scoped the lookup, so this could not previously cross workspaces, but the write
+    statement should say so directly rather than rely on the read that fed it).
+  - Added `client_secret_hash IS NOT DISTINCT FROM $4` — an optimistic-concurrency guard comparing
+    against the exact hash this call's own SELECT observed. Same "push the predicate into the WHERE
+    clause, let Postgres's row lock + READ COMMITTED's EvalPlanQual re-check decide" pattern
+    `token.ts`'s `redeemAuthorizationCode`/`rotateRefreshToken` already use for their own
+    concurrent-redemption/-rotation races — adapted here because rotation, unlike those two, has no
+    natural "already consumed" flag (an app can be legitimately rotated any number of times), so the
+    guard compares against the previously-read hash rather than a boolean flag.
+  - Added a `'conflict'` case to `RotateOAuthAppSecretError`: on 0 rows updated, re-reads `revoked_at`
+    to distinguish "a revoke won the race" (pre-existing, terminal) from "a concurrent rotation landed
+    first" (new, retry-able) — a caller needs to react differently to the two.
+- `api/src/routes/oauth-apps.ts`: `POST /:id/rotate` maps `conflict` to `409`
+  (`ERROR_CODES.ALREADY_EXISTS`, matching this same file's existing revoke-conflict convention) with a
+  message telling the caller to retry — never a silent 500, never a 200 wrapping a secret that's
+  already dead.
+- `api/src/openapi/schemas/oauth-apps.ts`: added the `409` response to the rotate endpoint's OpenAPI
+  registration and documented the guarantee in its `description`.
+
+**Regression test** — `api/src/platform/oauth/__tests__/app-registration.test.ts`:
+- New `describe('genuine concurrent rotation of the same app (forced, deterministic race)')`: a third
+  connection takes `SELECT ... FOR UPDATE` on the app row before two real `rotateOAuthAppSecret` calls
+  start; both calls' validation SELECTs succeed immediately (a plain read never blocks on a row lock),
+  but their UPDATEs block on it. Once both are observed genuinely queued
+  (`pg_stat_activity`, polled with a bounded deadline, scoped to `datname = current_database() AND pid
+  <> pg_backend_pid()` so a sibling worktree's own concurrent test run against the same shared
+  Postgres cluster can't be miscounted), the lock releases and the two UPDATEs contend for the row for
+  real. Asserts exactly one `ok: true`, the loser gets `error: 'conflict'`, the winner's own secret
+  authenticates afterward, and the persisted `client_secret_hash` matches the winner's secret exactly
+  (not just "some" hash — proving no lost update, not just "someone won").
+  - **Red-before-green, verified directly**: temporarily weakened the UPDATE back to the pre-fix
+    `WHERE id = $2 AND revoked_at IS NULL` (no `workspace_id`, no CAS guard) and reran this test — it
+    failed with `expected [ true, true ] to have a length of 1 but got 2`, reproducing the exact
+    lost-update bug this ticket closes. Restored the fix, reran: green. (First attempt at the red run
+    timed out on `waitForBlockedRotations` instead of failing on the real assertion — the weakened
+    query still had 4 bound values for only 2 placeholders, which errors before ever reaching the row
+    lock; trimmed to 2 to get a clean, meaningful red before re-confirming.)
+  - Deliberately no naive "fire two HTTP calls via `Promise.all` and assert `[200, 409]`" smoke test
+    (unlike `token.test.ts`'s equivalent redemption/refresh-rotation suites) — that shape's invariant
+    doesn't hold here. Redemption and refresh-token rotation are single-use, so even two fully
+    sequential (non-overlapping) calls produce a real winner/loser regardless of actual interleaving.
+    OAuth-app rotation is not single-use: two calls that happen not to overlap are both legitimate,
+    independent rotations that should both succeed — exactly like two rotations fired minutes apart.
+    Asserting `[200, 409]` on that shape would assert a bug that doesn't exist and would flake between
+    a false pass and a false failure depending on scheduling. Only the forced, deterministic test above
+    exercises the actual race this ticket closes.
+- New `AC-2 (rotation)`: extends the existing AC-2 log-spy grep test (previously CREATE-path only) to
+  the `/rotate` path — spies `console.log`/`console.error`/`console.warn`, rotates, and asserts neither
+  the old nor the newly-rotated secret ever appears in a logged line (serializing Errors and objects,
+  same as the existing CREATE-path version, so a leak inside a logged object wouldn't slip past).
+- New `AC-3 (rotation)`: independent of AC-4's existing rotation test (which only exercises
+  `verifyAppCredentials`), asserts the OLD secret is absent from a subsequent GET/list response (the
+  same AC-3 guarantee, exercised across a rotation instead of only at creation) and separately confirms
+  the NEW secret is likewise never returned via GET/list — only from the rotate response itself,
+  exactly once.
+
+**How to run it.**
+```bash
+source .factory-env && cd api && pnpm vitest run src/platform/oauth/__tests__/app-registration.test.ts
+```
+13/13 passed. Also ran the full `src/platform/oauth/__tests__` directory (94/94 passed, no
+regressions) and `pnpm --filter @ship/api run type-check` (clean, no new errors — a pre-existing
+`integrations/cli` type-check failure against `@ship/sdk`'s unbuilt package exports is unrelated to
+this change and untouched by it).
+
+**Not verified / left as-is.** `revokeOAuthApp` and `createOAuthApp` were read but not modified — this
+ticket is scoped to the rotation lost-update race only. `webhooks.ts`'s own signing-secret rotation (a
+different table, a similar no-grace-period shape, referenced only in a comment inside
+`appRegistration.ts`) was not audited for an analogous concurrent-rotation race — out of this ticket's
+scope, flagged here for whoever next touches it.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit, isolated to `appRegistration.ts`,
+`oauth-apps.ts`, the OpenAPI schema file, and the test file). Functionally: drop `workspace_id = $3
+AND client_secret_hash IS NOT DISTINCT FROM $4` from the UPDATE (back to `WHERE id = $2 AND
+revoked_at IS NULL`), remove the `'conflict'` case from `RotateOAuthAppSecretError` and its route
+handling, and drop the `409` response from the OpenAPI registration. No migration, no schema change,
+no data was written or backfilled by this fix, so nothing else needs undoing.
+
+---
+
+## TRO-550 — OAuth consent screen: restore the real app name, safely, via server-verified lookup
+
+**What was built.** `GET /oauth/app-info?client_id=...` — a new endpoint, added to the existing
+PF-103 authorize router (`api/src/routes/oauth-authorize.ts`, mounted at `/oauth` per `app.ts`),
+that looks up `oauth_apps.name` for a `client_id` and returns `{ name }`, or a proper 4xx (never a
+500) for a missing/unknown/revoked one. Full OpenAPI registration in its own schema file,
+`api/src/openapi/schemas/oauth-app-info.ts` (zod query/response/error schemas +
+`registry.registerPath`, `security: []`, `ROOT_SERVER` override — same pattern as PF-103's own two
+operations, added to `schemas/index.ts`'s barrel, verified present in the regenerated
+`api/openapi.json`/`openapi.yaml`, both committed). The consent screen
+(`web/src/pages/OAuthConsent.tsx`) now fetches this endpoint on mount and renders **only** what it
+returns — the query-string `app_name` param is not read anywhere in the file, and the header
+comment says explicitly that none should ever be reintroduced.
+
+**Why this was needed, and why it's safe.** PR #183 (TRO-412, PM-triaged review finding) fixed a
+real consent-phishing hole: `/oauth-consent` is a client-side SPA route with no server-side
+re-validation of its own — it's directly reachable with a hand-crafted URL, not only via the
+validated `GET /oauth/authorize` redirect — so a display name taken straight from the query string
+was never bound to the actual `client_id`. PR #183's fix was to stop trusting it and show generic
+"This application" copy instead, which is safe but a real UX regression (a legitimate app's name
+no longer shows at all). Folding the name back into `GET /oauth/authorize`'s own redirect (the
+ticket's other proposed option) would have reintroduced the exact hole PR #183 closed, because
+`/oauth-consent` can be reached without ever going through that redirect — so this ticket does not
+do that. Instead, `GET /oauth/app-info` is looked up **client-side, keyed only on `client_id`**,
+which is already a public, URL-visible identifier either way; there is no `name`/`app_name` input
+to the endpoint anywhere, so the response can only ever be the real, registered name for whichever
+real `client_id` was asked about. An attacker can pick which registered app's name is shown, but
+cannot fabricate a name for it.
+
+**Error shape decision (a deliberate deviation from the ticket text, flagged for review).** The
+ticket's brief asked for "the `ApiError` failure shape" on invalid/unknown `client_id`. This
+repo's `ApiError` class (`api/src/platform/api/v1/errors.ts`) carries an explicit, already-recorded
+PM boundary decision (TRO-416) in its own header: that contract governs `/api/v1` only, and
+"`/oauth` endpoints speak RFC 6749's own error shape (`error`/`error_description`)... not this
+one." `oauth-token.ts` (PF-104/PF-105) follows that same rule for its own JSON (non-redirect)
+errors. `GET /oauth/app-info` is not itself an RFC 6749-defined operation, but it lives in the same
+`/oauth` family and returns JSON errors the same way its neighbor does, so it follows that
+established, already-documented precedent (`{ error, error_description }`, 400 for missing
+`client_id`, 404 — indistinguishable from "unknown" — for a revoked one) rather than introducing a
+third shape into one small router. Flagged here rather than silently deviating from the literal
+ticket text.
+
+**CodeRabbit triage (2 findings, both addressed or disclosed — `gate.sh`'s own G9 rule treats these
+as advisory, never a gate failure).**
+- **Minor, fixed**: `OAuthConsent.tsx`'s fetch chain trusted a 200 response's body shape without
+  checking it — a malformed `{ name: '' }`, `{}`, `{ name: 123 }`, or `null` body would have flowed
+  into `setAppInfo({ status: 'loaded', name: data.name })` and rendered blank/`undefined`/a number
+  instead of falling back to generic copy. Fixed: the response is now checked for a real, non-empty
+  string `name` before being treated as loaded; anything else throws and lands on the same
+  generic-copy fallback as a network failure or a 404. New test case in `OAuthConsent.test.tsx`
+  covers all four malformed shapes.
+- **Major, disclosed but NOT fixed here — pre-existing, not a TRO-550 regression.** CodeRabbit
+  flagged broken YAML indentation around the new `/oauth/app-info` operation in `api/openapi.yaml`
+  (`security: []` split across two lines with the `[]` at column 0, `servers`/`parameters` fields
+  over-indented and misaligned). Verified with a real YAML parser (`yaml@2.9.0`, not eyeballed):
+  parsing an isolated snippet containing just this operation throws `Implicit map keys need to be
+  followed by map values` at the `security:` line — this is a genuine, reproducible bug, not
+  cosmetic. But it is **not new**: the byte-identical broken pattern already exists, unchanged, for
+  the already-merged `GET /oauth/authorize` and `POST /oauth/authorize/decision` operations
+  (PF-103/TRO-551, merged well before this ticket) — same `security: []` line, same
+  `servers`/`ROOT_SERVER` misindentation, same parameter-schema misalignment, verified by direct
+  comparison of both blocks in `api/openapi.yaml`. The bug lives in the shared hand-rolled
+  `jsonToYaml()` generator (`api/src/swagger.ts`), not in anything TRO-550 wrote — this ticket's new
+  operation simply followed the exact same established `ROOT_SERVER`/`security: []` pattern PF-103
+  already used, and inherited the same generator defect by doing so correctly. Fixing `jsonToYaml()`
+  is out of scope here: it's shared infrastructure affecting every non-`/api`-prefixed operation
+  (currently three, all three of PF-103/TRO-550's `/oauth/*` operations), and a real fix needs its
+  own verification across all of them, not a drive-by patch on generated output (which
+  `openapi:generate` would overwrite on the next run anyway). Worth a follow-up ticket. Separately
+  confirmed: `api/openapi.json` — the file `GET /api/openapi.json` actually serves and the one the
+  MCP server executor reads at runtime (`/ship-openapi-endpoints`) — parses correctly and is
+  unaffected; only the secondary YAML artifact has this defect.
+
+**Regression test — the actual security property, not just "returns the right name for valid
+input."** Backend: `api/src/platform/oauth/__tests__/authorize.test.ts`, new `GET /oauth/app-info`
+describe block (5 cases, reusing that file's existing fixtures) — including "a spoofed `app_name`
+query param has no effect" directly against the route, and revoked-vs-unknown-client_id
+indistinguishability. Frontend: `web/src/pages/OAuthConsent.test.tsx` (new file, 4 cases) — mocks
+`GET /oauth/app-info` and asserts the rendered `<h1>` shows the *mocked server response's* name,
+never the `app_name` query-string value, across the success case and three failure-fallback cases
+(404, a network error, and — added during CodeRabbit triage — four shapes of malformed 200 body).
+**Confirmed red before the fix**: the pre-TRO-550 component hardcoded
+`const appName = 'This application'` and called no endpoint at all, so the first frontend case
+(`findByRole('heading', { name: /Authorize Real Trusted App/i })`) times out and fails against that
+code — it never becomes anything but the generic string. The other cases would have passed against
+the *old* code by coincidence (it never rendered `app_name` or fetched anything either), but are the
+direct proof against the regression this fix could otherwise reintroduce (a naive "restore
+`app_name` from the query string on lookup failure" implementation, or trusting an unvalidated 200
+body) — verified by inspection of what each assertion pins, not just by running green once.
+
+**How to run it.**
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/authorize.test.ts
+pnpm --filter @ship/web exec vitest run src/pages/OAuthConsent.test.tsx
+pnpm --filter @ship/api openapi:generate   # regenerates openapi.yaml/openapi.json; diff should be empty after this change is committed
+```
+
+**Rollback.** Revert this commit. Changes are localized to: `api/src/routes/oauth-authorize.ts`
+(adds the `GET /app-info` handler + `sendAppInfoError` helper, plus header-comment updates — the
+existing `/authorize` and `/authorize/decision` handlers are untouched), `api/src/openapi/schemas/
+oauth-app-info.ts` (new) and its `schemas/index.ts` barrel export, `api/openapi.yaml`/`openapi.json`
+(regenerated), `api/src/platform/oauth/__tests__/authorize.test.ts` (new describe block, additive),
+`web/src/pages/OAuthConsent.tsx` (the fetch + `appInfo` state, replacing the hardcoded generic
+string — the Approve/Deny form and its server-side re-validation are untouched), and
+`web/src/pages/OAuthConsent.test.tsx` (new). Reverting restores the PR #183 interim behavior exactly
+(generic "This application" copy, unconditionally) — no data migration, no schema change, nothing
+else to undo.
+
+---
+
 ## TRO-600 — `FileTokenStore.set()` was not atomic — a crash mid-write could corrupt `~/.ship/credentials.json`
 
 **Root cause.** `sdk/src/fileTokenStore.ts`'s `set()` wrote directly to `filePath` via
