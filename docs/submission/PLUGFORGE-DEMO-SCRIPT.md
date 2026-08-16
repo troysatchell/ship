@@ -132,6 +132,14 @@ VALUES ((SELECT last_workspace_id FROM users WHERE email='dev@ship.local'),
 
 Log into `$WEB_URL` as `dev@ship.local` / `admin123` and leave the tab idle. This is the tab you
 alt-tab to for the one on-camera "Approve" click (`/oauth-device-verify`) and for Act 2.
+On first load a **FleetGraph "Action Items"** popover appears — click **Got it** before Act 2; it
+swallows clicks (the Replay button won't fire until it's dismissed; observed in a headless
+run-through of Act 2 on 2026-08-16, and again while capturing the thread screenshots).
+
+**Restart `pnpm dev` after pulling** (or run `pnpm db:migrate`). `scripts/dev.sh` migrates on
+every *start*, but a long-running `pnpm dev` only hot-reloads code — Troy's had been up since
+Aug 14 and his DB was three migrations behind, so `GET /api/v1/webhooks/deliveries` 500'd on
+`replayed_from_id` and Replay could not work until `db:migrate` was run by hand.
 
 ### P4. Force one dead-lettered delivery for the Replay shot
 
