@@ -117,22 +117,28 @@
  * own header for why it is scoped to webhooks specifically rather than
  * generalized to every SDK resource in this same ticket.
  *
- * UPDATE — TRO-607 and TRO-452 (`ship webhooks tail`, PF-602) independently
- * found and fixed this same gap ("STILL NOT FIXED" as of TRO-599) at the
- * same time: `CreateWebhookSubscriptionBody` now declares `app_id`/singular
- * `event_type`/`target_url`, matching `CreateWebhookSubscriptionRequestSchema`
+ * UPDATE — TRO-607, TRO-452 (`ship webhooks tail`, PF-602), and TRO-455
+ * (PF-603, the TTFE drill) independently found and fixed this same gap
+ * ("STILL NOT FIXED" as of TRO-599) at the same time: `CreateWebhookSubscriptionBody`
+ * now declares `app_id`/singular `event_type`/`target_url`, matching
+ * `CreateWebhookSubscriptionRequestSchema`
  * (`platform/api/v1/resources/webhooks.ts`) field-for-field, replacing the
  * old `url`/plural-`events` shape that would 400 on every real call.
  * TRO-452 hit this as a blocking dependency — `ship webhooks tail` has to
- * call `createSubscription()` to register its own listener. Both branches
- * updated `sdk/src/resources/__tests__/webhooks.test.ts`'s request-shape
- * case and added a real-server round-trip case to
+ * call `createSubscription()` to register its own listener. TRO-455's TTFE
+ * drill hit the same blocker for its own literal AC ("`webhooks.create`"
+ * against a real running server) — see `scripts/drill/ttfe.ts`'s live use
+ * of this method for that drill's own round-trip proof.
+ * `createSubscription()` itself needed no signature change (it already
+ * forwards `body` as-is) in any of the three. All three branches updated
+ * `sdk/src/resources/__tests__/webhooks.test.ts`'s request-shape case and
+ * added a real-server round-trip case to
  * `sdk/src/__tests__/webhooks.liveServer.test.ts`; both survive the merge
  * (see that file's own header).
  *
  * Previously documented here as "STILL NOT FIXED ... explicitly OUT OF
  * SCOPE for TRO-599 ... see CHANGES.md's TRO-599 entry ... a follow-up
- * ticket" — TRO-607/TRO-452 are that follow-up.
+ * ticket" — TRO-607/TRO-452/TRO-455 are that follow-up.
  */
 import type { RequestClient } from '../internal/requestClient.js';
 import type { ListPage } from '../types.js';
@@ -200,7 +206,7 @@ export interface CreatedWebhookSubscription extends WebhookSubscription {
 }
 
 /**
- * `createSubscription()`'s request body. **FIXED by TRO-607/TRO-452**
+ * `createSubscription()`'s request body. **FIXED by TRO-607/TRO-452/TRO-455**
  * (previously disclosed as out of TRO-599's scope — see this file's header
  * for the full history). Matches the real `POST /api/v1/webhooks` route's
  * `CreateWebhookSubscriptionRequestSchema`

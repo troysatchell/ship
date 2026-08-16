@@ -36,9 +36,12 @@
  * `createSubscription()` case below (distinct event_types, so both coexist
  * without tripping the unique-active-subscription index) — the first cases
  * in this file to exercise that method for real instead of seeding around
- * it. Every OTHER case still seeds directly, unchanged: they exist to prove
- * RESPONSE shapes, and re-deriving each fixture through a create call would
- * just add an extra real HTTP round trip to every case for no new coverage.
+ * it. TRO-455/PF-603's TTFE drill independently needed the same fix —
+ * `scripts/drill/ttfe.ts` proves it again, live, via the drill's own
+ * `webhooks.createSubscription()` call, outside this suite. Every OTHER
+ * case still seeds directly, unchanged: they exist to prove RESPONSE
+ * shapes, and re-deriving each fixture through a create call would just add
+ * an extra real HTTP round trip to every case for no new coverage.
  *
  * DB SAFETY: own isolated workspace/user/oauth_app/api_token/webhook rows in
  * `beforeAll`, deleted in `afterAll`; does not touch `pnpm db:seed`'s

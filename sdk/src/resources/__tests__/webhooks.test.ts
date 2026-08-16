@@ -79,10 +79,10 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     // TRO-599, verified against serializeSubscription() + the routes' own
     // `{ ...serialized, secret, warning }` construction — app_id/singular
     // event_type/target_url/no updated_at, plus `warning`. Request:
-    // TRO-607/TRO-452 independently fixed the same gap (TRO-452 needed a
-    // working createSubscription() to implement `ship webhooks tail`) —
-    // app_id/singular event_type/target_url, per
-    // `CreateWebhookSubscriptionRequestSchema`
+    // TRO-607/TRO-452/TRO-455 independently fixed the same gap (TRO-452
+    // needed a working createSubscription() to implement `ship webhooks
+    // tail`, TRO-455's TTFE drill needed it for its own AC) — app_id/singular
+    // event_type/target_url, per `CreateWebhookSubscriptionRequestSchema`
     // (`platform/api/v1/resources/webhooks.ts`), replacing the old
     // `url`/plural-`events` shape that would 400 against a real server (see
     // webhooks.ts's header for the full history).
@@ -101,11 +101,13 @@ describe('WebhooksClient — request shape only (no real server exists to integr
     const client = new ShipClient({ token: 't', baseUrl: 'http://example.com' });
 
     // Request body now matches the real server schema: app_id/singular
-    // event_type/target_url. This mocked test proves the SDK builds the
-    // correct HTTP request and parses the response correctly. A real UUID,
-    // not a placeholder like 'app_1' — the real request schema requires
-    // app_id to be a valid UUID (CodeRabbit, TRO-607 review), and this mock
-    // should stay representative of what actually validates.
+    // event_type/target_url — the same shape TRO-455/PF-603's TTFE drill
+    // needed (see scripts/drill/ttfe.ts's live use of this exact method).
+    // This mocked test proves the SDK builds the correct HTTP request and
+    // parses the response correctly. A real UUID, not a placeholder like
+    // 'app_1' — the real request schema requires app_id to be a valid UUID
+    // (CodeRabbit, TRO-607 review), and this mock should stay representative
+    // of what actually validates.
     const appId = '11111111-1111-4111-8111-111111111111';
     const created = await client.webhooks.createSubscription({
       app_id: appId,

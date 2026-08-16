@@ -129,6 +129,18 @@ jobs:
       - name: Factory defect-gate engine type-check
         run: pnpm exec tsc --noEmit -p scripts/factory/defect-gates
 
+      # TRO-455 (PF-603): scripts/drill/ isn't a workspace package either —
+      # same "not covered by api's or web's vitest include, needs its own
+      # explicit run" reasoning as check-integration-deps and defect-gates
+      # above. evaluateDrillStages() is the TTFE drill's threshold-assertion
+      # logic (scripts/drill/thresholds.ts); the drill-ttfe job further down
+      # this file exercises it live, end to end.
+      - name: TTFE drill threshold-logic tests
+        run: pnpm exec vitest run --config scripts/drill/vitest.config.ts
+
+      - name: TTFE drill type-check
+        run: pnpm exec tsc --noEmit -p scripts/drill
+
       - name: Build all packages
         run: pnpm build
 
@@ -389,6 +401,61 @@ jobs:
             playwright-report/
           if-no-files-found: warn
           retention-days: 14
+
+  drill-ttfe:
+    name: drill · TTFE (PF-603)
+    runs-on: ubuntu-latest
+    # A doomed PR never spends minutes on this — same reasoning e2e-agent's
+    # own `needs: verify` uses.
+    needs: verify
+    timeout-minutes: 10
+
+    # TRO-455 (PF-603): the TTFE (Time To First Event) drill — PLUGFORGE.MD
+    # §4's graded CI check, wired on every PR per the PRD's own AC. Postgres
+    # via a plain `services:` container (GitHub Actions' hosted runners DO
+    # have a reachable Docker daemon, unlike GitLab's shared runner — see
+    # .gitlab-ci.yml's own comment on this same job for the platform that
+    # actually needed the workaround) — kept identical to the GitLab job
+    # anyway so both platforms exercise the SAME code path
+    # (`scripts/drill/ttfe.ts` reuses whatever `DATABASE_URL` is already set
+    # rather than starting its own testcontainers Postgres when one is
+    # provided; see that file's own header). The drill script builds
+    # shared/sdk itself (its own untimed setup phase), so no separate build
+    # step is needed here.
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: ship
+          POSTGRES_PASSWORD: ship_ci_password
+          POSTGRES_DB: ship_ci
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql://ship:ship_ci_password@localhost:5432/ship_ci
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: 10.27.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Run the TTFE drill
+        run: pnpm drill ttfe
 
   inventory:
     name: source-code inventory
