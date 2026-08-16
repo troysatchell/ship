@@ -6,6 +6,65 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-615 — TTFE drill now asserts tamper-rejection and first-attempt delivery latency P95 < 2 s
+
+**What was broken.** PLUGFORGE.MD §5's graded row is "Subscription via SDK → doc create → signed
+POST < 2 s → tamper rejected", and its perf table says "first-attempt webhook latency P95 < 2 s".
+Observed (read, not inferred): `scripts/drill/ttfe.ts` had no tamper step at all
+(`grep -i tamper scripts/drill/ttfe.ts` → nothing) and its only latency bound was the 15 000 ms
+`wait_for_delivery` per-stage *timeout* in `scripts/drill/ttfe.config.json` (the `2000` there is
+`verify_webhook`'s ceiling, not a delivery bound). So the drill was green while proving neither
+graded claim — a first delivery at 10 s would have passed, and a `verifyWebhook` that returned
+`true` for everything would have passed too. CI observes ~600–690 ms for the first delivery, so
+this is a missing assertion, not a known regression.
+
+**What changed.**
+- `scripts/drill/ttfe.ts` — stage 7 `tamper_reject`: flips the last byte of the captured
+  `rawBody` and asserts `verifyWebhook(headers, tampered, secret) === false` under the same
+  headers/secret that just verified `true`; throws if it returns `true`. Stage 8 `delivery_p95`:
+  the capture listener now records every request (`requests[]` with `receivedAt`, plus
+  `waitForCount(n, timeoutMs)`; the original first-request `captured` promise is unchanged),
+  the drill burst-creates `deliveryLatencySampleSize` (20) documents, waits for all 20 signed
+  deliveries, correlates each by the payload's `data.id` (`events.ts` `documentCreatedData.id`,
+  arrival order only as fallback — the real run logs `20 correlated by payload data.id`), computes
+  per-delivery latency = `receivedAt − documents.create() resolved`, and passes the sample to the
+  evaluator. Burst rather than one-at-a-time because the deliverer polls every 1 s
+  (`deliverer.ts:123`); 20 sequential cycles would burn ~20 s on poll latency for no extra proof.
+  The single first delivery's `wait_for_delivery` ms is additionally held to the same 2000 ms
+  bound (`first_delivery_bound:` line). New test-only `DRILL_TTFE_SIMULATE_P95_MS=<n>` replaces
+  the measured sample after the real work so the gate can be shown to fail;
+  `DRILL_TTFE_SIMULATE_SLOW_MS` still works (re-run: `verify_webhook: 65000ms OVER BUDGET`, exit 1).
+- `scripts/drill/thresholds.ts` — `DrillThresholdConfig.deliveryLatencyP95Ms` /
+  `deliveryLatencySampleSize` (optional; absent → gate not evaluated), `percentile95()`
+  (nearest-rank, `ceil(0.95n)−1`, `null` on empty — never NaN), `evaluateDeliveryLatency()`
+  (strict `< budget`, fails on too-small or empty sample), `evaluateDrillStages(stages, config,
+  latencies)` folds it into `pass`, `formatDrillEvaluation` prints a `delivery_p95_ms: … over N
+  deliveries (target < 2000ms)` row with `OVER BUDGET` / `SAMPLE TOO SMALL` markers.
+- `scripts/drill/ttfe.config.json` — `"deliveryLatencyP95Ms": 2000`, `"deliveryLatencySampleSize": 20`
+  (`$comment` updated). `wait_for_delivery`'s 15 000 stays as the wait's timeout ceiling.
+- `scripts/drill/__tests__/thresholds.test.ts` — 13 new cases (P95 rank, strict `<`, sample size,
+  empty sample, fold-into-verdict, format row, unconfigured-config passthrough). Executed by
+  `gate.sh` G11 (`vitest run --config scripts/drill/vitest.config.ts`) — no separate api/sdk test
+  file needed. Red before the change: 13 failed (`percentile95 is not a function`); green after:
+  `Tests 20 passed (20)`.
+
+**How to verify.**
+```bash
+pnpm exec vitest run --config scripts/drill/vitest.config.ts   # 20 passed
+pnpm exec tsc --noEmit -p scripts/drill
+set -a; . ./.factory-env; set +a
+pnpm drill ttfe                                                # tamper_reject + delivery_p95 rows, verdict: pass
+DRILL_TTFE_SIMULATE_P95_MS=2500 pnpm drill ttfe                # delivery_p95_ms: 2500ms ... OVER BUDGET, verdict: fail, exit 1
+```
+Real run in the factory worktree: `wait_for_delivery: 194ms`, `tamper_reject: 0ms`,
+`delivery_p95: 1050ms`, `delivery_p95_ms: 989ms over 20 deliveries (target < 2000ms)`,
+`total: 3043ms / 60000ms budget`, `verdict: pass`.
+
+**Rollback.** Revert the PR — no schema or env change; the two new config keys are optional in
+`DrillThresholdConfig`, so an older config still evaluates.
+
+---
+
 ## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
 
 **What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
