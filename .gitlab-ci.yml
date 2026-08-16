@@ -208,6 +208,48 @@ e2e-agent:
       - test-results/
       - playwright-report/
 
+# TRO-455 (PF-603): the TTFE (Time To First Event) drill — PLUGFORGE.MD §4's
+# graded CI check (install @ship/sdk -> device login -> webhooks.create ->
+# documents.create -> wait for the signed POST -> verifyWebhook, asserted
+# < 60s total). `needs: ["verify"]` for the same reason `e2e-agent` above
+# has it — a doomed PR never spends minutes on this.
+#
+# Postgres via a plain `services:` container, NOT testcontainers, on THIS
+# platform specifically: `@testcontainers/postgresql` needs a Docker socket
+# reachable from inside the job's own container — the exact capability
+# `e2e-agent`'s own comment above (and `image-build`'s) documents this
+# runner cannot provide. `scripts/drill/ttfe.ts` reads `DATABASE_URL` and
+# reuses whatever is already set rather than starting its own container when
+# one is provided — see that file's own header for the full reasoning and
+# for why it genuinely uses testcontainers instead when nothing is set (a
+# local/clean-machine run, PLUGFORGE.MD §5's separate `<= 30 min` target).
+# The drill script builds shared/sdk itself (its own untimed setup phase),
+# so no separate build step is needed here.
+drill-ttfe:
+  extends: .node_env
+  stage: e2e
+  timeout: 10m
+  needs: ["verify"]
+  services:
+    - name: postgres:15-alpine
+      alias: postgres
+  variables:
+    POSTGRES_USER: ship
+    POSTGRES_PASSWORD: ship_ci_password
+    POSTGRES_DB: ship_ci
+    DATABASE_URL: "postgresql://ship:ship_ci_password@postgres:5432/ship_ci"
+  script:
+    - |
+      for i in $(seq 1 30); do
+        if (exec 3<>/dev/tcp/postgres/5432) 2>/dev/null; then
+          exec 3<&- 3>&-
+          break
+        fi
+        echo "waiting for postgres ($i/30)..."
+        sleep 2
+      done
+    - pnpm drill ttfe
+
 inventory:
   extends: .node_env
   stage: verify

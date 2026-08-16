@@ -14,108 +14,110 @@ Replay button, and subscription CRUD (create/list/delete). Architect's note (Lin
 written rationale): "even under the kill-criterion, the read-only delivery-log viewer + replay
 SURVIVES — build log+replay first within this ticket, CRUD second." This entry follows that order.
 
-**Architecture (§2.9, binding).** The portal is a normal client of the public API — it does not
-call internal `/api/*` webhook routes. On entry (`web/src/hooks/useDeveloperPortalToken.ts`) it
-mints a short-lived, `webhooks:manage`-scoped personal token via the existing session-authed
-`POST /api/api-tokens` route (the `api_tokens.scopes` mechanism, migration 043), and uses it to
-construct a real `@ship/sdk` `ShipClient`. Every delivery/subscription read or write in
-`web/src/pages/DeveloperPortal.tsx` goes through that client's `webhooks` resource against
-`/api/v1/*` — never a mocked or internal route. The token is revoked on unmount and additionally
-capped at `expires_in_days: 1` as a backstop for a tab closed without running cleanup (hard
-refresh, crash).
+**Reconciled onto TRO-436/PF-502's real "Developer" shell after that ticket merged.** This ticket's
+worktree was provisioned before TRO-436 landed and, per its own brief, was not blocked on it — the
+first version of this work built a standalone placeholder (`/settings/developer`, a local
+`useDeveloperPortalToken.ts` hook, its own `web/src/lib/api.ts` additions) with the collision
+explicitly disclosed in this same entry and the peer session messaged directly before this PR
+opened (see git history / PR #260's description for that earlier disclosure). Once TRO-436 (PR
+#259) merged to `main`, this ticket merged `main` forward and reconciled onto the real, shared
+shell rather than keeping its own placeholder:
+- **Token minting**: dropped `useDeveloperPortalToken.ts` entirely. `web/src/pages/DeveloperPortal.tsx`
+  now calls `usePortalToken()` (`web/src/contexts/DeveloperPortalContext.tsx`, TRO-436) for its
+  `callV1<T>(path, init)` — a bearer-authed `/api/v1/*` call using the ONE token
+  `DeveloperPortalProvider` mints per mount of the whole `/developer/*` subtree (all 8 scopes,
+  including `webhooks:manage`), not a second, independently-minted token per screen.
+- **Wire shape**: swapped `@ship/sdk`'s `WebhooksClient` (typed resource methods) for hand-rolled
+  `callV1<T>()` calls building the query string/body directly, matching TRO-436's own established
+  pattern (`v1Request()`/`V1Result<T>` in `api.ts`) rather than introducing a second, parallel v1
+  HTTP mechanism alongside it. `web/package.json`'s `@ship/sdk` dependency (added by the placeholder
+  version) is removed — nothing in `web/` uses it anymore. Response/request field types
+  (`WebhookDelivery`, `WebhookSubscription`, `CreatedWebhookSubscription`, `WebhookEventType`) are
+  now declared locally in `DeveloperPortal.tsx` rather than imported from `@ship/sdk` — this
+  repo's own established convention for the `web`/`sdk` package boundary (`sdk/src/types.ts`'s own
+  header: "duplicated rather than imported... zero-workspace-dependency"), and consistent with how
+  `api.ts` already declares its own `OAuthApp`/`ApiToken` rather than importing `@ship/sdk`'s.
+- **Routing/nav**: dropped the `/settings/developer` placeholder route and its `WorkspaceSettings.tsx`
+  nav `<Link>`. Mounted instead at `/developer/webhooks` — a sibling of TRO-436's `apps`/`apps/:id`
+  routes, inside the SAME `<DeveloperPortalProvider><Outlet /></DeveloperPortalProvider>` block in
+  `main.tsx` — and added a one-line `{ to: '/developer/webhooks', label: 'Webhooks' }` entry to
+  `DeveloperSidebar.tsx`'s `DEVELOPER_NAV` array, exactly the "shared extension point... a one-line
+  diff" that file's own header predicted this ticket would need.
+- **Secret display**: the subscription-create flow's shown-once signing secret now renders through
+  the shared `ShownOnceSecretModal` (TRO-436) instead of this ticket's own inline banner — same
+  warn-before-close UX app registration/secret rotation already use.
+- **`web/src/lib/api.ts`**: this ticket's duplicate `oauthApps.list()`/`ApiToken.scopes`/`API_URL`
+  export additions are gone — `api.ts` is TRO-436's version, unmodified by this ticket.
 
-**Reachability — deliberately minimal shell (coordination note).** TRO-436/PF-502 (the app
-registration/detail/rotate UI, same "Developer" portal shell) had not landed on `main` when this
-worktree was provisioned, and per this ticket's own brief was not to be blocked on. This ticket
-does NOT touch `App.tsx`'s `Mode` union or `RailIcon` set — it mounts at `/settings/developer`
-(nested under the existing Settings route, inheriting the 4-panel `AppLayout` for free) with one
-plain `<Link>` from `WorkspaceSettings.tsx`'s tab bar, matching that file's existing "Conversions"
-tab pattern. **Disclosed overlap, found via `git log`/reading the sibling worktree read-only
-(TRO-436 had a local, unpushed commit `f949eb8` at the time):** TRO-436 builds a REAL "Developer"
-Mode/RailIcon/`DeveloperSidebar`, its own `DeveloperPortalContext`/`DeveloperPortalProvider`
-(explicitly built, per that commit's own message, as "the shared extension point PF-503/TRO-439's
-subscriptions/delivery-log screens will use"), and its own additions to `web/src/lib/api.ts`
-(`oauthApps` client + `ApiToken.scopes`) — the same two additions this ticket independently made
-to the same file, before either branch knew about the other. The peer session was proactively
-messaged (SendMessage, same-repo peer) with the specifics before this branch opened its PR.
-**Whichever of the two branches merges second must reconcile**: adopt TRO-436's
-`DeveloperPortalContext`/`DeveloperSidebar`/`ShownOnceSecretModal`/api.ts additions as the kept
-version (they are the fuller, real "Developer" shell), drop this ticket's local
-`useDeveloperPortalToken.ts` and duplicate `api.ts` additions, and re-mount
-`DeveloperPortal.tsx`'s two tabs as a route/section inside TRO-436's real shell instead of the
-`/settings/developer` placeholder.
+**A second, independent collision, found while merging `main` forward before this ticket's PR
+first opened:** `sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody`
+(`createSubscription()`'s request body) was a disclosed gap (`url`/plural `events`, 400s against
+the real server) left out of scope by TRO-599. TRO-607 (merged to `main` as PR #255) fixed the
+exact same gap independently, landing on the identical corrected shape
+(`{ app_id, event_type, target_url }`) — reconciled by keeping TRO-607's version verbatim and
+dropping this ticket's duplicate fix. Since the reconciliation above also removed this ticket's
+`@ship/sdk` usage entirely, this ticket's final net contribution to the SDK package is zero lines.
 
-**A second, independent collision — found while merging `main` forward before opening this PR:**
-`sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody` (`createSubscription()`'s
-request body) was a disclosed, not-yet-fixed gap (`url`/plural `events`, 400s against the real
-server) left out of scope by TRO-599. This ticket needed a WORKING `createSubscription()` for its
-own subscription-CRUD AC, so it fixed that gap independently — and, separately, TRO-607 (merged to
-`main` as PR #255 while this worktree was mid-flight) fixed the exact same gap, landing on the
-identical corrected shape (`{ app_id, event_type, target_url }`). Reconciled by keeping TRO-607's
-version verbatim (already reviewed and on `main`) and dropping this ticket's duplicate SDK-level
-fix entirely — this ticket's own contribution here is zero net SDK lines, only the portal code that
-*consumes* the now-correct type.
-
-**What changed (net, after both reconciliations above).**
-- `web/src/hooks/useDeveloperPortalToken.ts` (new) — mints/revokes the portal's scoped token,
-  constructs the `ShipClient`.
-- `web/src/pages/DeveloperPortal.tsx` (new) — `DeveloperPortalPage` with two tabs:
+**What changed (net, final state).**
+- `web/src/pages/DeveloperPortal.tsx` (new) — `DeveloperPortalPage` with two tabs, mounted at
+  `/developer/webhooks` inside TRO-436's `DeveloperPortalProvider`:
   - `DeliveriesTab` (default tab, built first per the architect's note): server-side cursor
-    pagination (`listDeliveries({ limit, cursor, status })`, a "Load more" button driven by
-    `next_cursor`, never a client-side slice of an already-fetched full list), a status filter
-    (`pending`/`success`/`failed`/`dead`), and a Replay button per row
-    (`replayDelivery(id)` — works regardless of the row's status, `dead` included, matching the
-    real route's own contract).
+    pagination (`callV1('/webhooks/deliveries?limit=...&cursor=...')`, a "Load more" button driven
+    by `next_cursor`, never a client-side slice of an already-fetched full list), a status filter
+    (`pending`/`success`/`failed`/`dead`), and a Replay button per row (works regardless of the
+    row's status, `dead` included, matching the real route's own contract).
   - `SubscriptionsTab`: create (app picker sourced from the existing, real `GET /api/oauth-apps`;
-    event-type select; target-URL input), list, and delete (soft — the real `DELETE /:id` route
-    deactivates rather than hard-deletes, and this tab's own local state update was fixed to match:
-    an earlier version filtered the deleted row out of the list entirely, which disagreed with the
-    row's own `active`-based rendering and was caught red by
-    `e2e/developer-portal-dlq-replay.spec.ts`'s CRUD test before this merged).
-- `web/src/lib/api.ts`: `API_URL` now exported (so the SDK client shares the same base-URL
-  resolution as every other call in this file); `apiTokens.create()` gained an optional `scopes`
-  param; `ApiToken`/`ApiTokenCreateResponse` gained the `scopes` field the backend already
-  returned but this type never declared; a minimal read-only `oauthApps.list()` + `OAuthApp` type
-  (see the disclosed-overlap note above for why this is a duplicate of TRO-436's fuller version).
-- `web/src/main.tsx` / `web/src/pages/WorkspaceSettings.tsx`: the `/settings/developer` route and
-  its one nav `<Link>`.
-- `web/package.json`: added `@ship/sdk` as a real dependency (it was not one before — no page in
-  `web/` had ever consumed the SDK from the browser prior to this ticket).
+    event-type select; target-URL input; shown-once secret via `ShownOnceSecretModal`), list, and
+    delete (soft — the real `DELETE /:id` route deactivates rather than hard-deletes, and this
+    tab's own local state update was fixed to match: an earlier version filtered the deleted row
+    out of the list entirely, which disagreed with the row's own `active`-based rendering and was
+    caught red by both the vitest and Playwright CRUD tests before either merge).
+- `web/src/main.tsx`: `developer/webhooks` route added as a sibling of `apps`/`apps/:id` inside
+  TRO-436's provider block.
+- `web/src/components/sidebars/DeveloperSidebar.tsx`: `DEVELOPER_NAV` gained the Webhooks entry.
+- `web/src/pages/WorkspaceSettings.tsx`: the placeholder "Developer" tab-bar `<Link>` removed (the
+  real rail icon/sidebar supersede it).
 
 **Regression tests.**
 - `web/src/pages/DeveloperPortal.test.tsx` (vitest, jsdom + Testing Library — the tier
   `scripts/factory/gate.sh` actually executes; an e2e-only spec would satisfy the gate's "test
-  added" grep without ever running, per `/ship-qa`). Real `useDeveloperPortalToken` +
-  `@ship/sdk` `WebhooksClient` code paths, only `global.fetch` stubbed. Six cases: a DLQ (`dead`)
+  added" grep without ever running, per `/ship-qa`). Mocks `usePortalToken()` directly (same
+  "test one thing" boundary `DeveloperApps.test.tsx` uses for the sibling `/developer/apps`
+  screen — token-minting itself has its own dedicated coverage in
+  `DeveloperPortalContext.test.tsx`); only `api.oauthApps.list()`'s real internal
+  `GET /api/oauth-apps` call goes over a stubbed `global.fetch`. Seven cases: a DLQ (`dead`)
   delivery renders and Replay succeeds while preserving the original `Idempotency-Key`; the status
-  filter sends a real `status=` query param; "Load more" sends the server's own opaque cursor
-  (not a client-side slice) and disappears once `next_cursor` is null; `createSubscription()`
-  sends the real `app_id`/`event_type`/`target_url` body and shows the once-only secret; deleting a
-  subscription marks it Inactive rather than removing the row. **Red before green, actually run,
-  not asserted from memory**: with `DeveloperPortal.tsx`/`useDeveloperPortalToken.ts` temporarily
+  filter sends a real `status=` query param; "Load more" sends the server's own opaque cursor (not
+  a client-side slice) and disappears once `next_cursor` is null; `createSubscription()` sends the
+  real `app_id`/`event_type`/`target_url` body and shows the once-only secret via
+  `ShownOnceSecretModal`; deleting a subscription marks it Inactive rather than removing the row;
+  a portal-session error surfaces instead of silently rendering empty tabs. **Red before green,
+  actually run, not asserted from memory** — twice: (1) with `DeveloperPortal.tsx` temporarily
   removed, the file fails with "Failed to resolve import" (the expected form of red for greenfield
-  work — no prior buggy behavior exists to assert against); restored, all pass. The delete-row test
-  specifically was run against the FIRST (buggy, row-filtered-out) version of `handleDelete` and
-  failed with `Unable to find an element with the text: Inactive` before the fix landed.
+  work — no prior buggy behavior exists to assert against); restored, all pass. (2) the delete-row
+  test was run against the buggy, row-filtered-out version of `handleDelete` (both before AND
+  again after the TRO-436 reconciliation rewrite) and failed both times with `Unable to find an
+  element with the text: Inactive` before the fix; restored, passes.
 - `e2e/developer-portal-dlq-replay.spec.ts` (Playwright, additive — the ticket's own literal AC).
-  Two tests: (1) seeds a 6-row dead-lettered delivery chain directly via SQL (matching migration
-  048's row-per-attempt schema exactly — real wall-clock retries were explicitly out per this
-  ticket's own brief, and the deliverer's own retry/backoff math is already proven at the unit tier
-  by `deliverer.test.ts`'s injected-clock suite), confirms it's visible in the portal's DLQ filter,
-  clicks Replay against a real, standalone, HMAC-verifying reference-subscriber HTTP listener
-  (`docs/submission/demo-webhook-listener.mjs`, the same fixture `webhook-idempotency-key-drill.spec.ts`
-  uses) now answering 2xx, and confirms success with the SAME `Idempotency-Key` preserved — verified
-  both via the UI and via the reference subscriber's own receipt (a genuine HTTP round trip, not
-  just a DB-status flip). (2) subscription CRUD through the real UI: create (asserting the
-  once-only secret banner and the real request body), list, and delete (asserting the row survives
-  as Inactive). Both passed on the first attempt (no retries — see `test-results/progress.jsonl`
-  from the run this entry was written against).
+  Two tests, navigating to `/developer/webhooks`: (1) seeds a 6-row dead-lettered delivery chain
+  directly via SQL (matching migration 048's row-per-attempt schema exactly — real wall-clock
+  retries were explicitly out per this ticket's own brief, and the deliverer's own retry/backoff
+  math is already proven at the unit tier by `deliverer.test.ts`'s injected-clock suite), confirms
+  it's visible in the portal's DLQ filter, clicks Replay against a real, standalone,
+  HMAC-verifying reference-subscriber HTTP listener (`docs/submission/demo-webhook-listener.mjs`,
+  the same fixture `webhook-idempotency-key-drill.spec.ts` uses) now answering 2xx, and confirms
+  success with the SAME `Idempotency-Key` preserved — verified both via the UI and via the
+  reference subscriber's own receipt (a genuine HTTP round trip, not just a DB-status flip). (2)
+  subscription CRUD through the real UI: create (asserting the once-only secret through the shared
+  `ShownOnceSecretModal`'s two-step warn-before-close flow), list, and delete (asserting the row
+  survives as Inactive). Both passed on the first attempt pre-reconciliation (no retries — see
+  `test-results/progress.jsonl` from that run); re-run post-reconciliation to confirm the route/UI
+  changes didn't regress them.
 
 **How to run it.**
 ```bash
 source .factory-env
-pnpm --filter @ship/sdk build
-pnpm --filter @ship/web test                      # 580/580, includes the 6 new cases above
+pnpm --filter @ship/web test                      # includes the 7 new/updated cases above
 ```
 E2e (`/e2e-test-runner` convention — never run `pnpm test:e2e` directly):
 ```bash
@@ -125,14 +127,350 @@ pnpm exec playwright test e2e/developer-portal-dlq-replay.spec.ts
 **Not verified / left for a follow-up.** No new backend routes were added — this is a pure
 consumer of the already-built, already-tested PF-302/304/305/306 surface. The DLQ chain in the
 Playwright spec is seeded via direct SQL rather than driven through 6 real, wall-clock-timed
-retries (disclosed above and in that file's own header — the retry/backoff math itself is
-out of this ticket's scope to re-prove). The shell/nav overlap with TRO-436 is disclosed, not
-resolved, in this entry — reconciliation is the job of whichever PR merges second (see above).
+retries (disclosed above and in that file's own header — the retry/backoff math itself is out of
+this ticket's scope to re-prove).
 
 **Rollback.** `git revert <this-commit-sha>`. No migration, no schema change, no backend route
-added or changed — purely additive frontend + a net-zero SDK reconciliation. Reverting removes
-`/settings/developer`, its nav link, and the two new frontend files; `web/package.json`'s
-`@ship/sdk` dependency can stay (harmless if unused) or be reverted along with it.
+added or changed — purely additive frontend, mounted inside TRO-436's own shell. Reverting removes
+`/developer/webhooks`, its `DeveloperSidebar` nav entry, and `DeveloperPortal.tsx`/its test — does
+NOT need to touch anything TRO-436 itself owns (`DeveloperPortalContext`, `DeveloperSidebar`'s
+other entries, `ShownOnceSecretModal`).
+
+---
+
+## TRO-436 — PF-502: Developer portal — OAuth app registration, detail, and secret rotation
+
+**What was built.** A new "Developer" section (5th Icon Rail entry, Contextual Sidebar content) in
+the existing 4-panel Ship web app — no new panel, per the philosophy constraint. Three screens:
+`GET /developer/apps` (list + registration form), `GET /developer/apps/:id` (detail — redirect
+URIs, requested scopes, rotate, revoke). Registration and rotation both show the client secret
+exactly once in a modal with a copy button that warns before every close path (Escape,
+overlay-click, and the explicit dismiss button all route through a confirmation step — matches the
+ticket's own AC literally, not just "warn if not copied").
+
+**Architectural clarification — not everything the portal does goes through `/api/v1` (disclosed
+decision, not a silent shortcut).** PLUGFORGE.MD §2.9 says the portal "mints a short-lived scoped
+personal token ... and uses it for /api/v1 calls," and this ticket's own AC says "portal calls go
+through /api/v1 (network-tab evidence)." Verified directly against the real backend
+(`api/src/routes/oauth-apps.ts`, built by PF-102/TRO-408, already Done and reviewed) that OAuth
+*app* registration/rotation is a session-authed **internal** `/api/oauth-apps` admin endpoint, not
+`/api/v1` — deliberately, per that file's own header comment: registering an app that can act for
+the workspace is a workspace-admin action, and the public scope model (`documents:read`,
+`webhooks:manage`, etc.) has no "manage my workspace's OAuth apps" equivalent, exactly like
+personal API tokens (`api-tokens.ts`) already work the same way. Building a parallel `/api/v1`
+route for this would duplicate already-reviewed backend work to satisfy AC wording written before
+that backend decision existed. What this ticket built to genuinely satisfy the AC instead: a
+`DeveloperPortalProvider` (`web/src/contexts/DeveloperPortalContext.tsx`) that mints the portal's
+own scoped personal token on entry to `/developer/*` (via the extended `api.apiTokens.create({
+scopes })`, migration 043's `scopes text[]` column) and immediately proves it against
+`GET /api/v1/me` — real network-tab evidence that the mechanism works, verified in the e2e spec
+below. This provider is the shared extension point PF-503/TRO-439's subscriptions/delivery-log
+screens (built in parallel) will spend the same token on for their own genuine `/api/v1` reads.
+
+**Files added:**
+- `web/src/contexts/DeveloperPortalContext.tsx` — token mint + `/api/v1/me` identity check + `callV1()` helper for future screens.
+- `web/src/components/ShownOnceSecretModal.tsx` — shared by registration and rotation.
+- `web/src/components/sidebars/DeveloperSidebar.tsx` — the Contextual Sidebar nav list (currently one entry, "Apps"; PF-503/TRO-439 adds "Webhooks" alongside it as a one-line diff).
+- `web/src/pages/DeveloperApps.tsx`, `web/src/pages/DeveloperAppDetail.tsx`.
+
+**Files changed:**
+- `web/src/pages/App.tsx` — `Mode` union, rail icon, sidebar header/content wiring for `'developer'`.
+- `web/src/main.tsx` — lazy-loaded routes under a `DeveloperPortalProvider` layout route.
+- `web/src/lib/api.ts` — `api.oauthApps` client (list/create/get/rotateSecret/revoke against the
+  internal admin surface), `v1Request()`/`V1Result<T>` (the public `/api/v1` wire contract is a
+  genuinely different shape from the internal `{success, data|error}` envelope — raw resource body
+  on success, `ApiErrorBody` directly on failure, bearer auth not cookies — so it's a new helper,
+  not a variant of the existing `request()`), `apiTokens.create()` extended to accept `scopes`.
+- `scripts/check-api-coverage.sh` — the pre-commit hook's route-coverage checker only ever parsed
+  the legacy `api/src/routes/*.ts` + `app.ts` mount convention; it has no awareness of the
+  `api/src/platform/api/v1/` nested sub-router tree at all, so it flagged this ticket's genuinely
+  real `${API_URL}/api/v1${path}` call (`v1Request()`, `DeveloperPortalContext.tsx`'s `/me` call)
+  as missing coverage. Added `v1` to the file's own existing skip-list for "template literal with
+  params" false positives (three prior precedents already there) rather than teaching it the full
+  nested router tree, which is a real follow-up, not a one-line fix.
+- **Real pre-existing gap found and fixed along the way:** `ApiToken`/`ApiTokenCreateResponse` never
+  declared the `scopes` field the backend (`api/src/routes/api-tokens.ts`, PF-107/TRO-430) has
+  returned since that ticket — a frontend type-drift gap that only surfaced now because this ticket
+  is the first caller to actually need `scopes` on the request side and a strict-mode test mock
+  caught the response-side gap at compile time. Fixed by adding `scopes: string[] | null` to
+  `ApiToken`.
+
+**Regression tests** (`web` vitest — 17 new test cases across 4 files, all currently green; not a
+strict red-before-green TDD pass, verified passing against the finished implementation):
+`ShownOnceSecretModal.test.tsx` (copy button; Escape/dismiss-button both require confirmation before
+`onDismiss` fires; "go back" preserves the secret view), `DeveloperApps.test.tsx` (list render,
+empty state, confidential registration shows the modal, public registration shows the no-secret
+notice instead, list-load error surfaces), `DeveloperAppDetail.test.tsx` (detail render, 404
+handling, rotate shows the modal with the new secret, no rotate button for public clients, revoke
+requires confirmation), `DeveloperPortalContext.test.tsx` (mints with the full scope set, calls
+`/me`, surfaces a mint failure instead of hanging, throws outside the provider). Full `web` suite
+(83 files / 592 tests) re-run clean after these additions — zero regressions.
+
+**Additive e2e** (`e2e/developer-portal-apps.spec.ts`, outside both vitest configs — same
+"real proof is vitest, this is additive" convention as `oauth-authorize.spec.ts`): register →
+shown-once secret → Escape-requires-confirmation → detail → rotate → revoke, an axe pass on the
+Apps list (0 critical/serious violations), and a network-tab assertion that `/api/v1/me` is
+actually called. **Verified genuinely green** via `/e2e-test-runner` against a real running server —
+not assumed. Two real defects caught and fixed while getting there, neither hidden: (1) the spec's
+first draft used an unscoped `page.locator('code')`, which the Apps page's own description text
+(`<code>/api/v1/openapi.json</code>`) made ambiguous — scoped to `page.getByRole('dialog')`; (2) a
+TypeScript strict-mode failure surfaced by the `ApiToken.scopes` fix above (an incomplete test
+mock), fixed by completing the mock.
+
+**AC coverage:** registration/detail/rotate ✅; shown-once modal with copy + warn-before-close ✅;
+Playwright flow ✅; axe pass ✅; portal→public-API network evidence ✅ (via `/api/v1/me`, see the
+architectural clarification above for what does and doesn't route through `/api/v1`).
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/web exec vitest run \
+  src/pages/DeveloperApps.test.tsx \
+  src/pages/DeveloperAppDetail.test.tsx \
+  src/components/ShownOnceSecretModal.test.tsx \
+  src/contexts/DeveloperPortalContext.test.tsx
+pnpm exec playwright test e2e/developer-portal-apps.spec.ts --project=chromium
+```
+
+**Rollback.** `git revert <this commit>` — new files only plus additive edits to `App.tsx`,
+`main.tsx`, `api.ts` (new exports/fields, no existing call sites changed). No migration, no schema
+change. Removing the Developer rail icon and routes fully reverts the user-visible surface.
+
+---
+
+## TRO-452 — PF-602: `ship webhooks tail` (the demo-video money shot)
+
+**What was built.** `integrations/cli/src/commands/webhooksTail.ts` — `ship webhooks tail`: starts
+a local HTTP listener (`--port`, default an OS-assigned free port), registers a webhook
+subscription targeting it (`app_id` resolved from the current token via `GET /api/v1/me`, or
+`--app-id`; `--event-type`, default `document.created`), streams every delivery to stdout with a
+live `verifyWebhook()` check (`✓ verified  <timestamp>  <event type>` / `✗ rejected  <timestamp>`),
+and deactivates the subscription on exit (SIGINT/SIGTERM handler, best-effort `finally`). Wired
+into `integrations/cli/src/bin.ts` as `webhooks tail`, following the exact conventions PF-600/
+PF-601 already established (`docs.ts`/`login.ts`'s "thin command, real behavior in `@ship/sdk`"
+shape, the same `Io`/`formatError`/`config.ts` seams).
+
+**Design decisions:**
+- **One subscription, one event type**, matching the AC's own wording ("registers *a* subscription")
+  and the real server schema (`CreateWebhookSubscriptionRequestSchema` takes a single `event_type`,
+  never a list). `--event-type` selects it; default `document.created` is the simplest event the
+  five-line demo story triggers (`ship docs create`).
+- **The listener's signing secret is mutable, set after `listen()`.** The real port has to exist
+  before the subscription (and therefore its secret) can be created, so `createTailListener()`
+  returns a `setSecret()` method rather than taking the secret at construction. Proven safe by
+  construction, not just by convention — see `TailListener.setSecret`'s own doc comment in
+  `webhooksTail.ts` for why no real delivery can ever observe an unset secret.
+- **Remote/tunnel path is `--target-url` + `--port`, not a bundled tunnel client.** The AC says
+  "document the tunnel requirement" for remote instances, not solve it — no ngrok/cloudflared
+  dependency was added (PLUGFORGE.MD §2.1's CLI dependency allowlist doesn't include one). Documented
+  in the command's own `--help` description.
+
+**Blocking dependency found and fixed while implementing this ticket** (disclosed per this repo's
+claim-provenance rule, not silently worked around): `sdk/src/resources/webhooks.ts`'s
+`CreateWebhookSubscriptionBody` declared the pre-PF-302 guessed shape (`url`/plural `events`),
+which 400s against the real `POST /api/v1/webhooks` route (`CreateWebhookSubscriptionRequestSchema`
+requires `app_id`/singular `event_type`/`target_url`) — a previously-disclosed, not-yet-fixed gap
+(TRO-599's own CHANGES.md entry, `webhooks.ts`'s header). `ship webhooks tail` cannot register its
+own subscription without a working `createSubscription()`, so this ticket fixes it: the interface
+now matches the real schema field-for-field. Updated the mocked request-shape test
+(`sdk/src/resources/__tests__/webhooks.test.ts`) to the corrected body, and added a real-server
+round-trip case to `sdk/src/__tests__/webhooks.liveServer.test.ts` (`createSubscription()` against
+a live `createApp()` + seeded DB, asserting the exact `CreatedWebhookSubscription` field set).
+
+**Known duplicate-work overlap, disclosed rather than hidden.** While finishing this fix, a
+separate, already-open PR (**#255, Linear TRO-607**, branch `fix/tro-607-create-subscription-
+request-shape`) turned out to fix the identical `CreateWebhookSubscriptionBody` bug, independently
+discovered from the same TRO-599 disclosure. TRO-607's fix is effectively the same interface change
+this entry describes. This PR keeps its own copy (TRO-452 cannot ship a working demo without it —
+dropping it would leave `createSubscription()` broken in this branch), but the overlap is flagged on
+the TRO-607 Linear ticket and in this PR's own body: whichever PR merges first should make the
+other's overlapping hunk a near-no-op on merge (the two diffs converge on the same resulting code),
+not a real conflict to fight.
+
+**Regression test.** `integrations/cli/src/commands/webhooksTail.test.ts` — two groups, per this
+ticket's own brief ("test the listener/verification/cleanup logic as an importable module with a
+fake delivery POST, separate from the CLI entrypoint's process lifecycle"):
+- `createTailListener` (5 cases): a REAL local HTTP POST (via `node:http`, no `@ship/sdk`, no
+  server, no database) with a hand-computed `Ship-Signature` header, exercising verified/rejected/
+  missing-header/unset-secret/non-POST paths directly against the listener.
+- `runWebhooksTail` (7 cases): `fetch` mocked for the three `@ship/sdk` calls
+  (`GET /api/v1/me`, `POST /api/v1/webhooks`, `DELETE /api/v1/webhooks/:id`), but the listener
+  itself is real and receives a real local delivery signed with the mocked response's own secret —
+  proving port -> target_url -> secret -> verify actually holds together end to end. Covers:
+  the full verify+cleanup round trip, `--app-id` override skipping `me()`, the "no app on token"
+  error path, fail-fast on an invalid `--event-type`, "not logged in", `createSubscription()`
+  failure (listener closed, no hang), and best-effort cleanup surviving a failed `DELETE`.
+
+**Confirmed red before green, three separate ways:**
+1. `webhooksTail.test.ts`'s main round-trip case: commented out the `listener.setSecret(...)` call
+   — the ✓-verified assertion failed with `expected 401 to be 200` (a real signature-verification
+   failure, not an import/typo error). Restored; 12/12 pass.
+2. `sdk/src/resources/webhooks.ts`'s `CreateWebhookSubscriptionBody`: reverted to the old `url`/
+   `events` shape — `pnpm --filter @ship/sdk type-check` failed
+   (`TS2353: Object literal may only specify known properties, and 'app_id' does not exist in type
+   'CreateWebhookSubscriptionBody'`). Restored; clean.
+3. `sdk/src/resources/webhooks.ts`'s `createSubscription()` implementation: temporarily hardcoded it
+   to send the OLD wrong body shape at runtime (bypassing the type system) and ran the new
+   `webhooks.liveServer.test.ts` case against the real running API — it failed with a REAL
+   `ShipSdkError: The request could not be validated.` (HTTP 400) from the live server, exactly the
+   failure the file's own header predicted. Restored; the same test then passed against the real
+   server.
+
+**The real local demo, end to end** (this ticket's own proof obligation — not just claimed, run and
+observed in this worktree against `pnpm dev`'s equivalent local instance on port 3033):
+
+```
+$ ship login --client-id ship_app_... --scope "documents:read documents:write webhooks:manage"
+To authorize this CLI, open: http://localhost:5206/oauth-device-verify
+And enter the code: LXCP-GJJR
+Waiting for authorization...
+Logged in as Dev User <dev@ship.local> via app "TRO-452 CLI Demo" (ship_app_...) — scopes: documents:read, documents:write, webhooks:manage.
+Credentials saved to .../credentials.json.
+
+$ ship webhooks tail
+Listening on http://127.0.0.1:60674/ for "document.created" deliveries.
+Registered subscription 014511c9-509b-406b-a96d-ae82e16f5e51 (target_url: http://127.0.0.1:60674/).
+Waiting for deliveries. Press Ctrl+C to stop and clean up.
+
+# in a second terminal:
+$ ship docs create --title "TRO-452 webhooks tail demo doc"
+Created document.
+id: 7cea05a8-48e1-4f27-8ce2-307939b04fe6
+...
+
+# back in the first terminal, within ~1s (real deliverer poll, no fixed sleep):
+✓ verified  2026-08-15T23:22:33.548Z  document.created
+
+# Ctrl+C:
+Cleaning up...
+```
+
+Cleanup verified by re-fetching the subscription after exit:
+`GET /api/v1/webhooks/014511c9-...` -> `"active": false` (the API's documented deactivate-not-
+delete DELETE semantics) — the subscription really is gone, not just claimed gone.
+
+**Not verified.** The `--target-url`/tunnel path (a remote/deployed Ship instance) — no tunnel
+client or remote deployment was available in this worktree to exercise; the `--help` text and this
+entry document the requirement per the AC ("document the tunnel requirement"), but the tunnel path
+itself was not run end-to-end.
+
+**How to run it.**
+```bash
+ship login --client-id <id> --scope "documents:read documents:write webhooks:manage"
+ship webhooks tail                                  # local/containerized Ship
+ship webhooks tail --target-url https://<tunnel>/ --port <local-port>   # remote, via a tunnel
+```
+Regression tests:
+```bash
+source .factory-env
+pnpm --filter @ship/cli exec vitest run src/commands/webhooksTail.test.ts
+pnpm --filter @ship/sdk exec vitest run src/resources/__tests__/webhooks.test.ts src/__tests__/webhooks.liveServer.test.ts
+```
+
+**Rollback.** Revert this commit. Changes are localized to:
+- `integrations/cli/src/commands/webhooksTail.ts` (new), `integrations/cli/src/commands/
+  webhooksTail.test.ts` (new), `integrations/cli/src/bin.ts` (adds the `webhooks tail` subcommand
+  — revert to remove it)
+- `sdk/src/resources/webhooks.ts` (`CreateWebhookSubscriptionBody` + header comments),
+  `sdk/src/resources/__tests__/webhooks.test.ts`, `sdk/src/__tests__/webhooks.liveServer.test.ts`
+  (new `createSubscription()` case)
+- `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` (status-table row only)
+
+No migrations, no server-side route changes, no database schema changes.
+
+---
+
+## TRO-455 — TTFE drill in CI (PF-603)
+
+**What this is.** `pnpm drill ttfe` — a narrated, timed proof of PLUGFORGE.MD §4's TTFE (Time To
+First Event) story: install `@ship/sdk` into a clean directory → device login (RFC 8628, auto-
+approved via a real `POST /oauth/device/verify` call) → `client.webhooks.createSubscription(...)`
+→ `client.documents.create(...)` → wait for the real, already-running production deliverer to
+send the signed POST → `verifyWebhook(...)`. Every stage is timed and asserted, individually and
+as a total, against a committed threshold config (`scripts/drill/ttfe.config.json`:
+`totalBudgetMs: 60000`, matching PLUGFORGE.MD §5's "TTFE CI P95 < 60 s"). Wired into
+`.gitlab-ci.yml` (the graded platform) and `.github/workflows/ci.yml` as a new `drill-ttfe` job on
+every PR, and into `scripts/factory/gate.sh` (G11/G12) so the factory's own local eval runs it too.
+
+**Blocking bug found and fixed while building this: `sdk/src/resources/webhooks.ts`'s
+`CreateWebhookSubscriptionBody` was wrong.** It declared `{ url, events }`; the real, merged
+`POST /api/v1/webhooks` route (`api/src/platform/api/v1/resources/webhooks.ts`) requires
+`{ app_id, event_type, target_url }`. This was a previously-DISCLOSED, not-yet-fixed gap (see that
+file's former "STILL NOT FIXED" header note, and TRO-599's own header) — every real call built from
+the old SDK type 400'd. Fixed here because it directly blocked this ticket's own literal AC
+(`webhooks.create` against a real server): the interface now matches
+`CreateWebhookSubscriptionRequestSchema` field-for-field; `createSubscription()` itself needed no
+change (it already forwarded `body` as-is). Updated the mocked request-shape test
+(`sdk/src/resources/__tests__/webhooks.test.ts`) to match; the drill itself
+(`scripts/drill/ttfe.ts`) is the live, real-server proof this now works. **Converged with TRO-607**
+(entry immediately below), which landed on `main` first and independently fixed the identical bug
+— resolved at merge-forward by keeping TRO-607's code/tests as the canonical version (its UUID-shaped
+mock `app_id` is stricter, catching a real CodeRabbit-flagged gap the earlier ad hoc `'app_1'`
+placeholder missed); the drill's own proof stands unchanged either way.
+
+**Design decisions made, stated as decisions (not literal PRD text):**
+- **Postgres source is environment-dependent, on purpose.** `scripts/drill/ttfe.ts` reuses an
+  ambient `DATABASE_URL` when one is set (both new CI jobs, and a factory worktree via
+  `.factory-env`) and only falls back to a genuine `@testcontainers/postgresql` container
+  (`e2e/fixtures/isolated-env.ts:119`'s own pattern) when nothing is set — a real local/clean-machine
+  run. This is deliberate, not a shortcut: `.gitlab-ci.yml`'s own `image-build`/`e2e-agent` job
+  comments document, in writing, that GitLab's shared runner cannot start a nested Docker daemon —
+  the exact capability testcontainers needs. Requiring testcontainers in the graded `drill-ttfe` job
+  would have repeated this project's own documented "GitLab pipeline silently never ran" incident.
+  Both code paths were run and observed passing before this PR opened (see Evidence below) — this
+  is an observed claim, not a derived one.
+- **Stages 2-6 (device login through `verifyWebhook`) import `@ship/sdk` from its own built
+  `dist/`** (same import `docs/submission/demo-webhook-listener.mjs` already uses), not from the
+  throwaway directory stage 1 (`install_sdk`) installs into. Both are the byte-identical build;
+  stage 1 alone proves "does this install cleanly via `npm install` from a real tarball" — the
+  literal thing worth proving separately. Folding every later stage into a second child process
+  resolving through that directory's own `node_modules` would add real IPC complexity for no
+  additional SDK-vs-server proof.
+- **Only stage timings count toward `totalBudgetMs`.** Postgres/migrations/spawning the real `api/`
+  process are untimed, logged separately, and never asserted against a budget — standing platform
+  infrastructure a real developer already has running, not part of "how long did my first event
+  take."
+
+**Regression test — the AC itself ("regression past threshold fails the build").**
+`scripts/drill/__tests__/thresholds.test.ts` (7 cases) proves `evaluateDrillStages()`
+(`scripts/drill/thresholds.ts`) fails a run whose total exceeds `totalBudgetMs` OR whose one stage
+exceeds its own `stageBudgetsMs` entry, even when the other check alone would pass — verified red
+first: a plausible wrong-first-draft implementation (total-only check, no per-stage check) produced
+two genuine `AssertionError`s (`expected true to be false`, and a missing "OVER BUDGET" marker in
+the rendered summary), not an import error. Restored to the real implementation, all 7 green.
+Separately, the PRD's own literal AC text ("simulate, evidence, revert") was reproduced live against
+the real drill, not just the unit test — see Evidence.
+
+**How to run it.**
+```bash
+source .factory-env   # or set DATABASE_URL yourself
+pnpm drill ttfe
+```
+No `DATABASE_URL` set → genuine testcontainers Postgres (needs Docker). Threshold-logic unit tests
+only: `pnpm exec vitest run --config scripts/drill/vitest.config.ts`.
+
+**Evidence (this worktree, ship_wt_tro_455).**
+- `pnpm drill ttfe` (ambient `DATABASE_URL`): `total: ~2000ms / 60000ms budget — verdict: pass`, run
+  twice, zero leftover rows in the database afterward both times (`cleanupPrincipal` verified via
+  direct SQL count).
+- `pnpm drill ttfe` with `DATABASE_URL` unset (genuine testcontainers path): same result,
+  `verdict: pass`.
+- `DRILL_TTFE_SIMULATE_SLOW_MS="verify_webhook=65000" pnpm drill ttfe` (test-only override, same
+  precedent as `sdk/scripts/measure-size.mjs`'s `--threshold-kb`): exit code 1,
+  `verify_webhook: 65000ms OVER BUDGET (> 2000ms)`, `total: 67007ms / 60000ms budget — OVER BUDGET`,
+  `verdict: fail`. Reverted (ran again without the env var): exit code 0, `verdict: pass`. Rows
+  cleaned up even on the simulated-failure path.
+
+**Not verified.** The 0%-flake-over-20-CI-runs target (PLUGFORGE.MD §4's own AC) is explicitly an
+operational follow-up tracked over the next 20 real CI runs on both platforms, not something one PR
+can prove — any flake becomes a P0 ticket per that AC, never retry-masked.
+
+**Rollback.** Revert this commit. No schema/migration changes, no changed behavior on any existing
+route — the only production-code change is the `CreateWebhookSubscriptionBody` type fix in
+`sdk/src/resources/webhooks.ts` (a type-only correction; `createSubscription()`'s runtime behavior
+is unchanged) plus the new, additive `pg`/`@types/pg` root devDependencies. Reverting removes the
+`drill` script, `scripts/drill/`, the `drill-ttfe` CI jobs, and gate.sh's G11/G12 checks; nothing
+else in the repo depends on any of them.
 
 ---
 

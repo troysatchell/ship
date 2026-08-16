@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route, Navigate, useParams } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate, Outlet, useParams } from 'react-router-dom';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { PersistQueryClientProvider } from '@tanstack/react-query-persist-client';
 import { ReactQueryDevtools } from '@tanstack/react-query-devtools';
@@ -21,6 +21,7 @@ import { ReviewQueueProvider } from '@/contexts/ReviewQueueContext';
 import { ToastProvider } from '@/components/ui/Toast';
 import { MutationErrorToast } from '@/components/MutationErrorToast';
 import { RouteFallback } from '@/components/RouteFallback';
+import { DeveloperPortalProvider } from '@/contexts/DeveloperPortalContext';
 import './index.css';
 
 /**
@@ -63,6 +64,8 @@ const OAuthConsentPage = React.lazy(() => import('@/pages/OAuthConsent').then((m
 const OAuthDeviceVerifyPage = React.lazy(() => import('@/pages/OAuthDeviceVerify').then((m) => ({ default: m.OAuthDeviceVerifyPage })));
 const SetupPage = React.lazy(() => import('@/pages/Setup').then((m) => ({ default: m.SetupPage })));
 const NotFoundPage = React.lazy(() => import('@/pages/NotFound').then((m) => ({ default: m.NotFoundPage })));
+const DeveloperAppsPage = React.lazy(() => import('@/pages/DeveloperApps').then((m) => ({ default: m.DeveloperAppsPage })));
+const DeveloperAppDetailPage = React.lazy(() => import('@/pages/DeveloperAppDetail').then((m) => ({ default: m.DeveloperAppDetailPage })));
 
 /**
  * Redirect component for type-specific routes to canonical /documents/:id
@@ -293,7 +296,30 @@ function AppRoutes() {
         <Route path="feedback/:id" element={<FeedbackEditorPage />} />
         <Route path="settings" element={<WorkspaceSettingsPage />} />
         <Route path="settings/conversions" element={<ConvertedDocumentsPage />} />
-        <Route path="settings/developer" element={<DeveloperPortalPage />} />
+        {/* PF-502 (TRO-436): DeveloperPortalProvider mints the portal's own
+          * scoped /api/v1 session token once per mount of this subtree, so
+          * every screen under /developer/* (this ticket's Apps pages, and
+          * PF-503/TRO-439's subscriptions/deliveries screens below) shares
+          * one minted token instead of each re-minting its own. */}
+        <Route
+          path="developer"
+          element={
+            <DeveloperPortalProvider>
+              <Outlet />
+            </DeveloperPortalProvider>
+          }
+        >
+          <Route index element={<Navigate to="apps" replace />} />
+          <Route path="apps" element={<DeveloperAppsPage />} />
+          <Route path="apps/:id" element={<DeveloperAppDetailPage />} />
+          {/* PF-503 (TRO-439): delivery log + DLQ + replay + subscription
+            * CRUD, mounted as a sibling of apps/apps/:id inside the SAME
+            * DeveloperPortalProvider subtree above — was a standalone
+            * /settings/developer placeholder route before TRO-436's real
+            * shell landed; see CHANGES.md's TRO-439 entry for the
+            * reconciliation. */}
+          <Route path="webhooks" element={<DeveloperPortalPage />} />
+        </Route>
         {/*
           Catch-all (A11Y-5 / TRO-219). Without this, an unmatched path under
           "/" didn't match this Route's index/children either, so <Routes>

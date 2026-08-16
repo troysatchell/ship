@@ -1,0 +1,12 @@
+{
+  "$comment": "TRO-455 / PF-603 threshold config, committed per the PRD's own AC ('threshold config in repo'). totalBudgetMs is the graded number (PLUGFORGE.MD §5: 'TTFE CI P95 < 60 s'). stageBudgetsMs are independent, generous per-stage ceilings that exist to name WHICH stage regressed rather than only that the run was slow — they deliberately sum to well more than totalBudgetMs (82000 > 60000): a single stage can legitimately consume most of the total budget on a slow CI runner without any one stage being individually pathological. Read together with scripts/drill/thresholds.ts's own header before changing either number.",
+  "totalBudgetMs": 60000,
+  "stageBudgetsMs": {
+    "install_sdk": 30000,
+    "device_login": 20000,
+    "webhook_create": 5000,
+    "document_create": 5000,
+    "wait_for_delivery": 15000,
+    "verify_webhook": 2000
+  }
+}

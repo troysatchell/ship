@@ -22,15 +22,26 @@
  * (flaky, slow, and address-dependent) or mocking the attempt away
  * (which would stop this from being a genuine round trip).
  *
- * Prior to TRO-607: `createSubscription()`'s REQUEST body was a disclosed,
- * NOT-fixed gap that would 400 against this real server if used, so seeding
- * the row directly via SQL was the only way to test the RESPONSE shapes
- * (`listSubscriptions`/`getSubscription`/`rotateSecret`/`listDeliveries`/
- * `replayDelivery`). TRO-607 fixes that REQUEST body bug, so this suite now
- * includes a REAL `createSubscription()` call that proves the corrected body
- * shape works end-to-end against a real server. The initially-seeded
- * subscription (and its deliveries) remain, tested via the same read/action
- * methods as before.
+ * Most rows this suite reads through the SDK are seeded directly via SQL —
+ * at the time this file was first written, `createSubscription()`'s own
+ * REQUEST body was a separate, disclosed, NOT-fixed gap
+ * (`sdk/src/resources/webhooks.ts`'s header; out of TRO-599's scope, which
+ * was the two RESPONSE types) that would 400 against this real server if
+ * used, so seeding the row directly was what made it possible to prove the
+ * RESPONSE shapes (`listSubscriptions`/`getSubscription`/`rotateSecret`/
+ * `listDeliveries`/`replayDelivery` — every read/action method whose
+ * request needs no body beyond an id) without depending on the one
+ * still-broken method. TRO-607 and TRO-452 (`ship webhooks tail`)
+ * independently fixed that gap and each added its own real
+ * `createSubscription()` case below (distinct event_types, so both coexist
+ * without tripping the unique-active-subscription index) — the first cases
+ * in this file to exercise that method for real instead of seeding around
+ * it. TRO-455/PF-603's TTFE drill independently needed the same fix —
+ * `scripts/drill/ttfe.ts` proves it again, live, via the drill's own
+ * `webhooks.createSubscription()` call, outside this suite. Every OTHER
+ * case still seeds directly, unchanged: they exist to prove RESPONSE
+ * shapes, and re-deriving each fixture through a create call would just add
+ * an extra real HTTP round trip to every case for no new coverage.
  *
  * DB SAFETY: own isolated workspace/user/oauth_app/api_token/webhook rows in
  * `beforeAll`, deleted in `afterAll`; does not touch `pnpm db:seed`'s
@@ -256,6 +267,46 @@ describe('TRO-599: WebhooksClient against a real running Ship API + the seeded w
       }
     }
   }, 30_000);
+
+  it(
+    "createSubscription() (TRO-452 fix) POSTs app_id/event_type/target_url and returns EXACTLY " +
+      "CreatedWebhookSubscription's real fields, without 400ing — the exact real-server round trip " +
+      "the pre-fix request body could never complete",
+    async () => {
+      if (!oauthAppId) throw new Error('oauthAppId was not set in beforeAll');
+      const client = new ShipClient({ token, baseUrl });
+
+      const created = await client.webhooks.createSubscription({
+        app_id: oauthAppId,
+        // Distinct event_type from the beforeAll-seeded subscription
+        // (same app_id + target_url) — idx_webhook_subscriptions_unique_active
+        // is keyed on (app_id, event_type, target_url) WHERE active, so reusing
+        // 'document.created' here would 409/500 on a real unique-index
+        // violation instead of exercising the thing this case proves.
+        event_type: 'document.updated',
+        target_url: targetUrl,
+      });
+
+      try {
+        expect(actualKeys(created)).toEqual(CREATED_WEBHOOK_SUBSCRIPTION_KEYS);
+        expect(created).toMatchObject({
+          app_id: oauthAppId,
+          event_type: 'document.updated',
+          target_url: targetUrl,
+          active: true,
+        });
+        expect(created.secret.startsWith('whsec_')).toBe(true);
+        expect(typeof created.warning).toBe('string');
+        expect(created.warning.length).toBeGreaterThan(0);
+      } finally {
+        // Own row, own cleanup — not the beforeAll/afterAll-tracked
+        // subscriptionId, so it needs its own teardown here rather than
+        // relying on afterAll to catch it.
+        await pool.query('DELETE FROM webhook_deliveries WHERE subscription_id = $1', [created.id]);
+        await pool.query('DELETE FROM webhook_subscriptions WHERE id = $1', [created.id]);
+      }
+    }
+  );
 
   it("listSubscriptions() returns the seeded subscription with EXACTLY WebhookSubscription's real fields", async () => {
     const client = new ShipClient({ token, baseUrl });

@@ -199,11 +199,11 @@ test.describe('Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503)',
       );
 
       await loginAsDevAdmin(page);
-      await page.goto('/settings/developer');
+      await page.goto('/developer/webhooks');
 
       // Deliveries & DLQ is the default tab (architect's note: build this
       // before subscription CRUD).
-      await expect(page.getByRole('heading', { name: 'Developer' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Webhooks' })).toBeVisible();
 
       // Filter to the DLQ (status = dead) and find THIS test's row by id —
       // asserting presence, not an exact total count, since this worker's
@@ -253,7 +253,7 @@ test.describe('Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503)',
     const targetUrl = `https://example.com/hook-${uniqueSuffix}`;
 
     await loginAsDevAdmin(page);
-    await page.goto('/settings/developer');
+    await page.goto('/developer/webhooks');
     await page.getByRole('button', { name: /subscriptions/i }).click();
 
     // The app seeded above is selectable in the picker (reads the real,
@@ -266,9 +266,19 @@ test.describe('Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503)',
     await page.getByRole('button', { name: /create subscription/i }).click();
 
     // The secret is shown exactly once — real `POST /api/v1/webhooks`
-    // contract, not a portal-invented one.
-    await expect(page.getByTestId('subscription-secret-banner')).toBeVisible({ timeout: 15000 });
-    await expect(page.getByTestId('subscription-secret-banner')).toContainText('whsec_');
+    // contract — through the shared `ShownOnceSecretModal` (PF-502/TRO-436),
+    // the same shown-once UX app registration/secret rotation use.
+    await expect(page.getByText('Save your signing secret')).toBeVisible({ timeout: 15000 });
+    await expect(page.getByText(/^whsec_/)).toBeVisible();
+    // Close it — EVERY dismissal path on this shared modal (including this
+    // button) routes through a second "Close without saving?" confirmation
+    // by design (`ShownOnceSecretModal.tsx`'s own header: "warn before close
+    // unconditionally"), so a real close is two clicks, not one. The modal's
+    // overlay blocks interaction with the row underneath until dismissed.
+    await page.getByRole('button', { name: /I've saved it/i }).click();
+    await expect(page.getByText('Close without saving?')).toBeVisible();
+    await page.getByRole('button', { name: /close anyway/i }).click();
+    await expect(page.getByText('Save your signing secret')).not.toBeVisible();
 
     // It appears in the list.
     const row = page.locator('[data-testid="subscription-row"]', { hasText: targetUrl });
