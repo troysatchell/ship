@@ -1,4 +1,11 @@
--- Migration 052: github_pr_links (PF-804 / TRO-453)
+-- Migration 053: github_pr_links (PF-804 / TRO-453)
+--
+-- Originally written as 052 (the next free slot when this ticket started);
+-- renumbered to 053 during merge-forward after `main` landed
+-- 052_documents_workspace_type_created_at_index.sql first — same renumbering
+-- situation 047/048's own headers document for PF-302/PF-304 (two branches
+-- claiming the same next-available number is expected in a fast-moving
+-- multi-session sprint, not a mistake to avoid, just one to resolve on merge).
 --
 -- STRETCH, time-boxed ticket (PLUGFORGE.MD §4: "Attempt only after PF-800-803
 -- are gated ... time-box 1 day, then stop and report regardless of state").

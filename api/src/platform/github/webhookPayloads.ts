@@ -126,7 +126,7 @@ export function extractIssueReferences(...texts: Array<string | null | undefined
 }
 
 /** Collapses GitHub's `state`/`merged` pair into this table's single `pr_state` column — see
- *  migration 052's header for why. */
+ *  migration 053's header for why. */
 export function derivePrState(pullRequest: Pick<PullRequestEvent['pull_request'], 'state' | 'merged'>): 'open' | 'closed' | 'merged' {
   if (pullRequest.state === 'open') return 'open'
   return pullRequest.merged ? 'merged' : 'closed'

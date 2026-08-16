@@ -4,7 +4,7 @@
 "you decide the concrete design" — the design decisions below (first-party `api/src` module
 rather than a satellite `integrations/github` package; the `Ship#<n>` reference convention;
 comment-only post-back, no label sync) are this ticket's own calls, documented here and in
-migration `052_github_pr_links.sql`'s header rather than handed down from the PRD.
+migration `053_github_pr_links.sql`'s header rather than handed down from the PRD.
 
 ## What's built (Ship-side code, tested against fixtures — no live GitHub App exists)
 
@@ -25,7 +25,7 @@ migration `052_github_pr_links.sql`'s header rather than handed down from the PR
   token (`platform/github/installationAuth.ts` — real RS256 JWT signing + the real
   `POST /app/installations/{id}/access_tokens` exchange, GitHub's documented flow), and posts one
   comment per linked PR via `POST /repos/{owner}/{repo}/issues/{pr}/comments`.
-- **Data model**: migration `052_github_pr_links.sql` — one row per (Ship issue, GitHub PR) pair.
+- **Data model**: migration `053_github_pr_links.sql` — one row per (Ship issue, GitHub PR) pair.
 - **Tests**: 36 tests across 6 files
   (`api/src/platform/github/__tests__/*`, `api/src/routes/githubWebhook.test.ts`) — real test
   Postgres for every DB-touching path (`linkSyncService`, the route, `postBackService`'s link
@@ -57,7 +57,7 @@ from here:
    - `GITHUB_APP_ID` / `GITHUB_APP_PRIVATE_KEY` — from step 1.
    - `GITHUB_SHIP_WORKSPACE_ID` — the Ship `workspaces.id` this installation's `Ship#<n>`
      references resolve against (one installation <-> one workspace, this ticket's scope — see
-     migration 052's header). Find it via `SELECT id, name FROM workspaces;`.
+     migration 053's header). Find it via `SELECT id, name FROM workspaces;`.
    Until all of these are set, `index.ts` logs which half is missing and simply does not mount the
    route / wire the subscriber (fails partial, not total — same posture `routes/agent.ts`'s
    `AGENT_INTERNAL_SECRET` check and the `ship_app_fleetgraph` boot check already establish).
@@ -89,7 +89,7 @@ from here:
 ## Design decisions (this ticket's own — investigate-tier, no prior precedent to follow verbatim)
 
 - **First-party `api/src/platform/github/` module, not a satellite `integrations/github` package**
-  (unlike PF-803's Slack integration). Migration `052_github_pr_links.sql`'s header has the full
+  (unlike PF-803's Slack integration). Migration `053_github_pr_links.sql`'s header has the full
   rationale: `integrations/*` packages may declare only `@ship/sdk` as a runtime dependency
   (`scripts/check-integration-deps.mjs`), which structurally forbids direct DB access — and this
   integration's core deliverable (persistent issue<->PR links, surviving separate webhook
@@ -101,7 +101,7 @@ from here:
   own `#<n>` PR/issue-number syntax in the same text.
 - **One workspace per GitHub App installation** (`GITHUB_SHIP_WORKSPACE_ID`) — `ticket_number` is
   only unique per-workspace in Ship's schema, and a GitHub App installation is inherently
-  per-repo/per-org, not multi-tenant across Ship workspaces — see migration 052's header.
+  per-repo/per-org, not multi-tenant across Ship workspaces — see migration 053's header.
 - **"Reuse the webhook delivery pipeline"** (this ticket's own brief suggested investigating this)
   — investigated and NOT reused for the literal HTTP-dispatch leg: `deliverer.ts`'s
   `InMemoryWebhookDeliverer` POSTs a fixed, Ship-signed JSON envelope to one subscriber URL per

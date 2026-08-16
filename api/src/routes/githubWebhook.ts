@@ -3,7 +3,7 @@
  *
  * Structurally this is `integrations/slack/src/server.ts`'s exact receiver shape (verify raw-body
  * signature -> parse -> act -> 200/no-op/error), but as a mounted route inside `api/src`, not a
- * standalone satellite package — see migration 052's header for why (this receiver needs direct
+ * standalone satellite package — see migration 053's header for why (this receiver needs direct
  * DB access, which an `integrations/*` package cannot have).
  *
  * `express.raw()`, not `express.json()`, for the exact reason `integrations/slack/src/server.ts`
@@ -59,7 +59,7 @@ export interface CreateGithubWebhookRouterOptions {
    *  `agent.ts`'s `AGENT_INTERNAL_SECRET` check uses). */
   webhookSecret: string
   /** The single Ship workspace this GitHub App installation is configured for — see migration
-   *  052's header for why one installation maps to exactly one workspace in this ticket's scope. */
+   *  053's header for why one installation maps to exactly one workspace in this ticket's scope. */
   shipWorkspaceId: string
   rateLimitMax?: number
 }

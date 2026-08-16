@@ -5,7 +5,7 @@
  * webhook delivery, resolve every `Ship#<n>` reference in the PR's title+body
  * (`webhookPayloads.ts`'s `extractIssueReferences`) against `documents.ticket_number` in the one
  * workspace this GitHub App installation is configured for, and upsert one `github_pr_links` row
- * per (issue, PR) pair — see migration 052's header for the full design rationale (why this is a
+ * per (issue, PR) pair — see migration 053's header for the full design rationale (why this is a
  * first-party `api/src` module rather than a satellite `integrations/github` package, why one row
  * per pair rather than per PR).
  *
@@ -37,7 +37,7 @@ export interface SyncResult {
  * `PULL_REQUEST_HANDLED_ACTIONS` by the caller — see `githubWebhook.ts`).
  *
  * `workspaceId` is the single Ship workspace this GitHub App installation is configured for
- * (`GITHUB_SHIP_WORKSPACE_ID` — see migration 052's header for why one installation maps to
+ * (`GITHUB_SHIP_WORKSPACE_ID` — see migration 053's header for why one installation maps to
  * exactly one workspace in this ticket's scope).
  */
 export async function syncPullRequestLinks(pool: Pool, event: PullRequestEvent, workspaceId: string): Promise<SyncResult> {

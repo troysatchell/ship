@@ -17,11 +17,11 @@ assumed from the ticket text, before any code was written.
 `api/src/platform/github/` module rather than a satellite `integrations/github` package, because
 the persistent issue<->PR link table needs direct DB access that `integrations/*`'s
 `@ship/sdk`-only runtime-dependency rule structurally forbids — see migration
-`052_github_pr_links.sql`'s header for the full rationale).
+`053_github_pr_links.sql`'s header for the full rationale).
 
 **What was built** (Ship-side code only — see "What a human still needs to do" below for the wall
 this ticket's own brief said only a human can clear):
-- `api/src/db/migrations/052_github_pr_links.sql` — one row per (Ship issue, GitHub PR) pair.
+- `api/src/db/migrations/053_github_pr_links.sql` — one row per (Ship issue, GitHub PR) pair.
 - `api/src/platform/github/verifySignature.ts` — GitHub's `X-Hub-Signature-256` HMAC-SHA256
   scheme (constant-time compare), distinct from `@ship/sdk`'s own `Ship-Signature` scheme.
 - `api/src/platform/github/webhookPayloads.ts` — hand-built zod schemas for GitHub's documented
@@ -76,14 +76,14 @@ keypair), `postBackService.test.ts` (3, real DB link rows + mocked GitHub API),
 **How to run/verify.**
 ```bash
 source .factory-env
-pnpm --filter @ship/api db:migrate   # applies 052_github_pr_links.sql
+pnpm --filter @ship/api db:migrate   # applies 053_github_pr_links.sql
 pnpm --filter @ship/api type-check
 pnpm --filter @ship/api exec vitest run src/platform/github src/routes/githubWebhook.test.ts
 ```
 All 36 tests pass; `type-check` clean.
 
 **Rollback.** `git revert <this-commit-sha>` (single commit). Drop `api/src/db/migrations/
-052_github_pr_links.sql`'s table with a follow-up migration if a fresh deploy already ran it
+053_github_pr_links.sql`'s table with a follow-up migration if a fresh deploy already ran it
 (`DROP TABLE IF EXISTS github_pr_links;`) — nothing outside `api/src/platform/github/`,
 `api/src/routes/githubWebhook.ts`, and the three edited files (`app.ts`, `index.ts`, this
 migration) changes. No env var is required for the rest of the API to keep working — every new
