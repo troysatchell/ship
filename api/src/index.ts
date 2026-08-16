@@ -134,11 +134,46 @@ async function main() {
   wireDelivererToEventBus(webhookDeliverer, getEventBus());
   webhookDeliverer.start();
 
+  // PF-804 (TRO-453, STRETCH) — GitHub App integration. Both directions are
+  // OPT-IN via env var: a deployment that has not had a human register a real
+  // GitHub App (see `platform/github/README.md` for exactly what that
+  // requires) simply doesn't get the route mounted / the outbound subscriber
+  // wired, rather than booting into a broken or unsafe default. Same
+  // fail-partial posture `routes/agent.ts`'s `AGENT_INTERNAL_SECRET` check
+  // and the `ship_app_fleetgraph` boot check above already establish: a
+  // missing third-party integration credential narrows what works, it never
+  // takes down the rest of the API.
+  const githubWebhookSecret = process.env.GITHUB_WEBHOOK_SECRET;
+  const githubShipWorkspaceId = process.env.GITHUB_SHIP_WORKSPACE_ID;
+  const githubAppOptions =
+    githubWebhookSecret && githubShipWorkspaceId
+      ? { webhookSecret: githubWebhookSecret, shipWorkspaceId: githubShipWorkspaceId }
+      : undefined;
+  if (!githubAppOptions) {
+    console.log(
+      'github integration: GITHUB_WEBHOOK_SECRET / GITHUB_SHIP_WORKSPACE_ID not set — ' +
+        'POST /api/github/webhook is not mounted (see api/src/platform/github/README.md).'
+    );
+  }
+
+  const githubAppId = process.env.GITHUB_APP_ID;
+  const githubPrivateKey = process.env.GITHUB_APP_PRIVATE_KEY;
+  if (githubAppId && githubPrivateKey) {
+    const { wireGithubPostBack } = await import('./platform/github/wirePostBack.js');
+    wireGithubPostBack(getEventBus(), pool, { appId: githubAppId, privateKey: githubPrivateKey });
+    console.log('github integration: issue.status_changed -> GitHub PR comment post-back wired.');
+  } else {
+    console.log(
+      'github integration: GITHUB_APP_ID / GITHUB_APP_PRIVATE_KEY not set — status-change ' +
+        'post-back to linked GitHub PRs is disabled (see api/src/platform/github/README.md).'
+    );
+  }
+
   // TRO-603: pass the real, already-`.start()`'d singleton into `createApp()`
   // — see the long comment on the deliverer construction above for why this
   // whole block now runs before `createApp()`/`createServer()` rather than
   // after them.
-  const app = createApp(CORS_ORIGIN, { webhookDeliverer });
+  const app = createApp(CORS_ORIGIN, { webhookDeliverer, github: githubAppOptions });
   const server = createServer(app);
 
   // Stop the deliverer's polling loop on shutdown (CodeRabbit, this PR
