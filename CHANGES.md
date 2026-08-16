@@ -48,6 +48,121 @@ succeeded. Then `docker run` the resulting image: process started, logged `[agen
 
 ---
 
+## TRO-490 — jsonToYaml emitted unparseable/mis-indented openapi.yaml; converter fixed and proven by round-trip
+
+**Observed, on `main`, by reading the tracked artifact directly.** `api/src/swagger.ts`'s hand-rolled
+`jsonToYaml` (the only code that produces `api/openapi.yaml`; `api/openapi.json` is generated
+separately via `JSON.stringify` and was never affected) emits YAML that a real parser rejects or
+silently mangles:
+- `api/openapi.yaml:4873-4874` on main: an empty-object value (`parameters: {}`) came out as
+  `  parameters:` on one line and `{}` alone at column 0 on the next — invalid/ambiguous YAML.
+  Cause: the object branch always emitted `key:\n` followed by a recursive call, and
+  `jsonToYaml({})` returned the bare string `{}` with no indentation of its own.
+- `api/openapi.yaml:4884-4886` on main: array items that are objects came out over-indented — a
+  `- schema:` list marker at 8 spaces followed by its `type`/`enum` children at 22 spaces instead
+  of 12. Cause: the array branch called `jsonToYaml(item, indent + 1)` (already indented relative
+  to the array) and then *also* prefixed every continuation line with an extra `${spaces}  ` —
+  double indentation.
+- Not visible in a spot-check but the same root cause: strings that look like other YAML scalar
+  types (`'true'`, `'123'`, `''`, leading/trailing spaces, strings starting with `*`, `&`, `!`,
+  `[`, `{`, `-`, `?`, `%`, `@`, backtick, or quotes) were emitted bare, so a parser would hand back
+  a boolean/number/null instead of the original string; and object keys containing YAML-special
+  characters (e.g. `/api/issues/{id}`) were emitted unquoted.
+
+**Red before green.** Added a `TRO-490` describe block to `api/src/swagger.test.ts` — full-spec
+round-trip (`parse(jsonToYaml(swaggerSpec))` must equal the spec), the exact empty-object/array-item
+indentation fixture above (asserting the literal output string, not just that it parses), and a
+type-ambiguous-scalar fixture. Run against the pre-fix converter, all three failed with
+`YAMLParseError` (`Missing closing "quote`, `Implicit map keys need to be followed by map values`).
+The four existing TRO-309 tests (backslash-escaping regression coverage) were left untouched and
+stayed green throughout.
+
+**What changed, in `jsonToYaml` only.**
+- Added `needsQuoting(s)`: a string is safe to emit bare only if it matches a narrow "looks like a
+  plain YAML word" shape (starts with a letter/underscore, no leading/trailing space, only
+  `[A-Za-z0-9_ .\/()-]`) *and* isn't one of YAML's reserved boolean/null spellings
+  (`true/false/null/yes/no/on/off/y/n/~`, case-insensitive). Everything else gets quoted.
+- String branch now reuses `JSON.stringify` for quoting (a JSON string literal is a valid YAML
+  double-quoted scalar) instead of a hand-rolled escape — same backslash-then-quote escaping order
+  TRO-309 already required, verified by rerunning its four tests unchanged.
+- Object branch: empty nested object/array values are now emitted inline (`key: {}` / `key: []`)
+  instead of `key:` + a bare `{}`/`[]` on the next line; keys are quoted via the same
+  `needsQuoting` check; entries whose value is `undefined` are skipped (matching
+  `JSON.stringify`'s behavior for object properties).
+- Array branch: object/array items are rendered unindented first (`jsonToYaml(item, 0)`), then
+  every line gets exactly one extra level of indentation added (`${spaces}` on the first line via
+  the `- ` marker, `${spaces}  ` on continuation lines) — removing the double-indentation bug.
+  Empty object/array items render inline (`- {}` / `- []`); `undefined` items render as `- null`.
+
+**Also changed:** `yaml@2.9.0` added as an `api`-only devDependency (`api/package.json`,
+`pnpm-lock.yaml`) — used exclusively by the new test to parse the converter's output with a real
+YAML parser; not a runtime dependency of `swagger.ts` itself, which stays dependency-free by design.
+
+**How to verify.** `pnpm --filter @ship/api vitest run src/swagger.test.ts` — 7 tests (4 TRO-309 +
+3 TRO-490) pass. `pnpm --filter @ship/api openapi:generate` is now idempotent and produces YAML
+that a parser round-trips to the same structure as `api/openapi.json`; observed directly by parsing
+the regenerated `api/openapi.yaml` with the `yaml` package and comparing to `api/openapi.json` —
+both serialized to identical JSON. `api/openapi.json` was not touched by this change (it comes from
+`JSON.stringify`, not `jsonToYaml`).
+
+**Rollback.** `git revert <this-commit-sha>` (single commit: `api/src/swagger.ts`,
+`api/src/swagger.test.ts`, `api/package.json`, `pnpm-lock.yaml`, `api/openapi.yaml`, this entry).
+`api/openapi.json` is unaffected either way — reverting does not reintroduce any JSON regression
+because there wasn't one.
+
+---
+
+## TRO-491 — OpenAPI scopes enum derived from ScopeRegistry; APIToken.scopes required-nullable
+
+**Observed, not inferred.** `api/openapi.json` (before this change, lines ~3679-3690 and
+~3716-3725) typed `CreateAPIToken.scopes` and `APIToken.scopes` items as `{"type": "string"}` with
+no `enum` — free-form strings — even though the runtime accepts only names registered in
+`ScopeRegistry` (`api/src/platform/scopes/registry.ts`), enforced by `api/src/routes/api-tokens.ts`'s
+`scopeSchema` zod refine. Separately, `APIToken.required` did not list `"scopes"`, even though both
+response sites that build an `APIToken` (`api/src/routes/api-tokens.ts:112` and `:150`) always emit
+the `scopes` key (array or `null`) — never omit it.
+
+**Decision (made by the orchestrator, not re-litigated here): derive, don't copy.**
+`api/src/openapi/schemas/auth.ts` now imports `ScopeRegistry` and builds a shared `ScopeNameSchema
+= z.enum(ScopeRegistry.names())` at module load, used by both `APITokenScopesSchema` (nullable
+array) and `CreateAPITokenSchema.scopes`. `registry.ts` has zero imports and registers all 8 scopes
+at the bottom of the file at load time, so importing it guarantees `names()` is complete by the time
+`auth.ts` evaluates — a hand-copied enum list was rejected because it would be a second source of
+truth free to drift from the registry (the exact failure mode TRO-430's registry work was built to
+prevent). A defensive `if (scopeNames.length === 0) throw` guards against a silent empty enum if
+import order ever regresses. Runtime enforcement is untouched — `api/src/routes/api-tokens.ts`'s
+`scopeSchema` refine still does the actual rejection; this change only makes the *documented* shape
+match what the route already enforced.
+`APITokenSchema.scopes` changed from `APITokenScopesSchema.optional()` to `APITokenScopesSchema`
+(required-nullable), matching the two response sites confirmed above by reading the route file.
+
+**Regression test, red before green (observed).** New file
+`api/src/openapi/schemas/__tests__/auth-scopes.test.ts`, 3 cases: `CreateAPIToken.scopes`
+items-enum equals `ScopeRegistry.names()` (plus a `length >= 7` guard against a vacuous empty-enum
+pass), `APIToken.scopes` items-enum equals `ScopeRegistry.names()` and `scopes` is both `nullable`
+and in `required`, and the enum is a genuine derivation (`Set` equality against
+`ScopeRegistry.list().map(s => s.name)`), not a second literal copy. Ran before the fix: all 3
+failed with `expected undefined to deeply equal [...]` (`items.enum` didn't exist yet). Ran after:
+all 3 pass.
+
+**How to verify.**
+```bash
+source .factory-env
+pnpm --filter @ship/api vitest run src/openapi/schemas/__tests__/auth-scopes.test.ts
+pnpm --filter @ship/api vitest run src/openapi src/routes/api-tokens.test.ts src/swagger.test.ts
+pnpm --filter @ship/api openapi:generate   # observed idempotent: ran twice, second run produced no further diff
+```
+`pnpm type-check` was run from repo root: the `api` package (and `shared`, `sdk`, `agent`) type-check
+clean. `integrations/browser-demo` fails with `Cannot find module '@ship/sdk'` — observed pre-existing
+and unrelated: `sdk/dist` does not exist in this worktree (the `sdk` package hasn't been built), and
+this change touches nothing under `sdk/` or `integrations/`. Confirmed by also running
+`pnpm --filter @ship/api type-check` alone, which is clean.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit touching `api/src/openapi/schemas/auth.ts`,
+the new test file, and the regenerated `api/openapi.json`/`api/openapi.yaml`).
+
+---
+
 ## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes
 
 **Non-code / CI-config ticket — `terraform validate`-style proof, not vitest** (same disclosed-exception

@@ -48,6 +48,20 @@ export function setupSwagger(app: Express): void {
   });
 }
 
+// TRO-490: true unless the string is safe to emit bare — i.e. it cannot be
+// mistaken by a YAML parser for another scalar type (bool/null/number),
+// does not start/end with whitespace, and contains no characters that are
+// structurally significant to YAML (`:`, `#`, quotes, flow indicators,
+// etc. — the existing quoting regex already handles those separately for
+// the common `\n` / `:` / `#` cases, but the full character class below is
+// what decides "needs quoting" going forward).
+function needsQuoting(s: string): boolean {
+  const isSafeShape = /^[A-Za-z_](?:[A-Za-z0-9_ .\/()-]*[A-Za-z0-9_.\/()-])?$/.test(s);
+  if (!isSafeShape) return true;
+  const reserved = new Set(['true', 'false', 'null', 'yes', 'no', 'on', 'off', 'y', 'n', '~']);
+  return reserved.has(s.toLowerCase());
+}
+
 // Simple JSON to YAML converter (no external dependency needed)
 export function jsonToYaml(obj: unknown, indent = 0): string {
   const spaces = '  '.repeat(indent);
@@ -55,44 +69,56 @@ export function jsonToYaml(obj: unknown, indent = 0): string {
   if (obj === null) return 'null';
   if (obj === undefined) return '';
   if (typeof obj === 'string') {
-    if (obj.includes('\n') || obj.includes(':') || obj.includes('#')) {
-      // TRO-309 (CodeQL js/incomplete-sanitization): backslashes must be
-      // escaped BEFORE quotes, and before this fix they were not escaped at
-      // all. A value ending in a bare backslash right before the closing
-      // quote (e.g. 'trailing:\\') produced `"trailing:\"` — a quoted YAML
-      // scalar whose last two characters read as an *escaped* double quote,
-      // not the terminator, leaving the string unterminated from the YAML
-      // parser's point of view. Escaping backslash first (so a literal `\`
-      // becomes `\\`) keeps the following `\"` an unambiguous, correctly
-      // escaped quote.
-      return `"${obj.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
-    }
-    return obj;
+    // TRO-309 (CodeQL js/incomplete-sanitization): backslashes must be
+    // escaped BEFORE quotes, and before this fix they were not escaped at
+    // all. A value ending in a bare backslash right before the closing
+    // quote (e.g. 'trailing:\\') produced `"trailing:\"` — a quoted YAML
+    // scalar whose last two characters read as an *escaped* double quote,
+    // not the terminator, leaving the string unterminated from the YAML
+    // parser's point of view. Escaping backslash first (so a literal `\`
+    // becomes `\\`) keeps the following `\"` an unambiguous, correctly
+    // escaped quote.
+    //
+    // TRO-490: `JSON.stringify` produces exactly that escaping (and also
+    // escapes newlines, tabs, control characters, etc.), and a JSON string
+    // literal is valid YAML double-quoted scalar syntax, so reuse it
+    // wholesale instead of hand-rolling escapes.
+    return needsQuoting(obj) ? JSON.stringify(obj) : obj;
   }
   if (typeof obj === 'number' || typeof obj === 'boolean') return String(obj);
 
   if (Array.isArray(obj)) {
     if (obj.length === 0) return '[]';
     return obj.map(item => {
-      const value = jsonToYaml(item, indent + 1);
+      if (item === undefined) return `${spaces}- null`;
       if (typeof item === 'object' && item !== null) {
-        return `${spaces}- ${value.trim().replace(/^/, '').replace(/\n/g, `\n${spaces}  `)}`;
+        const entries = Array.isArray(item) ? item.length : Object.keys(item).length;
+        if (entries === 0) {
+          return `${spaces}- ${Array.isArray(item) ? '[]' : '{}'}`;
+        }
+        // jsonToYaml(item, 0) is UNindented; prefix the first line with the
+        // array marker and every continuation line with one extra level
+        // (spaces + 2) so nested content lines up under `- `.
+        const lines = jsonToYaml(item, 0).split('\n');
+        return [`${spaces}- ${lines[0]}`, ...lines.slice(1).map(l => `${spaces}  ${l}`)].join('\n');
       }
-      return `${spaces}- ${value}`;
+      return `${spaces}- ${jsonToYaml(item, indent)}`;
     }).join('\n');
   }
 
   if (typeof obj === 'object') {
-    const entries = Object.entries(obj);
+    const entries = Object.entries(obj).filter(([, value]) => value !== undefined);
     if (entries.length === 0) return '{}';
     return entries.map(([key, value]) => {
-      if (typeof value === 'object' && value !== null && !Array.isArray(value)) {
-        return `${spaces}${key}:\n${jsonToYaml(value, indent + 1)}`;
-      } else if (Array.isArray(value)) {
-        return `${spaces}${key}:\n${jsonToYaml(value, indent + 1)}`;
-      } else {
-        return `${spaces}${key}: ${jsonToYaml(value, indent)}`;
+      const emittedKey = needsQuoting(key) ? JSON.stringify(key) : key;
+      if (typeof value === 'object' && value !== null) {
+        const size = Array.isArray(value) ? value.length : Object.keys(value).length;
+        if (size === 0) {
+          return `${spaces}${emittedKey}: ${Array.isArray(value) ? '[]' : '{}'}`;
+        }
+        return `${spaces}${emittedKey}:\n${jsonToYaml(value, indent + 1)}`;
       }
+      return `${spaces}${emittedKey}: ${jsonToYaml(value, indent)}`;
     }).join('\n');
   }
 
