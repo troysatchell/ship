@@ -1,0 +1,30 @@
+Test: developer-portal-dlq-replay.spec.ts
+Title: subscription CRUD from the portal UI: create, list, delete
+Duration: 15405ms
+
+--- Errors ---
+Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+Locator: getByLabel(/^app$/i)
+Expected: visible
+Timeout: 15000ms
+Error: element(s) not found
+
+Call log:
+[2m  - Expect "toBeVisible" with timeout 15000ms[22m
+[2m  - waiting for getByLabel(/^app$/i)[22m
+
+
+--- Stack ---
+Error: [2mexpect([22m[31mlocator[39m[2m).[22mtoBeVisible[2m([22m[2m)[22m failed
+
+Locator: getByLabel(/^app$/i)
+Expected: visible
+Timeout: 15000ms
+Error: element(s) not found
+
+Call log:
+[2m  - Expect "toBeVisible" with timeout 15000ms[22m
+[2m  - waiting for getByLabel(/^app$/i)[22m
+
+    at /Users/troy/repos/GAUNTLET/Ship/e2e/developer-portal-dlq-replay.spec.ts:266:45

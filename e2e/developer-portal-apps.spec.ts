@@ -118,4 +118,28 @@ test.describe('Developer portal — OAuth app registration', () => {
 
     expect(v1Requests.some((url) => url.includes('/api/v1/me'))).toBe(true)
   })
+
+  test('Developer > Audit lists public_api_audit rows via GET /api/v1/audit (TRO-616)', async ({ page }) => {
+    await login(page)
+
+    // Sync on the real /api/v1/audit response, not networkidle (the portal's
+    // token mint + /me identity check make networkidle a poor signal here).
+    const auditResponse = page.waitForResponse((res) => /\/api\/v1\/audit/.test(res.url()))
+    await page.goto('/developer/audit')
+    const first = await auditResponse
+    expect(first.status()).toBe(200)
+    await expect(page.getByRole('heading', { name: 'Audit' })).toBeVisible()
+
+    // The portal's own `GET /api/v1/me` on mount is itself audited (fire-and-
+    // forget INSERT in platform/audit/middleware.ts), so at least one row
+    // exists — but that INSERT can land a beat after this page's first query.
+    // One reload closes the race without a networkidle wait.
+    if ((await page.getByTestId('audit-row').count()) === 0) {
+      const again = page.waitForResponse((res) => /\/api\/v1\/audit/.test(res.url()))
+      await page.reload()
+      await again
+    }
+    await expect(page.getByTestId('audit-row').first()).toBeVisible()
+    await expect(page.getByRole('table', { name: /public api audit log/i })).toBeVisible()
+  })
 })

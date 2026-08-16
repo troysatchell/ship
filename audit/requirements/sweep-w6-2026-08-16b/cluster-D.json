@@ -1,0 +1,373 @@
+{
+  "cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI",
+  "context": "Local test.log for this sweep is COMPLETE but never reached @ship/sdk or @ship/cli: root `pnpm test` (package.json:28) chains test:api && test:web && test:agent && test:sdk && test:cli, and test:api exited 1 on api/src/__tests__/activity.test.ts (unrelated to this cluster), so the && chain stopped there. SDK/CLI behavioral evidence for this sweep therefore comes from (a) GitHub Actions CI run 31949732432 (workflow CI, event push, branch main, commit 9d744017, created 2026-08-16T13:24:39Z, conclusion success) — 9d744017 is an ancestor of HEAD 08505d2d and `git diff --stat 9d744017 HEAD -- sdk integrations scripts e2e .github .gitlab-ci.yml` is empty, so it ran on code identical to HEAD for every path this cluster cites; its verify job 95171252304 shows SDK unit tests 25 files / 229 tests passed, CLI unit tests 9 files / 58 tests passed, SDK size gate PASS 4.63 kB, check-integration-deps OK + 10/10 node:test; its drill-ttfe job passed (total 3988ms / 60000ms budget); (b) read-only probes this tracer ran with tsx against sdk/src (verifyWebhook, iterate(), error kinds — scripts in commands_run); (c) `node sdk/scripts/measure-size.mjs` (write:false) and `node scripts/check-integration-deps.mjs` + its node:test, run this sweep; (d) typecheck.log exit 0 (sdk, integrations/cli, integrations/browser-demo, integrations/slack all `type-check: Done`); (e) a local Playwright run whose gitignored artifacts (test-results/progress.jsonl, playwright-report/index.html; mtime 2026-08-16T13:43Z) this tracer READ but did NOT launch. Every VERIFIED below names which of these it rests on.",
+  "rows": [
+    {
+      "id": "W6-R9",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-405", "TRO-601"],
+      "evidence": [
+        { "file": "pnpm-workspace.yaml", "line": 6, "note": "'sdk' is a declared pnpm workspace package" },
+        { "file": "sdk/package.json", "line": 2, "note": "\"name\": \"@ship/sdk\"" },
+        { "file": "sdk/package.json", "line": 34, "note": "\"dependencies\": {} — zero runtime deps" },
+        { "file": "sdk/src/client.ts", "line": 110, "note": "export class ShipClient" },
+        { "file": "sdk/src/client.ts", "line": 174, "note": "async me(): Promise<Me> — GET /api/v1/me (line 175)" },
+        { "file": "sdk/src/__tests__/client.liveServer.test.ts", "line": 64, "note": "describe 'PF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)' — real http listener around real createApp()" },
+        { "file": "sdk/src/__tests__/client.liveServer.test.ts", "line": 163, "note": "it: new ShipClient({ token, baseUrl }).me() returns the typed user for a real bearer token, over a real TCP round trip" },
+        { "file": ".github/workflows/ci.yml", "line": 212, "note": "CI step 'SDK unit tests': pnpm --filter @ship/sdk test" }
+      ],
+      "test_files_bearing": ["sdk/src/__tests__/client.liveServer.test.ts", "sdk/src/client.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949732432 --repo troysatchell/ship (job 95171252304 log, step 'SDK unit tests'); typecheck.log this sweep",
+        "result_excerpt": "✓ src/__tests__/client.liveServer.test.ts (3 tests); SDK suite Test Files 25 passed (25) / Tests 229 passed (229) at 2026-08-16T13:32:11Z on commit 9d744017 (code-identical to HEAD for sdk/); typecheck.log:9 'sdk type-check: Done', exit 0"
+      },
+      "plain_english": "The brief's MVP gate asks for a real SDK package where `new ShipClient({ token }).me()` returns the logged-in user from a live server. `sdk/` is a pnpm workspace package with zero runtime dependencies (sdk/package.json), `me()` is implemented in sdk/src/client.ts, and client.liveServer.test.ts drives it over a real TCP connection to a real server; TRO-405 (PF-400) delivered it. Today's GitHub CI run on this exact code shows that test passing. Nothing missing.",
+      "notes": "TRO-405 implements. TRO-601 (Done) hardens: CI type-check ran before @ship/sdk was built. Local test.log did NOT reach test:sdk this sweep (api failure short-circuited the && chain) — verification rests on the GitHub CI run 13:24Z today on code-identical commit plus typecheck.log; main session may re-run `pnpm --filter @ship/sdk test` locally to add a same-machine sample. Also observed: CI drill-ttfe job (same run) executed ShipClient.deviceLogin + me-equivalent stages against a spawned real api (device_login 75ms).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; verification re-pointed from the prior sweep's local pnpm test (which this sweep did not reach for sdk) to GitHub CI run 31949732432 on today's main; sdk/package.json evidence line corrected from 0 to 34 (dependencies: {})"
+    },
+    {
+      "id": "W6-R30",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-407", "TRO-422", "TRO-599", "TRO-607", "TRO-409"],
+      "evidence": [
+        { "file": "sdk/src/client.ts", "line": 115, "note": "readonly documents: DocumentsClient" },
+        { "file": "sdk/src/client.ts", "line": 119, "note": "readonly issues: IssuesClient" },
+        { "file": "sdk/src/client.ts", "line": 122, "note": "readonly sprints: SprintsClient" },
+        { "file": "sdk/src/client.ts", "line": 130, "note": "readonly webhooks: WebhooksClient" },
+        { "file": "sdk/src/__tests__/parity.test.ts", "line": 248, "note": "describe 'PF-405: /api/v1 <-> @ship/sdk bidirectional parity fitness test (Linear TRO-422)' — walks the real generated OpenAPI doc and ShipClient prototypes" },
+        { "file": "sdk/src/__tests__/parity.test.ts", "line": 296, "note": "every OpenAPI operation must have a typed SDK method or a documented exemption (spec→SDK drift fails)" },
+        { "file": "sdk/src/__tests__/parity.test.ts", "line": 316, "note": "every SDK method must map to a currently-registered /api/v1 operation or exemption (SDK→spec drift fails)" },
+        { "file": "sdk/src/resources/webhooks.ts", "line": 181, "note": "WebhookSubscription interface matches serializer field-for-field (TRO-599 fix)" },
+        { "file": "sdk/src/resources/webhooks.ts", "line": 220, "note": "CreateWebhookSubscriptionBody declares app_id/event_type/target_url (TRO-607 fix)" },
+        { "file": ".github/workflows/ci.yml", "line": 212, "note": "CI runs pnpm --filter @ship/sdk test (parity suite included) — drift fails CI" },
+        { "file": ".gitlab-ci.yml", "line": 147, "note": "same on the GitLab (graded) pipeline" }
+      ],
+      "test_files_bearing": ["sdk/src/__tests__/parity.test.ts", "sdk/src/__tests__/webhookResponseShape.test.ts", "sdk/src/resources/__tests__/webhooks.test.ts", "sdk/src/__tests__/webhooks.liveServer.test.ts", "sdk/src/__tests__/resources.liveServer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949732432 --repo troysatchell/ship (job 95171252304, step 'SDK unit tests')",
+        "result_excerpt": "✓ src/__tests__/parity.test.ts (57 tests); ✓ src/__tests__/webhookResponseShape.test.ts (5 tests); ✓ src/resources/__tests__/webhooks.test.ts (9 tests); ✓ src/__tests__/webhooks.liveServer.test.ts (10 tests) — 2026-08-16T13:32Z on code-identical commit"
+      },
+      "plain_english": "The SDK must expose client.documents/issues/sprints/webhooks whose method signatures track the OpenAPI spec, with a CI test that fails on drift. All four resource clients exist on ShipClient (sdk/src/client.ts) and parity.test.ts checks both directions against the real generated spec, running in CI on every push. TRO-407 built the clients, TRO-422 the parity gate; TRO-599/TRO-607 later fixed two response/request shape drifts the gate did not catch (it checks method existence, not field shapes). Nothing outstanding.",
+      "notes": "TRO-407 implements resource clients; TRO-422 implements the parity fitness test + CI wiring; TRO-599 and TRO-607 (both Done) harden — they fixed field-level type drift (WebhookSubscription/WebhookDelivery response shapes; CreateWebhookSubscriptionBody request shape) which the structural parity test does not detect — webhookResponseShape.test.ts now covers the response side. TRO-409 (Done) is the adjacent spec↔routes parity (PF-204). Caveat carried from prior sweeps: parity.test.ts asserts method↔operation coverage, not per-field signature equality; 'signatures match' is proven at the method-mapping level plus the targeted shape tests. sdk/tsconfig.json excludes src/__tests__ so typecheck.log does not cover the test file itself.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; verification re-pointed to today's CI run 31949732432 (prior cited run 31931512016 / PR #263); all evidence lines re-opened, no drift"
+    },
+    {
+      "id": "W6-R31",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-418", "TRO-600", "TRO-425", "TRO-449"],
+      "evidence": [
+        { "file": "sdk/src/client.ts", "line": 186, "note": "static async deviceLogin(...) — persists to opts.tokenStore (line 199-200)" },
+        { "file": "sdk/src/client.ts", "line": 222, "note": "static async authorizationCodeFlow(opts: PkceFlowOptions): Promise<ShipClient>" },
+        { "file": "sdk/src/deviceLogin.ts", "line": 188, "note": "runDeviceLoginFlow — RFC 8628 polling loop" },
+        { "file": "sdk/src/deviceLogin.ts", "line": 219, "note": "honors slow_down by increasing the poll interval" },
+        { "file": "sdk/src/authorizationCodeFlow.ts", "line": 218, "note": "runAuthorizationCodeFlow — two-leg PKCE (S256), sessionStorage-held verifier" },
+        { "file": "sdk/src/tokenStore.ts", "line": 45, "note": "export interface ITokenStore — the pluggable contract" },
+        { "file": "sdk/src/tokenStore.ts", "line": 56, "note": "MemoryTokenStore implements ITokenStore (in-memory)" },
+        { "file": "sdk/src/fileTokenStore.ts", "line": 112, "note": "FileTokenStore implements ITokenStore (file, 0600)" },
+        { "file": "sdk/src/fileTokenStore.ts", "line": 169, "note": "TRO-600 fix: writes temp file with mode 0o600, flag 'wx'" },
+        { "file": "sdk/src/fileTokenStore.ts", "line": 181, "note": "then fs.rename(tempPath, filePath) — atomic replace" },
+        { "file": "integrations/browser-demo/src/localStorageTokenStore.ts", "line": 25, "note": "LocalStorageTokenStore implements ITokenStore (browser localStorage) — lives in the browser-demo consumer, not inside sdk/" },
+        { "file": "sdk/src/tokenStore.test.ts", "line": 155, "note": "describe 'set() atomicity (TRO-600)'" },
+        { "file": "sdk/src/__tests__/client.deviceLogin.liveServer.test.ts", "line": 46, "note": "deviceLogin() end-to-end against a real running Ship API" }
+      ],
+      "test_files_bearing": ["sdk/src/deviceLogin.test.ts", "sdk/src/authorizationCodeFlow.test.ts", "sdk/src/tokenStore.test.ts", "sdk/src/pkce.test.ts", "sdk/src/__tests__/client.deviceLogin.liveServer.test.ts", "sdk/src/__tests__/client.authorizationCodeFlow.liveServer.test.ts", "sdk/src/client.refresh.test.ts"],
+      "e2e_specs_bearing": ["e2e/browser-demo-pkce.spec.ts"],
+      "verification": {
+        "command": "gh run view 31949732432 --repo troysatchell/ship (job 95171252304, step 'SDK unit tests'; job drill-ttfe)",
+        "result_excerpt": "✓ src/deviceLogin.test.ts (7); ✓ src/authorizationCodeFlow.test.ts (7); ✓ src/tokenStore.test.ts (15, incl. TRO-600 atomicity); ✓ src/__tests__/client.deviceLogin.liveServer.test.ts (2); ✓ src/__tests__/client.authorizationCodeFlow.liveServer.test.ts (2); drill-ttfe stage device_login: 75ms via ShipClient.deviceLogin, verdict: pass. Local Playwright artifact (not launched by tracer, 13:43Z): browser-demo-pkce.spec.ts 'Connect to Ship -> consent -> documents list' passed (authorizationCodeFlow + LocalStorageTokenStore in a real browser)."
+      },
+      "plain_english": "The SDK must run both login flows end-to-end (device login for CLIs, PKCE code flow for browsers) and let callers plug in where tokens are kept — memory, a file, or browser localStorage. Both flows are static methods on ShipClient (sdk/src/client.ts), the ITokenStore interface plus MemoryTokenStore and FileTokenStore ship in the SDK, and a LocalStorageTokenStore is implemented in the browser demo (integrations/browser-demo). TRO-418 delivered the flows/stores; TRO-600 made the file store's write crash-safe. Today's CI run shows all the flow and store tests passing.",
+      "notes": "TRO-418 implements; TRO-600 (Done) hardens FileTokenStore atomic write; TRO-425 (Done) is the server-side device grant the flow talks to; TRO-449 (Done) supplies the localStorage store. Related open server-side hardening not affecting the SDK surface: TRO-589 (In Progress, PR #272) hashes device user_code at rest. Nuance flagged under needs_ruling: the localStorage store is NOT exported from @ship/sdk (sdk/src/index.ts exports MemoryTokenStore only, node.ts exports FileTokenStore) — it exists only as the browser-demo's own ITokenStore implementation. Prior sweeps scored this as satisfying the clause.",
+      "suggested_scope": null,
+      "assumption": "Traced under the reading that 'Pluggable ITokenStore (in-memory, file, browser localStorage)' obliges the SDK to define the pluggable interface and the repo to contain working implementations of all three, not that all three must be exported from the @ship/sdk package itself. Under that reading: VERIFIED. If the stricter reading is ruled, verdict becomes PARTIAL with scope 'export a LocalStorageTokenStore from sdk/src/index.ts (browser-safe barrel) and move/duplicate integrations/browser-demo/src/localStorageTokenStore.ts'.",
+      "needs_ruling": "Does an ITokenStore implementation for browser localStorage that lives in integrations/browser-demo (an SDK consumer) rather than being exported by @ship/sdk satisfy the 'browser localStorage' clause of W6-R31?",
+      "delta_vs_prior": "same verdict; verification re-pointed to today's CI run 31949732432 (prior used PR #262 status checks); flagged the localStorage-store-location ambiguity as needs_ruling (prior sweeps applied the permissive reading silently)"
+    },
+    {
+      "id": "W6-R32",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-410", "TRO-602"],
+      "evidence": [
+        { "file": "sdk/src/internal/pagination.ts", "line": 51, "note": "export async function* iteratePages<T>(fetchPage) — one shared async generator" },
+        { "file": "sdk/src/internal/pagination.ts", "line": 61, "note": "stops when page.next_cursor === null; cursor held in the closure only" },
+        { "file": "sdk/src/resources/documents.ts", "line": 94, "note": "DocumentsClient.iterate(params): AsyncGenerator<Document>" },
+        { "file": "sdk/src/resources/documents.ts", "line": 95, "note": "delegates to iteratePages((cursor) => this.list({...params, cursor}))" },
+        { "file": "sdk/src/resources/issues.ts", "line": 50, "note": "IssuesClient.iterate" },
+        { "file": "sdk/src/resources/sprints.ts", "line": 41, "note": "SprintsClient.iterate" },
+        { "file": "sdk/src/types.ts", "line": 140, "note": "IterateDocumentsParams = Omit<ListDocumentsParams, 'cursor'> — the consumer type has no cursor field" },
+        { "file": "sdk/src/resources/__tests__/iterate.test.ts", "line": 78, "note": "3-page full iteration, exactly 3 requests, no dupes/gaps" },
+        { "file": "sdk/src/resources/__tests__/iterate.test.ts", "line": 129, "note": "early break after first item makes exactly 1 request (no overfetch)" },
+        { "file": "sdk/src/resources/__tests__/iterate.test.ts", "line": 203, "note": "yielded items are bare elements — no next_cursor anywhere the caller sees" }
+      ],
+      "test_files_bearing": ["sdk/src/resources/__tests__/iterate.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949732432 (SDK unit tests step) + tracer probe: tsx scratchpad/sdk-probe.mts importing sdk/src/index.ts with a stubbed global fetch serving 3 pages",
+        "result_excerpt": "CI: ✓ src/resources/__tests__/iterate.test.ts (8 tests). Probe (this sweep, this machine): full walk yielded d1..d5 in order over exactly 3 requests (first>c1>c2), no next_cursor/data property on any yielded item; early break after 1 item -> exactly 1 request"
+      },
+      "plain_english": "Callers must be able to write `for await (const doc of client.documents.iterate())` and get every item across all pages without ever handling a cursor. sdk/src/internal/pagination.ts implements one shared async generator that documents/issues/sprints (and people) delegate to; iterate.test.ts proves multi-page walking, no over-fetch on early break, and that no cursor leaks. TRO-410 delivered it. Verified both by today's CI run and by a stub-server probe run in this sweep.",
+      "notes": "TRO-410 implements. TRO-602 (Done) is server-side hardening of the same cursor contract (ms-precision row drops in shared /api/v1 pagination) — it does not change the SDK but affects what iterate() walks. TRO-592 (Backlog) is a server router-factory refactor opportunity, not an SDK gap.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; verification re-pointed to today's CI run plus a fresh in-sweep probe"
+    },
+    {
+      "id": "W6-R33",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-413", "TRO-433"],
+      "evidence": [
+        { "file": "sdk/src/verifyWebhook.ts", "line": 185, "note": "export function verifyWebhook(headers, rawBody, secret, toleranceSec=300, now?) — boolean, never throws" },
+        { "file": "sdk/src/verifyWebhook.ts", "line": 202, "note": "expired timestamp: |now - t| > toleranceSec -> false" },
+        { "file": "sdk/src/verifyWebhook.ts", "line": 168, "note": "crypto.timingSafeEqual on the v1 digest" },
+        { "file": "sdk/src/node.ts", "line": 13, "note": "exported from @ship/sdk/node (Node-only entry, uses node:crypto)" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 112, "note": "tampered body -> false" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 121, "note": "signature outside tolerance window -> false" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 129, "note": "header with no v1 component -> false, without throwing" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 277, "note": "300s inclusive boundary passes" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 284, "note": "301s fails" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 361, "note": "cross-validated against shared/fixtures/webhook-signature-vectors.json (same vectors the server signer uses)" }
+      ],
+      "test_files_bearing": ["sdk/src/verifyWebhook.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949732432 (SDK unit tests step) + tracer probe: tsx scratchpad/perf-probe.mts importing sdk/src/verifyWebhook.ts",
+        "result_excerpt": "CI: ✓ src/verifyWebhook.test.ts (30 tests). Probe (this sweep): valid? true; tampered? false; missing v1? false; expired (t-301s)? false"
+      },
+      "plain_english": "Integrators must be able to check a webhook's signature with one call that returns true/false, rejecting tampered bodies, stale timestamps, and headers missing the v1 signature. sdk/src/verifyWebhook.ts is that one function and verifyWebhook.test.ts covers all three failure modes plus the 5-minute boundary; TRO-413 delivered it. Confirmed by today's CI run and by a direct probe in this sweep that exercised all four cases.",
+      "notes": "TRO-413 implements the SDK verifier; TRO-433 (Done) is the server-side signer it mirrors (I-04 keeps W6-R25 on the signer, W6-R33 on the verifier). Consumers in-repo: integrations/slack/src/server.ts:82 and integrations/cli/src/commands/webhooksTail.ts:206 both call it live. Note the function takes optional 4th/5th args (toleranceSec, now) beyond the quoted 3-arg shape — additive, defaults match the quote.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; verification re-pointed to today's CI run plus a fresh in-sweep probe of the three negatives"
+    },
+    {
+      "id": "W6-R34",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-405", "TRO-407", "TRO-397", "TRO-495"],
+      "evidence": [
+        { "file": "sdk/src/errors.ts", "line": 39, "note": "export type SdkErrorKind = 'auth' | 'forbidden' | 'not_found' | 'validation' | 'rate_limit' | 'server' | 'network' (lines 39-46) — closed string-literal union, superset of the 5 quoted kinds" },
+        { "file": "sdk/src/errors.ts", "line": 76, "note": "mapApiErrorCodeToKind(code) — server ApiErrorCode -> kind, unknown -> 'server'" },
+        { "file": "sdk/src/errors.ts", "line": 115, "note": "export class ShipSdkError extends Error implements SdkErrorShape" },
+        { "file": "sdk/src/errors.ts", "line": 116, "note": "readonly kind: SdkErrorKind — the discriminant" },
+        { "file": "sdk/src/errors.ts", "line": 145, "note": "static fromNetworkError -> kind 'network'" },
+        { "file": "sdk/src/errors.test.ts", "line": 10, "note": "describe mapApiErrorCodeToKind" },
+        { "file": "sdk/src/errors.test.ts", "line": 21, "note": "it.each over every documented ApiErrorCode -> kind" },
+        { "file": "sdk/src/errors.test.ts", "line": 67, "note": "network kind via fromNetworkError" }
+      ],
+      "test_files_bearing": ["sdk/src/errors.test.ts", "sdk/src/client.test.ts", "sdk/src/__tests__/client.liveServer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949732432 (SDK unit tests step) + typecheck.log + tracer probe tsx scratchpad/sdk-probe.mts",
+        "result_excerpt": "CI: ✓ src/errors.test.ts (16 tests); ✓ src/client.liveServer.test.ts includes 'invalid token maps to kind auth' and 'unreachable baseUrl -> kind network'. typecheck.log:9 sdk Done (union compiles). Probe: unauthorized=>auth forbidden=>forbidden not_found=>not_found validation_failed=>validation rate_limited=>rate_limit server_error=>server ???=>server; a switch over all 7 kinds with a `never` default reached every branch; fromNetworkError().kind === 'network'"
+      },
+      "plain_english": "SDK errors must be a typed union keyed on a `kind` field so integrators can handle every case with a switch. sdk/src/errors.ts defines SdkErrorKind (the five quoted kinds plus 'forbidden' and 'network') and ShipSdkError carries it; errors.test.ts checks every server error code maps to the right kind. TRO-405 delivered it. Verified by today's CI run, this sweep's typecheck, and a probe.",
+      "notes": "TRO-405 implements the typed errors; TRO-407 wired them through the resource clients; TRO-397/TRO-495 (Done) are the server-side ApiError contract the mapping consumes (hardening on the other side). 'Exhaustively switchable' is a compile-time property of a closed string-literal union — derived from TypeScript semantics; the probe's `never`-default switch ran under tsx (types stripped) so it demonstrates runtime coverage of all 7 kinds, not the compile-time exhaustiveness check itself. No consumer-side TS exhaustiveness test exists (minor test-style gap carried from prior sweeps, not functional).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; verification re-pointed to today's CI run + typecheck + probe"
+    },
+    {
+      "id": "W6-R58",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-413"],
+      "evidence": [
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 300, "note": "comment: AC < 1ms per call; asserted at a generous 5ms mean to avoid runner-load flake" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 307, "note": "perf test: 100-iter warmup, 1000 timed iterations via real performance.now()" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 324, "note": "expect(meanMs).toBeLessThan(5)" },
+        { "file": "sdk/src/verifyWebhook.ts", "line": 185, "note": "the function under measurement" }
+      ],
+      "test_files_bearing": ["sdk/src/verifyWebhook.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "tracer probe (this sweep): node_modules/.bin/tsx scratchpad/perf-probe.mts — 1000 warmup + 20000 timed verifyWebhook() calls on a ~250-byte JSON body, real performance.now(), Node v23.2.0, this machine; plus gh run view 31949732432 SDK unit tests step",
+        "result_excerpt": "Probe: mean per call over 20000 iters: 0.0023 ms (<1ms? true). CI: ✓ src/verifyWebhook.test.ts (30 tests) incl. the <5ms-mean perf assertion, 115ms for the whole file"
+      },
+      "plain_english": "The signature check must take under 1 millisecond per call. The SDK suite has a perf test (verifyWebhook.test.ts) but it asserts a looser 5 ms ceiling to avoid flaky CI; to check the real target, this sweep timed the function directly: 0.0023 ms per call, about 400x under budget. TRO-413 delivered it. Nothing missing functionally; the only gap is that CI itself enforces 5 ms, not 1 ms.",
+      "notes": "TRO-413 implements. Prior sweep could not cite a measured mean; this sweep's probe supplies one (0.0023 ms, single machine, Apple-silicon dev box, not a CI runner). Test-style gap unchanged: the committed assertion is <5ms, so a regression to e.g. 3ms/call would pass CI while violating the requirement — a tighter assertion or a logged mean in CI output would close it. Also observed: CI drill-ttfe stage verify_webhook: 0ms (integer-ms resolution).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; upgraded evidence — a numeric measured mean (0.0023 ms) now exists where the prior sweep had only the 5ms assertion ceiling"
+    },
+    {
+      "id": "W6-R60",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-422"],
+      "evidence": [
+        { "file": ".github/workflows/ci.yml", "line": 238, "note": "step name: SDK size gate (<250 KB min+gz)" },
+        { "file": ".github/workflows/ci.yml", "line": 239, "note": "run: pnpm --filter @ship/sdk size-check" },
+        { "file": ".gitlab-ci.yml", "line": 160, "note": "same step on the GitLab pipeline" },
+        { "file": "sdk/package.json", "line": 32, "note": "\"size-check\": \"node scripts/measure-size.mjs\"" },
+        { "file": "sdk/package.json", "line": 34, "note": "\"dependencies\": {} — production deps only = the package itself" },
+        { "file": "sdk/scripts/measure-size.mjs", "line": 44, "note": "DEFAULT_THRESHOLD_KB = 250" },
+        { "file": "sdk/scripts/measure-size.mjs", "line": 55, "note": "checkSize(gzipBytes, thresholdKb) pure pass/fail" },
+        { "file": "sdk/scripts/measure-size.mjs", "line": 59, "note": "pass: gzipBytes < thresholdBytes (strict)" },
+        { "file": "sdk/src/__tests__/sizeGate.test.ts", "line": 27, "note": "describe 'PF-405: size gate decision logic (checkSize)'" },
+        { "file": "sdk/src/__tests__/sizeGate.test.ts", "line": 45, "note": "AC proof: simulated bloat against a lowered threshold FAILS the gate" }
+      ],
+      "test_files_bearing": ["sdk/src/__tests__/sizeGate.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "cd sdk && node scripts/measure-size.mjs (this sweep; esbuild write:false, nothing written); cd sdk && node scripts/measure-size.mjs --threshold-kb 1; gh run view 31949732432 step 'SDK size gate'",
+        "result_excerpt": "Local: minified 16.11 kB, min+gzip 4.63 kB, threshold 250 kB, PASS, exit 0. Simulated bloat (--threshold-kb 1): FAIL — 4.63 kB >= 1 kB threshold, exit 1. CI (13:32Z today): 'min+gzip: 4.63 kB (gzip level 9)' 'PASS — 4.63 kB < 250 kB.'; ✓ src/__tests__/sizeGate.test.ts (5 tests)"
+      },
+      "plain_english": "The SDK's installed size (production dependencies only, minified and gzipped) must stay under 250 KB, checked in CI. The SDK has zero runtime dependencies and sdk/scripts/measure-size.mjs bundles, minifies and gzips it (4.63 KB today, under 2% of budget); ci.yml and .gitlab-ci.yml both run it. TRO-422 delivered it. Re-measured this sweep and the gate also proven to fail when the bar is artificially lowered.",
+      "notes": "TRO-422 implements. sizeGate.test.ts hardcodes a stale 5085-byte figure for its pure-logic test (real is 4628 bytes) — cosmetic, the test exercises checkSize() only. Threshold uses decimal kB (1000 bytes), same convention as audit/bundle/measure.mjs.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; re-run this sweep with identical result (4.63 kB) plus the negative (threshold-override) run captured"
+    },
+    {
+      "id": "W6-R61",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-448", "TRO-450", "TRO-452", "TRO-451", "TRO-449", "TRO-445", "TRO-447", "TRO-598", "TRO-453", "TRO-454"],
+      "evidence": [
+        { "file": "pnpm-workspace.yaml", "line": 7, "note": "'integrations/*' — the workspace glob the three integration packages live under" },
+        { "file": "integrations/cli/package.json", "line": 2, "note": "1. CLI — @ship/cli (bin 'ship', line 8); TRO-448/450/452" },
+        { "file": "integrations/slack/package.json", "line": 2, "note": "2. Slack — @ship/slack-integration; TRO-451" },
+        { "file": "integrations/slack/src/server.ts", "line": 82, "note": "Slack receiver verifies every delivery with verifyWebhook before posting" },
+        { "file": "integrations/slack/src/server.ts", "line": 109, "note": "posts document.created / issue.assigned via chat.postMessage" },
+        { "file": "integrations/browser-demo/package.json", "line": 2, "note": "3. Browser SDK demo — @ship/browser-demo; TRO-449" },
+        { "file": "integrations/browser-demo/src/main.ts", "line": 41, "note": "SPA uses LocalStorageTokenStore + ShipClient.authorizationCodeFlow (PKCE, no secret in browser)" },
+        { "file": "e2e/oauth-refresh-rotation-stolen-token.spec.ts", "line": 153, "note": "4. Refresh-rotation drill (PF-800/TRO-445) — lives as an e2e spec, not under integrations/" },
+        { "file": "e2e/webhook-idempotency-key-drill.spec.ts", "line": 197, "note": "5. Idempotency-Key drill (PF-801/TRO-447) — e2e spec" }
+      ],
+      "test_files_bearing": ["integrations/cli/src/commands/login.test.ts", "integrations/cli/src/commands/docs.test.ts", "integrations/cli/src/commands/webhooksTail.test.ts", "integrations/cli/src/__tests__/login.liveServer.test.ts", "integrations/cli/src/__tests__/docs.liveServer.test.ts", "integrations/slack/src/server.test.ts"],
+      "e2e_specs_bearing": ["e2e/browser-demo-pkce.spec.ts", "e2e/oauth-refresh-rotation-stolen-token.spec.ts", "e2e/webhook-idempotency-key-drill.spec.ts"],
+      "verification": {
+        "command": "typecheck.log (this sweep); gh run view 31949732432 (CLI unit tests step); local Playwright artifacts read (NOT launched by tracer): test-results/progress.jsonl + playwright-report/index.html, mtime 2026-08-16T13:43Z",
+        "result_excerpt": "typecheck.log:14 'integrations/cli type-check: Done', :16 'integrations/browser-demo type-check: Done', :19 'integrations/slack type-check: Done'. CI: CLI Test Files 9 passed / Tests 58 passed. Local Playwright (13:43Z): browser-demo-pkce.spec.ts 3/3 passed; oauth-refresh-rotation-stolen-token.spec.ts 'rotate -> replay the old refresh token -> family invalidated…' passed (384ms); webhook-idempotency-key-drill.spec.ts 'deliver -> replay via API -> reference subscriber dedupes…' passed (2108ms)"
+      },
+      "plain_english": "The brief scores implementing at least five of seven listed integrations/flows. Five are real: (1) the CLI at integrations/cli, (2) the Slack receiver at integrations/slack, (3) the browser PKCE demo at integrations/browser-demo, (4) the refresh-rotation stolen-token drill at e2e/oauth-refresh-rotation-stolen-token.spec.ts, and (5) the Idempotency-Key replay drill at e2e/webhook-idempotency-key-drill.spec.ts. All three packages type-check this sweep, the CLI's tests passed in today's CI, and both drills passed in a local Playwright run today. The two not built — GitHub App and plugin runtime — are the brief's own stretch items (TRO-453/454, Backlog).",
+      "notes": "Implementing tickets: TRO-448/450/452 (CLI, all Done), TRO-451 (Slack, Done), TRO-449 (browser demo, Done), TRO-445 (PF-800 drill, Done), TRO-447 (PF-801 drill, Done). Not counted / not present: TRO-453 GitHub App and TRO-454 plugin runtime — both Backlog, explicitly STRETCH in PLUGFORGE and optional in the requirement. Hardening in flight: TRO-598 (In Progress, PR #274) adds a machine-readable discriminator to the PF-800 drill's 'distinguishable error' — the drill passes today without it. Two gating gaps worth recording (do not change the count-of-five but weaken 'gated deliverables'): (a) integrations/slack's own vitest suite (server.test.ts, 6 tests) is NOT run anywhere — not in root `pnpm test` (package.json:28 lists api/web/agent/sdk/cli only), not in ci.yml, .gitlab-ci.yml or scripts/factory/gate.sh (grep -i slack: zero hits) — only its type-check runs; (b) the two drill e2e specs and browser-demo-pkce.spec.ts are not executed in CI (ci.yml:405 runs only two agent e2e specs) — evidence for them is local runs. Suggested hardening (not scope for this row): add `pnpm --filter @ship/slack-integration test` to root test + CI verify job; consider adding the three specs to the CI e2e job. Provenance: the Playwright artifacts are gitignored files this tracer read, from a run it did not launch — main session should confirm it was its own run at 13:43Z.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict and same five counted; verification now also cites today's CI CLI test run and an observed local Playwright pass of both drills; newly recorded that the Slack suite is not wired into any test runner/CI (prior said 'typechecks clean' only, which remains the only automated coverage)"
+    },
+    {
+      "id": "W6-R62",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-448", "TRO-450", "TRO-452", "TRO-455", "TRO-425"],
+      "evidence": [
+        { "file": "integrations/cli/package.json", "line": 8, "note": "bin: \"ship\": \"./dist/bin.js\"" },
+        { "file": "integrations/cli/src/bin.ts", "line": 23, "note": ".command('login')" },
+        { "file": "integrations/cli/src/bin.ts", "line": 60, "note": "docs .command('ls')" },
+        { "file": "integrations/cli/src/bin.ts", "line": 74, "note": "docs .command('get')" },
+        { "file": "integrations/cli/src/bin.ts", "line": 90, "note": "docs .command('create')" },
+        { "file": "integrations/cli/src/bin.ts", "line": 113, "note": "webhooks .command('tail')" },
+        { "file": "integrations/cli/src/commands/login.ts", "line": 66, "note": "runLogin -> ShipClient.deviceLogin({...}) — RFC 8628 device flow via the SDK" },
+        { "file": "integrations/cli/src/commands/docs.ts", "line": 125, "note": "ship docs ls pages via client.documents.iterate()" },
+        { "file": "integrations/cli/src/commands/docs.ts", "line": 146, "note": "runDocsGet" },
+        { "file": "integrations/cli/src/commands/docs.ts", "line": 175, "note": "runDocsCreate" },
+        { "file": "integrations/cli/src/commands/webhooksTail.ts", "line": 322, "note": "runWebhooksTail — local listener + subscription + stream" },
+        { "file": "integrations/cli/src/commands/webhooksTail.ts", "line": 206, "note": "each delivery checked live with verifyWebhook() -> ✓ verified / ✗ rejected" },
+        { "file": "integrations/cli/src/commands/webhooksTail.test.ts", "line": 79, "note": "prints ✓ verified line + 200 for a valid signature" },
+        { "file": "integrations/cli/src/commands/webhooksTail.test.ts", "line": 99, "note": "prints ✗ rejected + 401 under the wrong secret" },
+        { "file": "integrations/cli/src/__tests__/login.liveServer.test.ts", "line": 196, "note": "ship login end-to-end against a real spawned Ship API" },
+        { "file": "integrations/cli/src/__tests__/docs.liveServer.test.ts", "line": 156, "note": "ship docs ls|get|create end-to-end against a real spawned Ship API" },
+        { "file": "scripts/drill/ttfe.ts", "line": 19, "note": "TTFE drill stages: install SDK -> device_login -> webhook_create -> document_create -> first verified event (the five-line story, SDK-driven, in CI)" },
+        { "file": ".github/workflows/ci.yml", "line": 228, "note": "CI step 'CLI unit tests': pnpm --filter @ship/cli test" },
+        { "file": ".github/workflows/ci.yml", "line": 418, "note": "drill-ttfe CI job" }
+      ],
+      "test_files_bearing": ["integrations/cli/src/commands/login.test.ts", "integrations/cli/src/commands/docs.test.ts", "integrations/cli/src/commands/webhooksTail.test.ts", "integrations/cli/src/commands/whoami.test.ts", "integrations/cli/src/__tests__/login.liveServer.test.ts", "integrations/cli/src/__tests__/docs.liveServer.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949732432 (CLI unit tests step + drill-ttfe job); tracer probe: cd integrations/cli && ../../node_modules/.bin/tsx src/bin.ts --help / docs --help / webhooks --help / webhooks tail --help; typecheck.log",
+        "result_excerpt": "CI: ✓ src/commands/webhooksTail.test.ts (12); ✓ src/commands/docs.test.ts (16); ✓ src/commands/login.test.ts (5); ✓ src/__tests__/docs.liveServer.test.ts (2); ✓ src/__tests__/login.liveServer.test.ts (1); Test Files 9 passed / Tests 58 passed. drill-ttfe: install_sdk 3193ms, device_login 75ms, webhook_create 16ms, document_create 14ms, wait_for_delivery 690ms, verify_webhook 0ms, total 3988ms / 60000ms budget, verdict: pass. Probe: `ship --help` lists login/whoami/docs/webhooks; `ship docs --help` lists ls/get/create; `ship webhooks --help` lists tail; exit 0. typecheck.log:14 integrations/cli Done."
+      },
+      "plain_english": "The must-ship CLI needs `ship login` (device flow), `ship docs ls/get/create`, and `ship webhooks tail` that streams signature-verified deliveries. All are registered in integrations/cli/src/bin.ts and implemented in commands/login.ts, docs.ts and webhooksTail.ts on top of the SDK only; TRO-448, TRO-450 and TRO-452 delivered them and TRO-455's TTFE drill runs the install→login→subscribe→first-verified-event story in CI. Today's CI run passed all 58 CLI tests and the drill; this sweep also confirmed the command surface via --help. Nothing missing.",
+      "notes": "TRO-448 implements login (+whoami), TRO-450 docs ls/get/create, TRO-452 webhooks tail; TRO-455 (Done) is the CI'd five-line-story drill (SDK-driven, not literally invoking the CLI binary); TRO-425 (Done) is the server device grant. integrations/cli/dist is not built in this checkout (bin.js absent) — the probe ran src/bin.ts via tsx; CI builds it. The '✓ verified' streaming behaviour is proven by webhooksTail.test.ts's real local listener + real HTTP deliveries (12 tests) rather than a Playwright e2e.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; prior evidence entries pointing at branch feat/pf-602-webhooks-tail replaced with on-main file:line (PR #257 merged); verification re-pointed to today's CI run + --help probe"
+    },
+    {
+      "id": "W6-R51",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-449", "TRO-597"],
+      "evidence": [
+        { "file": "e2e/browser-demo-pkce.spec.ts", "line": 66, "note": "clock starts at the user's click (roundTripStartMs)" },
+        { "file": "e2e/browser-demo-pkce.spec.ts", "line": 77, "note": "logs '[TRO-449] Browser demo PKCE round trip (click -> documents rendered): Nms'" },
+        { "file": "e2e/browser-demo-pkce.spec.ts", "line": 78, "note": "expect(roundTripMs).toBeLessThan(3000) — full browser round trip" },
+        { "file": "e2e/oauth-pkce-chain.spec.ts", "line": 210, "note": "roundTripMs = Date.now() - authorizeNavStartMs (authorize nav -> token response)" },
+        { "file": "e2e/oauth-pkce-chain.spec.ts", "line": 236, "note": "logs '[TRO-597] PKCE round trip (authorize nav -> token response): Nms'" },
+        { "file": "e2e/oauth-pkce-chain.spec.ts", "line": 237, "note": "expect(roundTripMs).toBeLessThan(3000) — target asserted directly (W6-R51)" },
+        { "file": "CHANGES.md", "line": 5885, "note": "recorded observation from TRO-597's PR: 87ms" }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": ["e2e/browser-demo-pkce.spec.ts", "e2e/oauth-pkce-chain.spec.ts"],
+      "verification": {
+        "command": "READ (not launched by this tracer) local Playwright artifacts: test-results/progress.jsonl (ts 1786887833399 = 2026-08-16T13:43:53Z) and the console attachments inside playwright-report/index.html's embedded report zip; both files are gitignored",
+        "result_excerpt": "browser-demo-pkce.spec.ts 'Connect to Ship -> consent -> documents list, real browser round trip': passed — console '[TRO-449] Browser demo PKCE round trip (click -> documents rendered): 214ms'; oauth-pkce-chain.spec.ts 'graded scenario: authorize -> consent -> token -> …/api/v1/me': passed — console '[TRO-597] PKCE round trip (authorize nav -> token response): 95ms'. Both < 3000ms."
+      },
+      "plain_english": "The OAuth code + PKCE login round trip must complete in under 3 seconds at the 95th percentile. Two Playwright specs time it — the browser demo end-to-end (click to documents rendered) and the API-level authorize→token leg — and both assert under 3000 ms. A local run today measured 214 ms and 95 ms respectively; TRO-449 and TRO-597 delivered the measurements. Caveat: these are single samples on a local machine, not a computed P95 across many runs, and the specs are not part of CI.",
+      "notes": "TRO-449 (Done) added the browser-demo timing; TRO-597 (Done) added the API-chain timing. Precision caveats (unchanged from prior sweep): (1) each spec asserts ONE sample against 3000ms, not a P95 statistic over N runs; (2) measured on localhost with no real network latency; (3) neither spec runs in CI — ci.yml:405's e2e job runs only e2e/agent-detection-latency.spec.ts and e2e/agent-chat-grounded-response.spec.ts — so this is not continuously enforced. Provenance: verification rests on gitignored local artifacts from a Playwright run at 13:43Z today that this tracer did NOT launch (its progress.jsonl also lists developer-portal-* specs, so it looks like a targeted PF/e2e subset run by the main session); if the main session cannot vouch for that run, downgrade to IMPLEMENTED-UNVERIFIED — the file:line trace stands either way. Margin vs target is ~14-30x, so the P95-vs-single-sample distinction is not material to pass/fail.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded from IMPLEMENTED-UNVERIFIED because a run artifact with measured numbers (214ms / 95ms, both specs passed, 2026-08-16T13:43Z) now exists — conditional on the main session confirming it launched that run"
+    },
+    {
+      "id": "W6-R69",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-399", "TRO-448", "TRO-500", "TRO-496"],
+      "evidence": [
+        { "file": "pnpm-workspace.yaml", "line": 7, "note": "'integrations/*' — integrations live under integrations/ as workspace packages" },
+        { "file": "scripts/check-integration-deps.mjs", "line": 44, "note": "ALLOWED_RUNTIME_DEP = '@ship/sdk'" },
+        { "file": "scripts/check-integration-deps.mjs", "line": 52, "note": "checkPackageDeps(pkgJson): flags any integrations/* runtime dependency other than @ship/sdk" },
+        { "file": "scripts/__tests__/check-integration-deps.test.mjs", "line": 47, "note": "node:test — @ship/sdk PLUS express reports a violation naming express" },
+        { "file": "scripts/__tests__/check-integration-deps.test.mjs", "line": 128, "note": "node:test — a violating package on disk is caught by name" },
+        { "file": ".github/workflows/ci.yml", "line": 118, "note": "CI step: node scripts/check-integration-deps.mjs" },
+        { "file": ".github/workflows/ci.yml", "line": 124, "note": "CI step: node --test scripts/__tests__/check-integration-deps.test.mjs" },
+        { "file": ".gitlab-ci.yml", "line": 97, "note": "same check on the GitLab (graded) pipeline (test at line 103)" },
+        { "file": "scripts/factory/gate.sh", "line": 285, "note": "same check wired into the local factory gate" },
+        { "file": "integrations/cli/package.json", "line": 23, "note": "cli: dependencies = { \"@ship/sdk\": \"workspace:*\" } only" },
+        { "file": "integrations/slack/package.json", "line": 16, "note": "slack: dependencies = @ship/sdk only (express/@slack/web-api are devDeps, bundled by scripts/build.mjs)" },
+        { "file": "integrations/browser-demo/package.json", "line": 15, "note": "browser-demo: dependencies = @ship/sdk only" },
+        { "file": "integrations/slack/scripts/build.mjs", "line": 4, "note": "documents why express/@slack/web-api/zod are build-time (bundled) not runtime deps" },
+        { "file": "CHANGES.md", "line": 2707, "note": "TRO-448 record: commander/pg are devDependencies only, per PF-600's own instruction" },
+        { "file": "PLUGFORGE.MD", "line": 220, "note": "PF-003 as specified: 'workspace rule + lint: integrations/* depend only on @ship/sdk; CI fails on violation'" }
+      ],
+      "test_files_bearing": ["scripts/__tests__/check-integration-deps.test.mjs"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "node scripts/check-integration-deps.mjs (this sweep); node --test scripts/__tests__/check-integration-deps.test.mjs (this sweep); node scripts/check-integration-deps.mjs --dir <scratchpad dir containing a package.json declaring express as a runtime dep> (this sweep); grep for api/src imports under integrations/*/src; gh run view 31949732432 steps 'Integration package dependency boundary' + 'check-integration-deps regression test'",
+        "result_excerpt": "Real tree: 'check-integration-deps: OK — 3 package(s) checked (browser-demo, cli, slack), all depend only on @ship/sdk.' exit 0. node:test: 10 pass / 0 fail. Scratch violation: 'FAIL — 1 runtime-dependency violation(s) found … @ship/bad-integration: \"express\": \"4.0.0\"' exit 1. grep: zero imports of api/src (or ../api/) in integrations/{cli,slack,browser-demo}/src — the only api/ references are the two liveServer tests spawning `pnpm --filter @ship/api exec tsx` as a separate OS process, and browser-demo/scripts/seed-oauth-app.mjs reading api/.env.local (a config file, not code). CI today: both steps success ('OK — 3 package(s) checked', '# pass 10')."
+      },
+      "plain_english": "External integrations must live under integrations/ and depend only on the public SDK, never on the API's internal source, and a workspace rule must enforce that. All three integrations are under integrations/, each declares @ship/sdk as its sole runtime dependency, and scripts/check-integration-deps.mjs (run in both CI pipelines and the local factory gate) fails the build if any other runtime dependency appears; TRO-399 delivered it. This sweep re-ran the check (passes), its 10 tests (pass), and proved it fails on a deliberately violating package. No integration source imports api/src.",
+      "notes": "TRO-399 implements the rule + CI wiring; TRO-448 (Done) added it to scripts/factory/gate.sh. TRO-500 (In Progress) and TRO-496 (Backlog) are boundary-lint hardening for the OTHER half of PF-003 (api/src/platform/api/v1 must not import api/src/routes) — related, not this requirement. Precision on 'enforced': the mechanism is a package.json runtime-dependency check, matching the requirement's literal 'workspace dependency rule'; PLUGFORGE.MD:220 additionally asked for a lint half ('workspace rule + lint') and no ESLint import rule scoped to integrations/* exists (eslint.config.mjs's integrations/cli block carries only general correctness rules) — so a hypothetical relative import of ../../../api/src/... from cli/src would not be caught by the dependency script. Derived (not run): integrations/cli and slack tsconfig set rootDir './src', so tsc would reject a source file outside src (TS6059) — an incidental guard, not documented enforcement. Third-party plumbing (commander in cli, express/@slack/web-api/zod in slack) is imported at runtime but declared as devDependencies — deliberate and documented (CHANGES.md:2706-2708; slack bundles them via scripts/build.mjs) and explicitly permitted by PF-600's wording; read here as consistent with 'import only @ship/sdk' meaning 'no Ship-internal import other than the SDK'.",
+      "suggested_scope": null,
+      "assumption": "'import only @ship/sdk — never api/src/' is read as forbidding Ship-internal imports other than the SDK (api/src, shared/src, web/src), not as forbidding third-party plumbing packages like commander/express, which PLUGFORGE PF-600 explicitly allows.",
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded from IMPLEMENTED-UNVERIFIED because the check, its regression tests, and a violation-fails demonstration all ran this sweep (and CI ran them today on identical code); evidence expanded with the three package.json dependency blocks and the documented devDeps rationale"
+    }
+  ],
+  "commands_run": [
+    { "command": "tail -50 audit/requirements/sweep-w6-2026-08-16b/test.log; grep -n 'Test Files' test.log; head -20 test.log; grep '\"test' package.json", "result": "test.log complete: api 1 failed (activity.test.ts) / 124 passed; ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL; root test script is an && chain so test:sdk and test:cli never ran this sweep", "bears_on": ["W6-R9", "W6-R30", "W6-R31", "W6-R32", "W6-R33", "W6-R34", "W6-R58", "W6-R60", "W6-R62"] },
+    { "command": "cat -n audit/requirements/sweep-w6-2026-08-16b/typecheck.log", "result": "exit 0; sdk, integrations/cli, integrations/browser-demo, integrations/slack all 'type-check: Done'", "bears_on": ["W6-R9", "W6-R30", "W6-R34", "W6-R61", "W6-R62"] },
+    { "command": "git log --since=2026-08-16T06:00Z -- sdk integrations scripts/check-integration-deps.mjs scripts/__tests__ e2e/<4 specs> .github/workflows/ci.yml .gitlab-ci.yml pnpm-workspace.yaml; git merge-base --is-ancestor 9d744017 HEAD; git diff --stat 9d744017 HEAD -- sdk integrations scripts e2e .github .gitlab-ci.yml", "result": "no cluster-D file changed since the prior sweep (last touch ab35c3a4 06:50Z, before prior sweep); 9d744017 is an ancestor of HEAD and the diff for cluster paths is empty", "bears_on": ["W6-R9", "W6-R30", "W6-R31", "W6-R32", "W6-R33", "W6-R34", "W6-R58", "W6-R60", "W6-R61", "W6-R62", "W6-R51", "W6-R69"] },
+    { "command": "gh run list --repo troysatchell/ship --branch main --limit 8; gh run view 31949732432 --json jobs; gh run view --job 95171252304 --log; gh run view --job <drill-ttfe> --log", "result": "CI run 31949732432 (push, main, 9d744017, 2026-08-16T13:24:39Z) success; verify job: Type check ✓, Integration package dependency boundary ✓, check-integration-deps regression test ✓, SDK unit tests ✓ (25 files/229 tests, every file listed ✓), CLI unit tests ✓ (9 files/58 tests), SDK size gate ✓ (4.63 kB PASS); drill-ttfe ✓ (total 3988ms/60000ms, verdict pass)", "bears_on": ["W6-R9", "W6-R30", "W6-R31", "W6-R32", "W6-R33", "W6-R34", "W6-R58", "W6-R60", "W6-R61", "W6-R62", "W6-R69"] },
+    { "command": "cd sdk && node scripts/measure-size.mjs; cd sdk && node scripts/measure-size.mjs --threshold-kb 1", "result": "min+gzip 4.63 kB < 250 kB PASS exit 0; with 1 kB override: FAIL exit 1 (gate proven to fail on bloat)", "bears_on": ["W6-R60", "W6-R9"] },
+    { "command": "node_modules/.bin/tsx <scratchpad>/perf-probe.mts (imports sdk/src/verifyWebhook.ts; signs a ~250B body with node:crypto HMAC; checks valid/tampered/missing-v1/expired; 1000 warmup + 20000 timed calls)", "result": "valid? true; tampered? false; missing v1? false; expired? false; mean per call 0.0023 ms (<1ms true) — Node v23.2.0, local machine", "bears_on": ["W6-R33", "W6-R58"] },
+    { "command": "node_modules/.bin/tsx <scratchpad>/sdk-probe.mts (imports sdk/src/index.ts; stubs global fetch with 3 pages; runs client.documents.iterate() full + early-break; mapApiErrorCodeToKind over all codes; switch over all 7 kinds; fromNetworkError)", "result": "full walk d1..d5, 3 requests first>c1>c2, no next_cursor/data on yielded items; early break -> 1 request; code->kind mapping as documented, unknown -> server; all 7 kinds reached; network kind OK", "bears_on": ["W6-R32", "W6-R34"] },
+    { "command": "node scripts/check-integration-deps.mjs; node --test scripts/__tests__/check-integration-deps.test.mjs; node scripts/check-integration-deps.mjs --dir <scratchpad>/viol (contains bad/package.json with express as a runtime dep)", "result": "OK — 3 packages, exit 0; 10 pass / 0 fail; scratch violation FAIL naming express, exit 1", "bears_on": ["W6-R69"] },
+    { "command": "grep -rn for api/src / ../api/ / @ship/api imports under integrations/{cli,slack,browser-demo}/src and scripts; grep -rhn \"^import .* from '[^./]\" for non-sdk runtime imports", "result": "no api/src imports in any integration source; runtime third-party imports found: commander (cli), express/express-rate-limit/@slack/web-api/zod (slack) — all declared as devDependencies", "bears_on": ["W6-R69"] },
+    { "command": "cd integrations/cli && ../../node_modules/.bin/tsx src/bin.ts --help; ... docs --help; ... webhooks --help; ... webhooks tail --help", "result": "exit 0; commands login, whoami, docs {ls,get,create}, webhooks {tail} registered (dist/bin.js not built in this checkout, so probed from source)", "bears_on": ["W6-R62"] },
+    { "command": "jq over test-results/progress.jsonl; python3 extraction of console attachments from playwright-report/index.html embedded zip (both gitignored, mtime 2026-08-16T13:43Z; run NOT launched by this tracer)", "result": "browser-demo-pkce.spec.ts 3/3 passed (round trip 214ms); oauth-pkce-chain.spec.ts 2/2 passed (95ms); oauth-refresh-rotation-stolen-token.spec.ts passed; webhook-idempotency-key-drill.spec.ts passed", "bears_on": ["W6-R51", "W6-R61", "W6-R31"] },
+    { "command": "grep -rn -i slack .github/workflows/*.yml .gitlab-ci.yml scripts/factory/gate.sh package.json", "result": "zero hits — integrations/slack's vitest suite is not executed by any runner or CI job (type-check only)", "bears_on": ["W6-R61"] },
+    { "command": "sed -n '<line>p' on every cited file:line above (batched)", "result": "all citations opened and matched their notes", "bears_on": ["W6-R9", "W6-R30", "W6-R31", "W6-R32", "W6-R33", "W6-R34", "W6-R58", "W6-R60", "W6-R61", "W6-R62", "W6-R51", "W6-R69"] }
+  ]
+}

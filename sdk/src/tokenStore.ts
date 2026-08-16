@@ -78,6 +78,9 @@ export class MemoryTokenStore implements ITokenStore {
 // graph, REGARDLESS of tree-shaking or `sideEffects: false` (verified
 // empirically — see CHANGES.md TRO-449 for the full investigation). Keeping
 // `fs`/`path` out of this file entirely is what makes `MemoryTokenStore`/
-// `ITokenStore`/`TokenSet` genuinely safe for a browser barrel import; the
-// browser demo (PF-802) itself uses `localStorage` directly rather than
-// either built-in store.
+// `ITokenStore`/`TokenSet` genuinely safe for a browser barrel import.
+// The third built-in store, `LocalStorageTokenStore` (TRO-617, ruling I-06),
+// lives in `localStorageTokenStore.ts` and IS exported from the main barrel:
+// it has zero deps and never touches `localStorage` at module load, so it is
+// browser-safe and Node-importable alike (only get/set/clear require the
+// global). The browser demo (PF-802) consumes it from `@ship/sdk`.
