@@ -6,6 +6,64 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes
+
+**Non-code / CI-config ticket — `terraform validate`-style proof, not vitest** (same disclosed-exception
+class as TRO-488/TF-1..TF-10: no unit test can exercise a GitHub Actions CodeQL config, so the proof is
+static verification of the config plus confirmation against the *live* alerts it addresses).
+
+**What was flagged.** `api/src/platform/oauth/__tests__/device.test.ts:51` defines `introspectionApp`, a
+scratch `express()` instance created purely to mount the real `bearerAuth` middleware and prove it works
+(`GET /scratch-protected`) — never imported by `api/src/app.ts`, never reachable in production. CodeQL's
+`js/missing-rate-limiting` query has no way to distinguish a test fixture from a real route and flagged it
+as an unprotected production endpoint. Same blind-spot class TRO-307 already documented for this query.
+
+**Verified beyond the ticket's own claim, not just trusted.** Pulled the live open alerts via
+`gh api code-scanning/alerts` rather than assuming the ticket's one cited instance was the only one:
+found **5** open alerts rooted in the same "CodeQL treats test helper code as production" pattern, not 1:
+- `#371` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/device.test.ts:51` (the ticket's
+  own citation).
+- `#369` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/token.test.ts:61`, an identical
+  scratch-app pattern the ticket didn't mention.
+- `#4`/`#5` `js/incomplete-multi-character-sanitization` — `web/src/components/editor/lowlight.test.ts:176,191`,
+  a naive `html.replace(/<[^>]*>/g, '')` used only to strip markup for a test assertion, not shipped
+  sanitization logic. Read in full before including in scope.
+- `#6` `js/incomplete-sanitization` — `web/src/lib/radixVersionDedupe.test.ts:47`, a regex parsing
+  `pnpm-lock.yaml` inside a test helper, not user input handling. Also read in full before including.
+
+All five are the same root cause (test/fixture code scanned as if it were production surface), so the fix
+is scoped to test-file paths generally — as the ticket's own suggested fix asked for — rather than only
+the one file it cited, since a file-by-file allowlist would leave every *future* scratch test app hitting
+this again.
+
+**Fix.** New `.github/codeql/codeql-config.yml` (didn't exist before — repo had no CodeQL config file,
+only workflow-inline `init`/`analyze` steps) with `paths-ignore: ['**/__tests__/**', '**/*.test.ts',
+'**/*.test.tsx']`. Wired in via `config-file:` on the existing `Initialize CodeQL` step in
+`.github/workflows/ci.yml` (`codeql` job) — one line added, nothing else in that job changed.
+
+**Proof.**
+- `python3 -c "import yaml; yaml.safe_load(...)"` — both the new config file and the edited
+  `ci.yml` parse as valid YAML.
+- Confirmed the three glob patterns actually match all 5 flagged files (`__tests__/` directory segment
+  or a `.test.ts`/`.test.tsx` suffix) and do not match any production entry point — `api/src/app.ts`
+  mounts none of `bearerAuth`'s test-only callers, confirmed via `grep` for `scratch-protected`/
+  `introspectionApp` returning zero hits outside the test file.
+- Cannot run CodeQL's actual analysis locally (GitHub-hosted action, no local CLI in this repo's
+  toolchain) — the real green/red proof is the next `security scan (CodeQL)` run on this PR's own CI,
+  which analyzes this exact config. Flagging this limitation rather than asserting local verification
+  that didn't happen.
+
+**Scope note.** Did not dismiss alerts `#371`/`#369`/`#4`/`#5`/`#6` via the API (the TRO-587/TRO-492
+precedent for confirmed false positives) — excluding the paths going forward is the ticket's actual ask;
+whether GitHub auto-resolves the existing alert records once the paths stop being analyzed, or whether
+they need a manual dismissal pass, is not yet observed and is worth a fast follow-up if they don't
+clear on their own after this merges.
+
+**Rollback.** Revert this commit — deletes `.github/codeql/codeql-config.yml` and the `config-file:`
+line in `ci.yml`; CodeQL returns to scanning every path, including test fixtures.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth

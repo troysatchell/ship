@@ -1,0 +1,14 @@
+name: "Ship CodeQL config"
+
+# TRO-590: js/missing-rate-limiting (and similar route/middleware queries)
+# was flagging scratch Express apps defined inside test files — e.g.
+# api/src/platform/oauth/__tests__/device.test.ts's `introspectionApp`,
+# which mounts the real `bearerAuth` middleware on a `/scratch-protected`
+# route purely to prove the middleware works, and is never imported by
+# api/src/app.ts or reachable in production. Excluding test files stops
+# CodeQL treating their fixtures as production attack surface, consistent
+# with the same blind spot TRO-307 already documented for this query.
+paths-ignore:
+  - "**/__tests__/**"
+  - "**/*.test.ts"
+  - "**/*.test.tsx"
