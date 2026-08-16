@@ -110,6 +110,10 @@ export type { ApiErrorCode, ApiErrorBody, SdkErrorKind, SdkErrorShape } from './
 
 export { MemoryTokenStore } from './tokenStore.js';
 export type { ITokenStore, TokenSet } from './tokenStore.js';
+// TRO-617 (ruling I-06): the browser store ships in the SDK. Zero deps, no
+// top-level `localStorage` access, so this barrel stays Node-importable.
+export { LocalStorageTokenStore } from './localStorageTokenStore.js';
+export type { LocalStorageTokenStoreOptions } from './localStorageTokenStore.js';
 
 export { generatePkcePair } from './pkce.js';
 export type { PkcePair } from './pkce.js';

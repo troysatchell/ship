@@ -1,5 +1,4 @@
-import { ShipClient, type Document } from '@ship/sdk';
-import { LocalStorageTokenStore } from './localStorageTokenStore.js';
+import { ShipClient, LocalStorageTokenStore, type Document } from '@ship/sdk';
 
 /**
  * Ship browser SDK demo (PF-802, PLUGFORGE.MD §4). No secret ever touches
@@ -38,7 +37,9 @@ const API_BASE_URL = injectedConfig?.apiBaseUrl ?? import.meta.env.VITE_SHIP_API
 const REDIRECT_URI = injectedConfig?.redirectUri ?? import.meta.env.VITE_SHIP_REDIRECT_URI ?? window.location.origin + '/';
 const SCOPE = injectedConfig?.scope ?? import.meta.env.VITE_SHIP_SCOPE ?? 'documents:read';
 
-const tokenStore = new LocalStorageTokenStore();
+// TRO-617: the store now ships in @ship/sdk. The demo's historical key is kept
+// so logins persisted by the pre-SDK copy of this store survive the switch.
+const tokenStore = new LocalStorageTokenStore({ storageKey: 'ship_browser_demo_tokens' });
 const app = document.querySelector<HTMLDivElement>('#app');
 
 function requireApp(): HTMLDivElement {
