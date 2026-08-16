@@ -192,8 +192,12 @@ describe(
       baseUrl = `http://127.0.0.1:${port}`;
 
       // The real seed function PF-701 ships, PF-702's boot path calls this
-      // exact function (index.ts:102) — not a hand-rolled fixture.
-      process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = `tro440-fleetgraph-secret-${RUN_ID}`;
+      // exact function (index.ts:102) — not a hand-rolled fixture. Captured
+      // into a local const (rather than re-reading process.env with a `!`
+      // assertion below) — this test sets the value itself two lines above,
+      // so there is a real, provable non-null value to hold onto directly.
+      const fleetgraphSecret = `tro440-fleetgraph-secret-${RUN_ID}`;
+      process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = fleetgraphSecret;
       await seedFirstPartyApp(pool, workspaceId);
 
       // The real Client Credentials grant (PF-104's issueClientCredentialsToken,
@@ -202,7 +206,7 @@ describe(
       appIdentityClient = await SdkShipClient.clientCredentials({
         baseUrl,
         clientId: FLEETGRAPH_CLIENT_ID,
-        clientSecret: process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR]!,
+        clientSecret: fleetgraphSecret,
         scope: FLEETGRAPH_APP_SCOPES.join(' '),
       });
       // The access token itself, for the one raw fetch() header-observation
@@ -215,7 +219,7 @@ describe(
         body: new URLSearchParams({
           grant_type: 'client_credentials',
           client_id: FLEETGRAPH_CLIENT_ID,
-          client_secret: process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR]!,
+          client_secret: fleetgraphSecret,
           scope: FLEETGRAPH_APP_SCOPES.join(' '),
         }).toString(),
       });
@@ -286,13 +290,17 @@ describe(
 
         const createAudit = await pollForAuditRows('/api/v1/documents', 'POST', 'user_id', userId, 1);
         expect(createAudit.length).toBeGreaterThan(0);
+        // Same "explicit runtime guard, not a `!` assertion" convention
+        // gateWriteBoundary.dbRoundTrip.test.ts's own `insertedId` uses —
+        // `expect(...).toBeDefined()` proves this at runtime but does not
+        // narrow the type, so the guard below does both.
         const writeRow = createAudit[createAudit.length - 1];
-        expect(writeRow).toBeDefined();
-        expect(writeRow!.user_id).toBe(userId);
+        if (!writeRow) throw new Error('expected at least one POST /api/v1/documents audit row for this write, found none');
+        expect(writeRow.user_id).toBe(userId);
         // The negative half of the claim: attributed to the human, NOT the app.
-        expect(writeRow!.app_client_id).toBeNull();
-        expect(writeRow!.status).toBeGreaterThanOrEqual(200);
-        expect(writeRow!.status).toBeLessThan(300);
+        expect(writeRow.app_client_id).toBeNull();
+        expect(writeRow.status).toBeGreaterThanOrEqual(200);
+        expect(writeRow.status).toBeLessThan(300);
       },
       15_000
     );
