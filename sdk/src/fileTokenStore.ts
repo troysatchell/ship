@@ -73,10 +73,20 @@ function isErrnoException(error: unknown): error is NodeJS.ErrnoException {
  * `set()` instead serializes to a uniquely-named temp file **in the same
  * directory** as `filePath` (same directory, and therefore guaranteed same
  * filesystem/mount — POSIX `rename(2)`'s atomicity guarantee only holds
- * within one filesystem; a temp dir elsewhere could cross a mount boundary
- * and silently fall back to a non-atomic copy+delete), then `fs.rename()`s
- * it over `filePath`. `rename(2)` atomically replaces the destination: any
- * reader opening `filePath` at any point either gets the complete prior
+ * within one filesystem; a temp dir elsewhere could cross a mount boundary).
+ * Node's `fs.promises.rename()` is a thin wrapper over the `rename(2)`
+ * syscall with no cross-filesystem fallback of its own (unlike higher-level
+ * helpers such as `fs-extra`'s `move()`) — crossing a mount boundary makes
+ * it REJECT with `EXDEV`, not silently degrade to a non-atomic copy+delete.
+ * That EXDEV would propagate out of `set()` as a loud failure (caught below,
+ * temp file cleaned up, error rethrown), not a silent correctness gap — one
+ * more reason "same directory" is required, not just preferred: getting it
+ * wrong fails loudly instead of working by accident. (Corrected from this
+ * comment's own first draft, which claimed a silent copy+delete fallback
+ * that doesn't exist — flagged by CodeRabbit review before this landed.)
+ * Then `fs.rename()`s it over `filePath`. `rename(2)` atomically replaces
+ * the destination: any reader opening `filePath` at any point either gets
+ * the complete prior
  * file or the complete new one, never a torn/partial read — this is an
  * ATOMICITY guarantee (what this ticket asks for), not a durability one.
  * It fully covers an ordinary process crash: crash before the rename call
@@ -151,7 +161,12 @@ export class FileTokenStore implements ITokenStore {
       // `tempPath` is always freshly created (unique name), so Node's
       // `open()` call is always the CREATE case the `mode` option applies
       // to (see this class's doc comment on `writeFile`'s `mode` caveat).
-      await fs.writeFile(tempPath, data, { mode: 0o600 });
+      // `flag: 'wx'` makes creation exclusive (fails with EEXIST rather than
+      // silently overwriting if `tempPath` somehow already exists) — with
+      // 8 random bytes (64 bits) of entropy in the name a real collision is
+      // not a realistic event, but failing loudly instead of silently
+      // overwriting an unrelated file costs nothing (CodeRabbit review).
+      await fs.writeFile(tempPath, data, { mode: 0o600, flag: 'wx' });
       // Belt-and-suspenders against the same umask hazard the doc comment
       // above describes for the non-atomic path — cheap, and removes any
       // doubt before this content becomes visible at `filePath`.

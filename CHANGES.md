@@ -22,8 +22,12 @@ separately as this ticket.
 `set()` now serializes to a uniquely-named temp file (`.${basename}.<16 hex chars>.tmp`, via
 `crypto.randomBytes`) in the *same* directory as `filePath` — same directory is load-bearing, not
 cosmetic: POSIX `rename(2)`'s atomicity guarantee only holds within one filesystem, and a temp
-directory elsewhere (e.g. `os.tmpdir()`) could cross a mount boundary and silently fall back to a
-non-atomic copy+delete. The temp file is created at 0600 directly (`writeFile`'s `mode` option
+directory elsewhere (e.g. `os.tmpdir()`) could cross a mount boundary — and Node's `fs.promises.rename()`
+has no cross-filesystem fallback of its own (unlike higher-level helpers such as `fs-extra`'s `move()`):
+crossing a mount boundary makes it *reject* with `EXDEV`, a loud failure (caught, temp file cleaned up,
+error rethrown), not a silent non-atomic copy+delete. (This paragraph's first draft claimed the latter;
+corrected — flagged by CodeRabbit review before this landed, matches the doc-comment fix in
+`fileTokenStore.ts` itself.) The temp file is created at 0600 directly (`writeFile`'s `mode` option
 actually applies here, unlike the direct-write it replaces, because a uniquely-named path is always
 the CREATE case), `chmod`ed again as the existing belt-and-suspenders umask guard, then
 `fs.rename()`d onto `filePath`. `rename(2)` atomically replaces the destination and carries the
@@ -45,6 +49,43 @@ not do that; adding it was judged out of scope for a Low-priority, narrowly-scop
 cross-platform directory-fsync support is not uniform). The doc comments (class header and the
 `rename()` call site) now state the narrower, accurate claim: atomicity and safety against an
 ordinary process crash, not power-loss durability.
+
+**CodeRabbit round 2 (2 findings, on the corrected diff) — 2 adopted, 1 dismissed with reason,
+plus one gate-blocking static-analysis fix.**
+- *Minor, CHANGES.md/`fileTokenStore.ts` doc comments*: this entry's and the source's own first
+  draft additionally claimed a temp dir outside `filePath`'s directory would "silently fall back to
+  a non-atomic copy+delete" on crossing a filesystem boundary. Checked against Node's actual
+  behavior before accepting the correction (not deferred to CodeRabbit blindly): `fs.promises.rename()`
+  is a thin wrapper over the `rename(2)` syscall with no such fallback — unlike higher-level helpers
+  (`fs-extra`'s `move()`) that add one deliberately, plain Node `rename()` *rejects* with `EXDEV`
+  on a cross-filesystem attempt, which this code's own `try`/`catch` already turns into a loud,
+  correct failure (temp file cleaned up, error rethrown) rather than a silent one. Adopted; both
+  this entry's and `fileTokenStore.ts`'s doc comments corrected above.
+- *Major, `fileTokenStore.ts`, part 1 (adopted)*: use exclusive creation for the temp file
+  (`flag: 'wx'`) so an — astronomically unlikely, given 64 bits of random entropy in the name, but
+  not impossible — name collision fails loudly (`EEXIST`) instead of silently overwriting whatever
+  was already at that path. One-line change, directly strengthens a guarantee this ticket already
+  makes; adopted.
+- *Major, `fileTokenStore.ts`, part 2 (dismissed, with reason)*: the same finding also asked for
+  validating that `filePath`'s parent directory is owned by the current user and non-world-writable
+  before writing, plus a full EEXIST-retry loop. Dismissed as out of scope for this ticket: (1) this
+  is a *different* threat model (a directory already under attacker control) than TRO-600's own
+  finding (crash/concurrent-read safety) and was true of the pre-fix code identically — the original
+  direct `writeFile(filePath, ...)` had zero directory-trust validation either, and an attacker with
+  write access to the directory could already have planted a symlink at the fixed `filePath` itself,
+  same threat, unaffected by this change; (2) the randomized temp filename this fix already adds
+  makes a pre-planting attack *harder* than before, not easier — this is a scope-neutral-or-better
+  change on that axis, not a regression; (3) `process.getuid()`-based ownership checks don't exist on
+  Windows, and this package explicitly supports non-POSIX platforms (`integrations/cli`'s `ship login`
+  is the one named consumer) — implementing it naively would need per-platform branching for a
+  hardening step outside this Low-priority ticket's stated scope ("`sdk/src/fileTokenStore.ts` only
+  ... regression test for the atomicity property"). Not filed as a follow-up ticket: this is
+  general input-trust hardening with no report of a real exploit path specific to this class, not a
+  concrete, scoped defect the way TRO-607 was for TRO-599.
+- *`defect-gate` (blocking, not a CodeRabbit finding)*: the first draft's two array-destructures off
+  `.mock.calls[0]` used a `!` non-null assertion each — this repo's `TS-4` static rule tracks and
+  blocks new ones. Rewritten as guard clauses (`if (!call) throw ...`), matching the exact convention
+  already used by `sdk/src/clientCredentials.test.ts` and five other test files in this package.
 
 **Regression tests (`sdk/src/tokenStore.test.ts`, new `describe('set() atomicity (TRO-600)')`
 block, 2 new cases; existing 13 untouched).**
@@ -68,13 +109,20 @@ not to be ...`); test 2 failed because `store.set()` resolved instead of rejecti
 never calls `rename`, so mocking it to reject has no effect). All 13 pre-existing tests still
 passed unchanged. Restored the fix; all 15 tests in the file pass again.
 
-**Evidence.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`: 15/15 pass.
-Full `@ship/sdk` suite (25 files, incl. the 4 `*.liveServer.test.ts` files against this worktree's
-real Postgres): 227/227 pass. `pnpm type-check` / `pnpm build`: clean. `scripts/factory/gate.sh`:
-`tests:sdk` clean; the run's only `tests:api` failure is `webhooks.test.ts`'s pre-existing
-"rotation invalidates the old secret" case, unrelated to this diff (this ticket touches only
-`sdk/src/fileTokenStore.ts` and `sdk/src/tokenStore.test.ts`), confirmed passing standalone —
-load-sensitive (TRO-277 class), not a regression from this change.
+**Evidence.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`: 15/15 pass,
+re-verified after each CodeRabbit-driven correction above. Full `@ship/sdk` suite (25 files, incl.
+the 4 `*.liveServer.test.ts` files against this worktree's real Postgres): 227/227 pass.
+`pnpm type-check` / `pnpm build`: clean. `scripts/factory/gate.sh`, run twice (once pre-commit —
+correctly failed `regression-test`/`scope` since nothing was committed yet, an artifact of running
+the gate before `git commit`, not a real gap; once post-commit): `tests:sdk`, `typecheck`, `build`,
+`tests:not-weakened`, `regression-test`, `changes-md`, `scope`, `integration-deps`, `stash-guard`
+all clean both times. The only test failure either run: `tests:api`'s
+`webhooks.test.ts`/"rotation invalidates the old secret" case — unrelated to this diff (this code
+change touches only `sdk/src/fileTokenStore.ts` and `sdk/src/tokenStore.test.ts`; `CHANGES.md` is
+the ticket log entry itself), confirmed passing standalone both runs — load-sensitive (TRO-277
+class), not a regression from this change. `defect-gate` failed once (2 non-null assertions in the
+new test file) and was fixed before the final gate run (see the CodeRabbit-round-2 paragraph
+above); re-run after the fix to confirm.
 
 **How to run it.** `source .factory-env && cd sdk && npx vitest run src/tokenStore.test.ts`.
 

@@ -164,14 +164,22 @@ describe('FileTokenStore', () => {
       // The write must never target filePath directly -- that's exactly the
       // truncate-in-place hazard this fix removes.
       expect(writeFileSpy).toHaveBeenCalledTimes(1);
-      const [writtenPath] = writeFileSpy.mock.calls[0]!;
+      // Guard clause instead of a non-null assertion, matching this repo's
+      // own convention for reading `.mock.calls[0]` (see
+      // `clientCredentials.test.ts`'s header) -- `toHaveBeenCalledTimes(1)`
+      // above already proves this element exists, but TS can't see that.
+      const writeFileCall = writeFileSpy.mock.calls[0];
+      if (!writeFileCall) throw new Error('writeFile was never called');
+      const [writtenPath] = writeFileCall;
       expect(writtenPath).not.toBe(filePath);
       expect(path.dirname(String(writtenPath))).toBe(path.dirname(filePath));
 
       // The rename must move that exact temp file onto filePath -- the
       // atomic "publish" step.
       expect(renameSpy).toHaveBeenCalledTimes(1);
-      const [renameFrom, renameTo] = renameSpy.mock.calls[0]!;
+      const renameCall = renameSpy.mock.calls[0];
+      if (!renameCall) throw new Error('rename was never called');
+      const [renameFrom, renameTo] = renameCall;
       expect(renameFrom).toBe(writtenPath);
       expect(renameTo).toBe(filePath);
 
