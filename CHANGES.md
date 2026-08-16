@@ -56,10 +56,11 @@ found: no committed CI matrix, no committed proof that a real sdk-mode agent tur
    analysis items (CI minutes, storage growth, production-scale projections) this ticket does not.
 
 **Regression tests.** `auditTrailProof.liveServer.test.ts` (4 new tests, all real behavioral
-assertions against a live app+DB, not mocks) and 2 new cases in `gitlabCiAgentTests.test.ts`
-(structural CI-config assertions).
+assertions against a live app+DB, not mocks) and 5 new cases in `gitlabCiAgentTests.test.ts`
+(2 GitLab-side, 3 GitHub Actions-side — structural CI-config assertions).
 
 **How to run it.**
+
 ```bash
 source .factory-env
 pnpm build:shared && pnpm build:sdk   # sdk/dist must exist before agent's tests can import @ship/sdk
@@ -67,10 +68,19 @@ pnpm --filter @ship/agent exec vitest run src/__tests__/auditTrailProof.liveServ
 ```
 
 **Roll back.** Revert this commit. Changes are localized to: `agent/src/__tests__/auditTrailProof.liveServer.test.ts`
-(new), `agent/src/__tests__/gitlabCiAgentTests.test.ts` (2 new `it()` blocks appended, nothing
+(new), `agent/src/__tests__/gitlabCiAgentTests.test.ts` (5 new `it()` blocks appended, nothing
 removed), `.gitlab-ci.yml` (1 new script line in `verify`), `.github/workflows/ci.yml` (1 new step),
 `docs/submission/PF-704-COST-LEDGER-DELTA.md` (new file). No application source touched — this
 ticket is proof/CI/docs only, exactly as its own `Tier: investigate` / doc-and-test scope implies.
+
+**Post-merge correction (CodeRabbit review on this PR):** the cost-ledger doc's original claim that
+the rewire was "architecturally inert" with respect to token volume was too strong — a real,
+traced data-flow path (`buildExpansionPrompt` → `ExpandedDocument.textSnippet` →
+`getDocument().content`, which differs between modes) means token volume for the `on_demand`
+trigger specifically can genuinely differ between `internal` and `sdk` mode. Fixed in
+`docs/submission/PF-704-COST-LEDGER-DELTA.md` — see that file's own "corrected" section. Also fixed:
+env-var restore instead of unconditional delete, OAuth grant response validation, and the printed
+proof query no longer risking drift from the executed one (all in `auditTrailProof.liveServer.test.ts`).
 
 ---
 

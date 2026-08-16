@@ -136,6 +136,11 @@ describe(
     let appIdentityAccessToken: string;
     let gateShipClient: GateShipClient;
     const standupDate = new Date().toISOString().slice(0, 10);
+    // Captured in beforeAll before this test overwrites the real env var, so
+    // afterAll can restore whatever the invoking environment already had
+    // (undefined in the common case, but never assumed) rather than always
+    // deleting the key outright.
+    let originalFleetgraphSecretEnv: string | undefined;
 
     beforeAll(async () => {
       const ws = await pool.query<{ id: string }>(`INSERT INTO workspaces (name) VALUES ($1) RETURNING id`, [
@@ -196,6 +201,10 @@ describe(
       // into a local const (rather than re-reading process.env with a `!`
       // assertion below) — this test sets the value itself two lines above,
       // so there is a real, provable non-null value to hold onto directly.
+      // The PRIOR value is captured first (CodeRabbit finding) so afterAll
+      // can restore it rather than unconditionally deleting a real value the
+      // invoking environment may already have set.
+      originalFleetgraphSecretEnv = process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR];
       const fleetgraphSecret = `tro440-fleetgraph-secret-${RUN_ID}`;
       process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = fleetgraphSecret;
       await seedFirstPartyApp(pool, workspaceId);
@@ -223,8 +232,24 @@ describe(
           scope: FLEETGRAPH_APP_SCOPES.join(' '),
         }).toString(),
       });
-      const rawTokenBody = (await rawTokenResponse.json()) as { access_token: string };
-      appIdentityAccessToken = rawTokenBody.access_token;
+      // Validate the grant actually succeeded before trusting its body shape
+      // (CodeRabbit finding) — an untreated failure here would otherwise
+      // surface only as a later, harder-to-diagnose 401 on the probe fetch.
+      if (!rawTokenResponse.ok) {
+        const errorBody = await rawTokenResponse.text();
+        throw new Error(
+          `client_credentials grant for the header-observation probe failed: ${rawTokenResponse.status} ${errorBody}`
+        );
+      }
+      const rawTokenBody: unknown = await rawTokenResponse.json();
+      if (
+        typeof rawTokenBody !== 'object' ||
+        rawTokenBody === null ||
+        typeof (rawTokenBody as { access_token?: unknown }).access_token !== 'string'
+      ) {
+        throw new Error(`client_credentials grant response missing a string access_token: ${JSON.stringify(rawTokenBody)}`);
+      }
+      appIdentityAccessToken = (rawTokenBody as { access_token: string }).access_token;
 
       const resilientClient = new ResilientClient({
         breaker: new CircuitBreaker({ failureThreshold: 5, cooldownMs: 30_000 }),
@@ -246,7 +271,13 @@ describe(
       await pool.query(`DELETE FROM workspace_memberships WHERE workspace_id = $1`, [workspaceId]);
       await pool.query(`DELETE FROM users WHERE id = $1`, [userId]);
       await pool.query(`DELETE FROM workspaces WHERE id = $1`, [workspaceId]);
-      delete process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR];
+      // Restore, not delete unconditionally (CodeRabbit finding) — a real
+      // value the invoking environment already set must survive this test.
+      if (originalFleetgraphSecretEnv === undefined) {
+        delete process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR];
+      } else {
+        process.env[FLEETGRAPH_OAUTH_CLIENT_SECRET_ENV_VAR] = originalFleetgraphSecretEnv;
+      }
       await pool.end();
     }, 30_000);
 
@@ -318,19 +349,23 @@ describe(
     });
 
     it('PROOF ARTIFACT: the audit rows themselves, printed for the ticket/PR (this ticket\'s own AC)', async () => {
+      // The logged query text below is built from these same two values
+      // rather than hand-retyped (CodeRabbit finding: an earlier version
+      // omitted the created_at predicate from the logged text, so the
+      // printed "exact query" didn't match what actually ran) — single
+      // source of truth for both the executed query and the printed one.
+      const proofPredicate = `(app_client_id = '${FLEETGRAPH_CLIENT_ID}' OR user_id = '${userId}') AND created_at > NOW() - INTERVAL '1 minute'`;
       const proof = await pool.query<AuditRow>(
         `SELECT id, user_id, app_client_id, route, method, scope_used, status, created_at
          FROM public_api_audit
-         WHERE (app_client_id = $1 OR user_id = $2)
-           AND created_at > NOW() - INTERVAL '1 minute'
-         ORDER BY created_at ASC`,
-        [FLEETGRAPH_CLIENT_ID, userId]
+         WHERE ${proofPredicate}
+         ORDER BY created_at ASC`
       );
       // eslint-disable-next-line no-console
       console.log(
         '[TRO-440/PF-704] Epic 7 submission proof — public_api_audit rows for this agent turn:\n' +
-          "SELECT id, user_id, app_client_id, route, method, scope_used, status, created_at FROM public_api_audit " +
-          `WHERE (app_client_id = '${FLEETGRAPH_CLIENT_ID}' OR user_id = '${userId}') ORDER BY created_at ASC;\n` +
+          'SELECT id, user_id, app_client_id, route, method, scope_used, status, created_at FROM public_api_audit ' +
+          `WHERE ${proofPredicate} ORDER BY created_at ASC;\n` +
           JSON.stringify(proof.rows, null, 2)
       );
       // Read-heavy (>=3, one per resource) + exactly the write's own rows,
