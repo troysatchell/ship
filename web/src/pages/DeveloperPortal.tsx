@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import type { V1Result } from '@/lib/api';
 import { api, OAuthApp } from '@/lib/api';
 import { usePortalToken } from '@/contexts/DeveloperPortalContext';
@@ -115,6 +115,10 @@ type CallV1 = <T>(path: string, init?: RequestInit) => Promise<V1Result<T>>;
 type Tab = 'deliveries' | 'subscriptions';
 const VALID_TABS: Tab[] = ['deliveries', 'subscriptions'];
 
+function isTab(value: string | null): value is Tab {
+  return value !== null && (VALID_TABS as string[]).includes(value);
+}
+
 const STATUS_FILTERS: Array<{ value: WebhookDelivery['status'] | ''; label: string }> = [
   { value: '', label: 'All statuses' },
   { value: 'pending', label: 'Pending' },
@@ -127,12 +131,22 @@ export function DeveloperPortalPage() {
   const { callV1, loading: tokenLoading, error: tokenError } = usePortalToken();
   const [searchParams, setSearchParams] = useSearchParams();
 
-  const tabParam = searchParams.get('tab') as Tab | null;
-  const activeTab: Tab = tabParam && VALID_TABS.includes(tabParam) ? tabParam : 'deliveries';
+  const tabParam = searchParams.get('tab');
+  const activeTab: Tab = isTab(tabParam) ? tabParam : 'deliveries';
 
   const handleTabChange = useCallback(
     (tab: Tab) => {
-      setSearchParams({ tab }, { replace: true });
+      // Preserve any OTHER query params already on the URL — replacing the
+      // whole search string with `{ tab }` would silently drop them
+      // (CodeRabbit, this PR's review).
+      setSearchParams(
+        (prev) => {
+          const next = new URLSearchParams(prev);
+          next.set('tab', tab);
+          return next;
+        },
+        { replace: true }
+      );
     },
     [setSearchParams]
   );
@@ -180,6 +194,12 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   return (
     <button
       onClick={onClick}
+      // These are plain buttons, not a full ARIA `role="tab"` widget (no
+      // roving tabindex/arrow-key model) — `aria-current` communicates
+      // "this is the active one" to assistive tech without claiming a tab
+      // contract this component doesn't implement (CodeRabbit, this PR's
+      // review).
+      aria-current={active ? 'page' : undefined}
       className={cn(
         'px-4 py-3 text-sm font-medium border-b-2 transition-colors',
         active ? 'border-accent text-foreground' : 'border-transparent text-muted hover:text-foreground'
@@ -456,8 +476,17 @@ function SubscriptionsTab({ callV1 }: { callV1: CallV1 }) {
         body: JSON.stringify({ app_id: appId, event_type: eventType, target_url: targetUrl.trim() }),
       });
       if (res.ok) {
-        setSubscriptions((prev) => [res.data, ...prev]);
-        setNewSecret(res.data.secret);
+        // Never let the plaintext secret linger in `subscriptions` state —
+        // `res.data` is `CreatedWebhookSubscription`, which carries `secret`/
+        // `warning` on top of the plain `WebhookSubscription` shape. Strip
+        // both before storing; the secret's only home is `newSecret`, shown
+        // exactly once via `ShownOnceSecretModal` below (CodeRabbit, this
+        // PR's review — a real finding, not a style nit: without this, the
+        // secret survives in React state for the component's lifetime even
+        // though no column renders it today).
+        const { secret, warning: _warning, ...subscription } = res.data;
+        setSubscriptions((prev) => [subscription, ...prev]);
+        setNewSecret(secret);
         setTargetUrl('');
         showToast('Subscription created', 'success');
       } else {
@@ -471,7 +500,11 @@ function SubscriptionsTab({ callV1 }: { callV1: CallV1 }) {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm('Delete this webhook subscription? This cannot be undone.')) return;
+    // The real DELETE route deactivates rather than permanently deletes
+    // (see this handler's own comment below) — the confirmation text says
+    // so, rather than implying irreversible deletion (CodeRabbit, this PR's
+    // review).
+    if (!confirm('Deactivate this webhook subscription? It will stop receiving deliveries; its history stays visible in the delivery log.')) return;
     try {
       const res = await callV1<null>(`/webhooks/${encodeURIComponent(id)}`, { method: 'DELETE' });
       if (!res.ok) {
@@ -499,7 +532,11 @@ function SubscriptionsTab({ callV1 }: { callV1: CallV1 }) {
     <div className="space-y-6">
       <div className="space-y-4">
         <div>
-          <h3 className="text-sm font-medium text-foreground mb-1">Create subscription</h3>
+          {/* h2, not h3 — this tab's content follows the page h1 directly,
+            * same level as DeliveriesTab's "Delivery log" h2 (CodeRabbit,
+            * this PR's review: the two tabs are siblings under the h1, not
+            * nested under each other). */}
+          <h2 className="text-sm font-medium text-foreground mb-1">Create subscription</h2>
           <p className="text-xs text-muted">
             Register a new webhook subscription for one of your workspace&apos;s apps.
           </p>
@@ -507,7 +544,7 @@ function SubscriptionsTab({ callV1 }: { callV1: CallV1 }) {
 
         {apps.length === 0 && !loading ? (
           <p className="text-xs text-muted">
-            No apps registered in this workspace yet. <a href="/developer/apps" className="text-accent underline">Register an app</a> before creating a subscription.
+            No apps registered in this workspace yet. <Link to="/developer/apps" className="text-accent underline">Register an app</Link> before creating a subscription.
           </p>
         ) : (
           <form

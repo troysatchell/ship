@@ -142,6 +142,11 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     mockUsePortalToken.mockReset();
+    // Restores any `vi.spyOn` (e.g. the delete test's `window.confirm`
+    // stub) even if an assertion above it threw — a `mockRestore()` call
+    // sitting at the end of a test body never runs on failure (CodeRabbit,
+    // this PR's review).
+    vi.restoreAllMocks();
   });
 
   it('shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the original Idempotency-Key', async () => {
@@ -182,7 +187,7 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
     expect(originalKeyCell.textContent).toBe(replayedKeyCell.textContent);
 
     // The replay endpoint was actually called against the real route.
-    const replayCall = callV1.mock.calls.find(([path]) => (path as string).includes(`/webhooks/deliveries/${DEAD_DELIVERY_ID}/replay`));
+    const replayCall = callV1.mock.calls.find(([path]) => path.includes(`/webhooks/deliveries/${DEAD_DELIVERY_ID}/replay`));
     expect(replayCall, 'expected a callV1 POST to the real replay route').toBeDefined();
   });
 
@@ -199,7 +204,7 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
     });
 
     await waitFor(() => {
-      const call = callV1.mock.calls.find(([path]) => (path as string).includes('status=dead'));
+      const call = callV1.mock.calls.find(([path]) => path.includes('status=dead'));
       expect(call, 'expected a callV1 request carrying status=dead').toBeDefined();
     });
   });
@@ -234,7 +239,7 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
       expect(screen.getAllByTestId('delivery-row')).toHaveLength(2);
     });
     // The second call carried the cursor the first page returned.
-    const secondPageCall = callV1.mock.calls.find(([path]) => (path as string).includes('cursor=opaque-cursor-1'));
+    const secondPageCall = callV1.mock.calls.find(([path]) => path.includes('cursor=opaque-cursor-1'));
     expect(secondPageCall, 'expected the second callV1 call to carry the server cursor').toBeDefined();
     // "Load more" disappears once next_cursor comes back null.
     expect(screen.queryByRole('button', { name: /load more/i })).not.toBeInTheDocument();
@@ -278,10 +283,10 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
     await screen.findByText('Save your signing secret');
     expect(screen.getByText('whsec_test_secret_value')).toBeInTheDocument();
 
-    const createCall = callV1.mock.calls.find(([path, init]) => path === '/webhooks' && (init as RequestInit | undefined)?.method === 'POST');
+    const createCall = callV1.mock.calls.find(([path, init]) => path === '/webhooks' && init?.method === 'POST');
     if (!createCall) throw new Error('expected a callV1 POST to /webhooks');
     const [, init] = createCall;
-    const sentBody = JSON.parse(String((init as RequestInit).body ?? '{}'));
+    const sentBody = JSON.parse(String(init?.body ?? '{}'));
     // The real server schema (`CreateWebhookSubscriptionRequestSchema`) —
     // NOT the old, broken `{ url, events }` shape (TRO-607/TRO-439 both
     // fixed this independently; see sdk/src/resources/webhooks.ts's header).
@@ -300,7 +305,7 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
       throw new Error(`unexpected callV1: ${path}`);
     });
     mockUsePortalToken.mockReturnValue({ callV1, loading: false, error: null, token: 'test-token', principal: null });
-    const confirmSpy = vi.spyOn(window, 'confirm').mockReturnValue(true);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     renderPortal();
     await act(async () => {
@@ -320,10 +325,8 @@ describe('DeveloperPortalPage (TRO-439 / PF-503)', () => {
     // Row still present — not filtered out of the list.
     expect(screen.getAllByTestId('subscription-row')).toHaveLength(1);
 
-    const deleteCall = callV1.mock.calls.find(([path, init]) => path === `/webhooks/${SUBSCRIPTION_ID}` && (init as RequestInit | undefined)?.method === 'DELETE');
+    const deleteCall = callV1.mock.calls.find(([path, init]) => path === `/webhooks/${SUBSCRIPTION_ID}` && init?.method === 'DELETE');
     expect(deleteCall, 'expected a callV1 DELETE to the real subscription route').toBeDefined();
-
-    confirmSpy.mockRestore();
   });
 
   it('surfaces a portal session error instead of rendering the tabs', () => {

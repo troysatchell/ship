@@ -52,7 +52,8 @@ const AdminDashboardPage = React.lazy(() => import('@/pages/AdminDashboard').the
 const AdminWorkspaceDetailPage = React.lazy(() => import('@/pages/AdminWorkspaceDetail').then((m) => ({ default: m.AdminWorkspaceDetailPage })));
 const WorkspaceSettingsPage = React.lazy(() => import('@/pages/WorkspaceSettings').then((m) => ({ default: m.WorkspaceSettingsPage })));
 // TRO-439 (PF-503) — see DeveloperPortal.tsx's own header for why this
-// mounts at /settings/developer rather than as a new top-level Mode/RailIcon.
+// mounts at /developer/webhooks inside TRO-436's DeveloperPortalProvider
+// rather than as a new top-level Mode/RailIcon.
 const DeveloperPortalPage = React.lazy(() => import('@/pages/DeveloperPortal').then((m) => ({ default: m.DeveloperPortalPage })));
 const ConvertedDocumentsPage = React.lazy(() => import('@/pages/ConvertedDocuments').then((m) => ({ default: m.ConvertedDocumentsPage })));
 const UnifiedDocumentPage = React.lazy(() => import('@/pages/UnifiedDocumentPage').then((m) => ({ default: m.UnifiedDocumentPage })));

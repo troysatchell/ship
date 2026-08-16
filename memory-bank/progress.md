@@ -79,6 +79,27 @@ Dispatched per Troy's explicit "work autonomously overnight, no check-ins expect
 
 ## Log
 
+### 2026-08-15 (~21:35Z–22:00Z) — TRO-439 reconciled onto TRO-436's merged shell; PR #260 updated
+
+TRO-436/PF-502 (PR #259) merged to `main`. The entry directly below this one (the same session,
+~40 min earlier) describes the FIRST version of this ticket's work — its own local
+`web/src/hooks/useDeveloperPortalToken.ts` hook, a real `@ship/sdk` `ShipClient`, and a standalone
+`/settings/developer` placeholder route — all of which is now **superseded**. Reconciled onto the
+real, merged shell: dropped `useDeveloperPortalToken.ts` and the `@ship/sdk` dependency entirely in
+favor of `usePortalToken()`/`callV1()` (`web/src/contexts/DeveloperPortalContext.tsx`, TRO-436);
+remounted at `/developer/webhooks` (a sibling of TRO-436's `apps`/`apps/:id` routes, inside the same
+`DeveloperPortalProvider`) instead of the placeholder route; dropped this ticket's duplicate
+`web/src/lib/api.ts` additions in favor of TRO-436's already-merged equivalents; subscription-secret
+display now goes through the shared `ShownOnceSecretModal`. Re-verified end to end: full workspace
+type-check clean, `web` suite 598/598 (6 DeveloperPortal cases, mocking `usePortalToken()` directly
+rather than driving the token-mint fetch chain), both e2e tests re-passed first attempt post-
+reconciliation, full `gate.sh` — **pass**, this time with a REAL (non-rate-limited) CodeRabbit
+review: 12 findings, all triaged and fixed (a real one: the plaintext subscription secret was
+being stored in `subscriptions` state, not just the shown-once modal — stripped before commit).
+PR #260 pushed with the reconciliation commit. See `CHANGES.md`'s TRO-439 entry for the full
+technical writeup — it was rewritten in place to describe the final, reconciled state rather than
+carrying the placeholder-version prose forward.
+
 ### 2026-08-15 (~20:50Z–21:35Z) — TRO-439 (PF-503) built and PR opened: portal delivery log/DLQ/replay + subscription CRUD
 
 Worktree `Ship-wt-tro_439`, branch `troysatchell/tro-439-pf-503-portal-subscriptions-delivery-log-dlq-replay-button`. Built in architect-mandated order: delivery log (server-side cursor pagination + status filter) + DLQ view + Replay button first, subscription CRUD second. Portal mints a short-lived `webhooks:manage`-scoped personal token on entry and consumes `/api/v1` via a real `@ship/sdk` `ShipClient` (PLUGFORGE.MD §2.9's binding requirement) — new `web/src/hooks/useDeveloperPortalToken.ts` + `web/src/pages/DeveloperPortal.tsx`, mounted at `/settings/developer` (deliberately not a new `App.tsx` Mode/RailIcon — see below).

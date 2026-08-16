@@ -85,7 +85,7 @@ dropping this ticket's duplicate fix. Since the reconciliation above also remove
   "test one thing" boundary `DeveloperApps.test.tsx` uses for the sibling `/developer/apps`
   screen — token-minting itself has its own dedicated coverage in
   `DeveloperPortalContext.test.tsx`); only `api.oauthApps.list()`'s real internal
-  `GET /api/oauth-apps` call goes over a stubbed `global.fetch`. Seven cases: a DLQ (`dead`)
+  `GET /api/oauth-apps` call goes over a stubbed `global.fetch`. Six cases: a DLQ (`dead`)
   delivery renders and Replay succeeds while preserving the original `Idempotency-Key`; the status
   filter sends a real `status=` query param; "Load more" sends the server's own opaque cursor (not
   a client-side slice) and disappears once `next_cursor` is null; `createSubscription()` sends the
@@ -117,7 +117,7 @@ dropping this ticket's duplicate fix. Since the reconciliation above also remove
 **How to run it.**
 ```bash
 source .factory-env
-pnpm --filter @ship/web test                      # includes the 7 new/updated cases above
+pnpm --filter @ship/web test                      # includes the 6 new/updated cases above
 ```
 E2e (`/e2e-test-runner` convention — never run `pnpm test:e2e` directly):
 ```bash

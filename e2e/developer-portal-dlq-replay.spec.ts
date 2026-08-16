@@ -189,10 +189,14 @@ test.describe('Developer portal — Deliveries/DLQ + replay (TRO-439 / PF-503)',
     // step sends to. Nothing before the replay click ever hits it (the DLQ
     // chain below is seeded directly, not delivered for real).
     const subscriber = createReferenceSubscriber({ secret: created.secret, verify });
-    const boundPort = await subscriber.listen(port);
-    expect(boundPort).toBe(port);
-
+    // `try` starts here, not after `.listen()`/the bound-port assertion —
+    // if either throws, `finally`'s `subscriber.close()` still has to run
+    // (CodeRabbit, this PR's review: a listener that started but never got
+    // its cleanup call is a leaked socket across test runs).
     try {
+      const boundPort = await subscriber.listen(port);
+      expect(boundPort).toBe(port);
+
       const { deadDeliveryId, idempotencyKey } = await seedDeadLetteredDeliveryChain(
         dbContainer.getConnectionUri(),
         created.id
