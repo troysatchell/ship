@@ -38,29 +38,48 @@ equivalent capture to calibrate against. The production ceiling (120 req/min per
 reasoned from RFC 8628's device-grant default poll interval (5s → ~12 `/oauth/token` requests/min
 per legitimate polling flow, `DEFAULT_DEVICE_POLL_INTERVAL_SECONDS` in `platform/oauth/device.ts`)
 times a generous assumption of up to ~10 concurrent device-login attempts behind one shared NAT
-egress. Test tier is 30 (fast, deterministic 429 tests without thousands of sequential requests);
-dev tier is 10,000 (permissive, matches every other limiter's dev tier in this file). If real
-`/oauth/*` traffic is ever measured, replace this reasoning with actual numbers rather than just
-raising the constant — same discipline `rate-limit.ts`'s own top-of-file doc already asks for.
+egress. Dev tier is 10,000 (permissive, matches every other limiter's dev tier in this file). If
+real `/oauth/*` traffic is ever measured, replace this reasoning with actual numbers rather than
+just raising the constant — same discipline `rate-limit.ts`'s own top-of-file doc already asks for.
 
-**Regression tests** — `api/src/app.oauth-rate-limit.test.ts` (new), modeled directly on
-`app.spa-static-rate-limit.test.ts` (TRO-308): loads the real `createApp()` wiring fresh per test
-(`vi.resetModules()`, so each test gets its own zeroed `MemoryStore` counter) and drives real HTTP
-requests through a bound server via `supertest`, not a standalone call to the middleware function.
-3 cases: (1) request #(test-tier + 1) against an unmatched `/oauth/*` path returns 429 with the
-expected error body, every prior request returns the route's real 404 — proving the limiter itself,
-not some other failure, is what changes at the throttle point; (2) exhausting the `/oauth` budget
-does not throttle unrelated `/api/*` traffic from the same source IP (separate Redis-prefixed
-bucket); (3) the limiter also covers `POST /oauth/device/code` specifically (a different router
-than the fixture path in case 1 implicitly exercises), proving the mount isn't accidentally scoped
-to only the first-registered `/oauth` router. **Red before green, genuinely verified**: `git stash`-ing
-just the `app.ts` mount change and re-running this suite reproduced the pre-fix behavior exactly —
-all 3 tests failed, with the `/oauth/device/code` case showing a real `400` (the route's own empty-body
-validation) at what should have been the 429 checkpoint, confirming no rate limiting fired at all
-before this fix. Restoring the change (`git stash pop`) returned all 3 to green with no other changes.
-Full adjacent-suite check: `rate-limit.test.ts` + `rate-limit-coverage.test.ts` +
-`rate-limit-v1-exemption.test.ts` + `app.spa-static-rate-limit.test.ts` + the new file — 34/34 passing,
-zero regressions.
+**A real bug found by the full gate, not by this ticket's own isolated test file.** First version
+shipped the test tier at 30 (mirroring `createSpaStaticLimiter`'s test tier, safe there because
+nothing else in the suite drives real traffic through the static-SPA route repeatedly).
+`platform/oauth/__tests__/token.test.ts` alone drives dozens of real `/oauth/token` requests through
+one shared `createApp()` instance across its `it()` blocks — a 30-request ambient cap meant later
+tests in that file started genuinely receiving `429` instead of their expected specific status. This
+ticket's own test file passed regardless (it resets modules per test, so its own `MemoryStore`
+counter never accumulated across cases) — only a full `gate.sh` run surfaced the interference, as 12
+new failures across two files. Fixed the same way TRO-494 fixed the identical tension for
+`createApiRateLimiters`: the ambient test tier is now 10,000 (permissive, matches every other
+limiter's test tier), and `createOAuthRateLimiter` gained a `limitOverrides` third parameter — test
+seam only, nothing outside a test passes it — so a test that specifically wants to drive the 429
+path quickly can isolate the limiter at a small, explicit cap without lowering what every other test
+in the suite runs against.
+
+**Regression tests** — `api/src/app.oauth-rate-limit.test.ts` (new), 4 cases. Three build a minimal
+standalone Express app mounting `createOAuthRateLimiter` directly with `limitOverrides: {limit: 5}`
+(same "isolated small-cap app" pattern as `rate-limit-v1-exemption.test.ts`'s AC-3, for the identical
+reason — sequentially driving the real 10,000-request ambient tier to prove a 429 fires is not
+practical in a unit test): (1) request #6 returns 429 with the expected error body, requests 1-5
+return 200 — proving the limiter itself, not some other failure, is what changes at the throttle
+point; (2) the limiter also covers `POST /oauth/device/code`, not just the first-registered route on
+the prefix; (3) exhausting the `/oauth` budget does not throttle an unrelated route (separate
+Redis-prefixed bucket, `REDIS_KEY_PREFIX_OAUTH`). The fourth case loads the real `createApp()`
+wiring (`vi.resetModules()`, same pattern as `app.spa-static-rate-limit.test.ts`) and checks for the
+`RateLimit-Limit`/`RateLimit-Remaining` response headers `express-rate-limit`'s `standardHeaders`
+sets on every response that passed through it — proving the middleware is actually mounted in
+production `app.ts`, not just that the standalone function works in isolation, without needing to
+exhaust the now-permissive real limit (which would risk exactly the cross-test interference above).
+**Red before green, genuinely verified** on the original (pre-`limitOverrides`) version of this fix
+before the interference bug was found: reverting just the `app.ts` mount change and re-running the
+suite reproduced the pre-fix behavior exactly — every test failed, with the `/oauth/device/code` case
+showing a real `400` (the route's own empty-body validation) at what should have been the 429
+checkpoint, confirming no rate limiting fired at all before this fix. Full adjacent-suite check after
+the `limitOverrides` rework: `token.test.ts` (32 cases) + this file (4 cases) — 36/36 passing, zero
+interference; broader check `rate-limit.test.ts` + `rate-limit-coverage.test.ts` +
+`rate-limit-v1-exemption.test.ts` + `app.spa-static-rate-limit.test.ts` + this file — 46/46 total
+across the full gate run, zero regressions.
 
 **How to verify.**
 

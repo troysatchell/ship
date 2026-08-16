@@ -486,13 +486,29 @@ export interface OAuthRateLimit {
  * real `/oauth/*` volume the way `MEASURED_WORST_CASE_BURST_PER_MINUTE` was
  * captured for `/api/*` and replace this reasoning, don't just raise the
  * number.
+ *
+ * Test tier is 10,000 — NOT a small, easily-driveable number. First version
+ * of this ticket shipped it at 30 (mirroring `createSpaStaticLimiter`'s
+ * test tier, which is safe there because nothing else in this suite drives
+ * real traffic through the static-SPA route). `/oauth/token` is different:
+ * `platform/oauth/__tests__/token.test.ts` alone drives dozens of real HTTP
+ * requests through one shared `createApp()` instance across its `it()`
+ * blocks. A 30-request test-tier cap meant later tests in that file started
+ * genuinely receiving 429 instead of their expected specific status —
+ * caught by `gate.sh`'s full suite run, not by this ticket's own isolated
+ * test file (which passes either way, since it resets modules per test).
+ * Fixed the same way TRO-494 fixed the identical tension for
+ * `createApiRateLimiters`: keep the ambient test tier permissive (matching
+ * every other limiter's 10,000/100,000-class test tier in this file) and
+ * add `limitOverrides` as a test-only third parameter for a test that
+ * specifically wants to drive the 429 path quickly.
  */
 export function resolveOAuthRateLimit(env: RateLimitEnv = process.env): OAuthRateLimit {
   const { isTestEnv, isDevEnv } = resolveEnvTier(env);
 
   return {
     windowMs: API_RATE_LIMIT_WINDOW_MS,
-    limit: isTestEnv ? 30 : isDevEnv ? 10000 : 120,
+    limit: isTestEnv ? 10000 : isDevEnv ? 10000 : 120,
   };
 }
 
@@ -506,12 +522,20 @@ export function resolveOAuthRateLimit(env: RateLimitEnv = process.env): OAuthRat
  * `redisClient` defaults from `env.REDIS_URL`, same pattern and same reason
  * as every other limiter in this file — a per-process `MemoryStore` would
  * silently multiply this ceiling by the instance count under autoscaling.
+ *
+ * `limitOverrides` — test-only third seam, same shape and same reason as
+ * `createApiRateLimiters`'s (TRO-494): nothing outside a test passes a third
+ * argument, so the real `app.ts` call site (two args) resolves exactly
+ * `resolveOAuthRateLimit(env)` with no override. Lets a test isolate this
+ * limiter at a small, quickly-driveable cap without lowering the ambient
+ * test tier every OTHER test in the suite also runs against.
  */
 export function createOAuthRateLimiter(
   env: RateLimitEnv = process.env,
-  redisClient: Redis | undefined = createRedisClientFromEnv(env)
+  redisClient: Redis | undefined = createRedisClientFromEnv(env),
+  limitOverrides: Partial<OAuthRateLimit> = {}
 ): RequestHandler {
-  const { windowMs, limit } = resolveOAuthRateLimit(env);
+  const { windowMs, limit } = { ...resolveOAuthRateLimit(env), ...limitOverrides };
 
   return rateLimit({
     windowMs,
