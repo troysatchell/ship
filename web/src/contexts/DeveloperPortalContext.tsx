@@ -58,24 +58,36 @@ export function DeveloperPortalProvider({ children }: { children: ReactNode }) {
   const [principal, setPrincipal] = useState<V1Principal | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  // StrictMode / route-remount guard: mint exactly once per provider lifetime,
-  // not once per effect run.
+  // Mint exactly once per provider instance. React.StrictMode (the `pnpm dev`
+  // runtime) mounts → unmounts → re-mounts every effect in development but KEEPS
+  // component state; an earlier version paired this ref with a `cancelled` flag
+  // set in the cleanup, so the StrictMode re-run returned early (ref already set)
+  // and the only in-flight mint discarded its own result → `loading` stayed true
+  // forever ("Setting up developer session..." never resolved under `pnpm dev`,
+  // while production/preview builds — no double-invoke — worked; observed
+  // 2026-08-16). Fix: mint once, and let that mint's result land in state — the
+  // fiber (and its state) survives StrictMode's simulated unmount, and React 18
+  // no longer warns about setState on an unmounted component for the real case.
+  // A second mint per mount would 409 (token names are unique per user+minute).
   const mintedRef = useRef(false);
 
   useEffect(() => {
     if (mintedRef.current) return;
     mintedRef.current = true;
 
-    let cancelled = false;
 
     async function mint() {
       try {
         const res = await api.apiTokens.create({
-          name: `Ship Developer Portal (${new Date().toISOString().slice(0, 16)})`,
+          // Token names are unique per user (POST /api/api-tokens → 409 on a
+          // duplicate active name). A minute-granular name meant a second portal
+          // entry within the same minute — a plain page reload — 409'd and the
+          // portal never got a token (observed 2026-08-16). Millisecond timestamp
+          // + a random suffix keeps every entry unique.
+          name: `Ship Developer Portal (${new Date().toISOString()} ${Math.random().toString(36).slice(2, 8)})`,
           expires_in_days: 1,
           scopes: PORTAL_TOKEN_SCOPES,
         });
-        if (cancelled) return;
         if (!res.success || !res.data) {
           setError(res.error?.message ?? 'Failed to mint a portal session token.');
           setLoading(false);
@@ -85,7 +97,6 @@ export function DeveloperPortalProvider({ children }: { children: ReactNode }) {
         setToken(mintedToken);
 
         const me = await v1Request<V1Principal>(mintedToken, '/me');
-        if (cancelled) return;
         if (me.ok) {
           setPrincipal(me.data);
         } else {
@@ -95,16 +106,12 @@ export function DeveloperPortalProvider({ children }: { children: ReactNode }) {
         }
         setLoading(false);
       } catch (err) {
-        if (cancelled) return;
         setError(err instanceof Error ? err.message : 'Failed to start a developer portal session.');
         setLoading(false);
       }
     }
 
     void mint();
-    return () => {
-      cancelled = true;
-    };
   }, []);
 
   async function callV1<T>(path: string, init?: RequestInit): Promise<V1Result<T>> {

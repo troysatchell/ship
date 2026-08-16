@@ -6,6 +6,70 @@ to `audit/AUDIT_REPORT.md`, and to the branch that carried it.
 
 ---
 
+## TRO-623 — Demo script's Install step left the `ship` alias undefined in a fresh terminal
+
+**Non-code / doc-only ticket — a real reproduced-then-fixed terminal session, not vitest** (same
+disclosed-exception class as TRO-622/TRO-590/TF-1..10: no unit test exercises a markdown runbook).
+
+**Found live, not hypothesized.** Troy ran `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`'s own
+pre-stage + Act 1 steps exactly as written and hit `zsh: command not found: ship` on the first
+`ship login`. Root cause: `ship` is a shell alias (`alias ship="node $PWD/integrations/cli/dist/
+bin.js"`) defined once in step P1 — aliases don't cross terminals, and Act 1's Install step opens a
+brand-new one (`cd $(mktemp -d)`) without redeclaring it. Installing the `@ship/sdk` tarball there
+doesn't help either — `ship` is `@ship/cli`'s bin, a separate package the SDK install never touches.
+
+**Fix.** `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`: P1 now says the alias is LEFT-terminal-only;
+the "0:15–0:35 Install" step defines its own copy inline, from the repo root, before `cd`ing away
+(`$PWD` expands immediately at alias-definition time, so the resulting absolute path survives the
+`cd`).
+
+**Verified for real.** Reproduced the failure in a real interactive `zsh` session running the old
+steps verbatim, then confirmed the new steps work in the same kind of session (`ship --help`
+resolved and printed real CLI output). A first verification attempt via `zsh -c "<script>"` gave a
+false negative — a parse-time alias-expansion quirk specific to `-c` scripts, not a flaw in the fix
+— caught and re-verified against a line-by-line interactive session instead, matching how a human
+actually types into a terminal.
+
+**How to run it.** From the repo root: `alias ship="node $PWD/integrations/cli/dist/bin.js"; cd
+$(mktemp -d); npm init -y >/dev/null && npm install /tmp/ship-sdk-0.0.0.tgz; ship --help` (build the
+CLI first if `integrations/cli/dist/bin.js` doesn't exist: `pnpm --filter @ship/cli build`).
+
+**Roll back.** Revert this commit; the Install step returns to assuming the alias is already global.
+
+---
+
+## TRO-622 — Demo run-through: three `pnpm dev` / demo-environment breakers fixed
+
+**What was wrong (all three observed 2026-08-16 by executing `docs/submission/PLUGFORGE-DEMO-SCRIPT.md`
+end-to-end on a fresh checkout of `main`, exactly as the PF-908 recording will).**
+1. `pnpm dev` also started `@ship/browser-demo`'s bare `vite` (plus the sdk/cli/slack `dev` watchers)
+   because `scripts/dev.sh` ran `--recursive --filter '!@ship/agent' run dev`; browser-demo and
+   `@ship/web` raced for `:5173` and web died with `EADDRINUSE` (`web dev: Failed`).
+2. The developer portal hung on "Setting up developer session..." under React dev mode
+   (`DeveloperPortalContext.tsx`'s mint-once ref + `cancelled` flag discarded the only in-flight
+   mint on StrictMode's effect re-run); and re-entering the portal within the same minute 409'd
+   because the minted token's name was minute-granular and `POST /api/api-tokens` rejects duplicate
+   active names.
+3. `docs/submission/demo-webhook-listener.mjs` (the standalone reference subscriber the demo's
+   Replay shot uses) imported `verifyWebhook` from `sdk/dist/index.js`, which no longer exports it
+   since TRO-449's browser/node split → `undefined` → every correctly-signed delivery was reported
+   `✗ rejected` and the portal Replay landed as *Dead*.
+
+**What changed.** `scripts/dev.sh` excludes the four W6 packages from the app process group;
+`web/src/contexts/DeveloperPortalContext.tsx` mints once and lets the result land in state, with a
+ms+random token name; the listener imports from `../../sdk/dist/node.js` with a loud guard.
+Regression tests: `web/src/contexts/DeveloperPortalContext.test.tsx` (StrictMode render resolves;
+two mounts mint different names — red before), `sdk/src/__tests__/referenceListenerImport.test.ts`.
+
+**How to run it.** `pnpm dev` → web prints `➜ Local: http://localhost:5173/`; open
+`/developer/webhooks` (loads past the spinner, reload it within a minute — still loads); run
+`SECRET=whsec_… PORT=8787 node docs/submission/demo-webhook-listener.mjs` and replay a delivery
+from the portal → `✓ verified … idempotency-key=…`.
+
+**Rollback.** Revert the PR (three independent commits; each can be reverted alone).
+
+---
+
 ## TRO-549 — E2E login-flow assertions accept any non-/login URL as proof of sign-in
 
 **What changed.** Five sites across `e2e/auth.spec.ts` (lines 53, 67, 94) and

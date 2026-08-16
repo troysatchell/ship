@@ -256,7 +256,18 @@ if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.a
       process.exit(1);
     }
 
-    const { verifyWebhook } = await import('../../sdk/dist/index.js');
+    // `verifyWebhook` is a Node-only export — since TRO-449/PF-802 split the SDK
+    // into a browser-safe barrel (`dist/index.js`) and `dist/node.js`, it lives
+    // ONLY in the latter. Importing it from `index.js` yielded `undefined`, and
+    // every real delivery was reported as "✗ rejected — signature verification
+    // failed" (the demo's Replay landed as Dead) although the secret was right.
+    // Observed 2026-08-16 during the demo run-through; the e2e/vitest callers
+    // never hit this because they inject their own `verify`.
+    const { verifyWebhook } = await import('../../sdk/dist/node.js');
+    if (typeof verifyWebhook !== 'function') {
+      console.error('verifyWebhook is not exported by sdk/dist/node.js — run `pnpm build:sdk` (needs the TRO-449 node entry).');
+      process.exit(1);
+    }
 
     const subscriber = createReferenceSubscriber({
       secret,
