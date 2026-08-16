@@ -28,13 +28,19 @@ refresh-token-specific rejection branches this ticket is about:
   emits `error_details` in the JSON body when present. Every existing call site that never had a
   reason keeps sending the unmodified RFC 6749 §5.2 shape.
 
-**Regression test.** Extended `refresh-rotation-stolen-token.test.ts`'s existing reuse assertion
-(the file whose own header previously documented "no machine-readable discriminator exists, only
-`error_description` text" as a deliberate, still-open choice — that header is updated to reflect
-this ticket closing the gap) with `expect(...).error_details?.reason).toBe('token_reused')`.
+**Regression tests.** Two changes:
+1. Extended `refresh-rotation-stolen-token.test.ts`'s existing reuse assertion (the file whose own
+   header previously documented "no machine-readable discriminator exists, only `error_description`
+   text" as a deliberate, still-open choice — that header is updated to reflect this ticket closing
+   the gap) with `expect(...).error_details?.reason).toBe('token_reused')`.
+2. New `it()` in `token.test.ts`'s "refresh_token grant — other negative cases" — one focused test
+   hitting all three reasons (`token_unknown`/`token_expired`/`token_reused`) back to back, isolated
+   from the narrated stolen-token story, and asserting the RFC `error`/`error_description` fields
+   are unchanged alongside the new one.
+
 **Confirmed red before green:** temporarily reverted the `{ reason: 'token_reused' }` argument at
 the reuse call site — real `AssertionError`, `Expected: "token_reused"` / `Received: undefined`, not
-an import/typo error. Restored; 33/33 tests in both `token.test.ts` and
+an import/typo error. Restored; 34/34 tests in both `token.test.ts` and
 `refresh-rotation-stolen-token.test.ts` pass.
 
 **Not done (per the ticket's own "not verified" note, still true):** no SDK/portal consumer was
