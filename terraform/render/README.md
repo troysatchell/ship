@@ -21,7 +21,7 @@ described in `memory-bank/techContext.md` with a config a clean machine can repr
 | `agent_service.tf` | `render_web_service.agent` (TRO-316/FG-11), including its env vars |
 | `outputs.tf` | Non-sensitive outputs only (IDs, URL) |
 | `terraform.tfvars.example` | Placeholder values — copy to `terraform.tfvars` (gitignored) |
-| `plan/` | Captured `terraform plan` runs, annotated resource-by-resource, committed as submission artifacts |
+| `plan/` | Captured `terraform plan` runs, annotated resource-by-resource, committed as submission artifacts — incl. `tro-415-render-destroy-redeploy-proof.md`, the full-topology destroy → re-apply → drift proof (2026-08-16) |
 
 ## Week 6 platform env vars (PF-900 / TRO-411)
 
