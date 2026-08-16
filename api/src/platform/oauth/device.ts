@@ -163,6 +163,26 @@ function hashDeviceCode(raw: string): string {
   return hashToken(raw);
 }
 
+/** TRO-589: `oauth_device_codes.user_code` was being stored in plaintext —
+ * the only column on this table that wasn't already hashed at rest
+ * (`device_code_hash` has always gone through `hashDeviceCode`/`hashToken`
+ * above). Found by this ticket's own PF-106/TRO-425 landing agent's security
+ * self-review. Same SHA-256-at-rest pattern as every other credential in
+ * this codebase (see `token.ts`'s `hashToken` doc comment) — deterministic,
+ * so a human-typed code can still be looked up by hashing what they typed
+ * and comparing hashes, exactly mirroring `hashDeviceCode`/
+ * `lookupDeviceCodeByHash` immediately above/below. The `user_code` COLUMN
+ * NAME is unchanged (still `user_code`, not `user_code_hash`) — renaming it
+ * would need its own migration and isn't required to close this finding
+ * (severity was already low: short TTL, and a leaked code alone can't
+ * complete the flow without a live, session-authenticated approval step);
+ * kept in scope to just the storage/lookup boundary. The PLAINTEXT code
+ * returned by `createDeviceCode` and typed by the human at the verification
+ * page is completely unchanged — only what lands in the database changes. */
+function hashUserCode(raw: string): string {
+  return hashToken(raw);
+}
+
 export interface CreateDeviceCodeParams {
   clientId: string;
   scope: string | undefined;
@@ -211,7 +231,10 @@ export async function createDeviceCode(params: CreateDeviceCodeParams): Promise<
     `INSERT INTO oauth_device_codes
        (device_code_hash, user_code, app_id, scopes, interval_seconds, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6)`,
-    [hashDeviceCode(deviceCode), userCode, app.id, scopes, DEFAULT_DEVICE_POLL_INTERVAL_SECONDS, expiresAt]
+    // TRO-589: user_code is hashed the same way device_code_hash already is
+    // — the plaintext `userCode` returned below (and shown to the human) is
+    // never written to the database.
+    [hashDeviceCode(deviceCode), hashUserCode(userCode), app.id, scopes, DEFAULT_DEVICE_POLL_INTERVAL_SECONDS, expiresAt]
   );
 
   return {
@@ -230,6 +253,11 @@ export async function createDeviceCode(params: CreateDeviceCodeParams): Promise<
 interface DeviceCodeRow {
   id: string;
   device_code_hash: string;
+  /** TRO-589: despite the column name, this is `hashUserCode(rawUserCode)`
+   * (SHA-256 hex), not the plaintext code — same as `device_code_hash`
+   * above. Nothing in this module reads this field back for display; the
+   * plaintext code only ever flows through `createDeviceCode`'s return
+   * value and the caller-supplied lookup input. */
   user_code: string;
   app_id: string;
   scopes: string[];
@@ -244,10 +272,14 @@ interface DeviceCodeRow {
 const DEVICE_CODE_COLUMNS = `id, device_code_hash, user_code, app_id, scopes, interval_seconds,
        expires_at, user_id, status, last_polled_at, token_issued_at`;
 
+/** `userCode` here is the plaintext, normalized (`XXXX-XXXX`) code the human
+ * typed — TRO-589: hashed before the lookup, mirroring
+ * `lookupDeviceCodeByHash`'s `deviceCodeHash` parameter immediately below,
+ * since the column now stores the hash, not the plaintext. */
 async function lookupDeviceCodeByUserCode(userCode: string): Promise<DeviceCodeRow | null> {
   const result = await pool.query<DeviceCodeRow>(
     `SELECT ${DEVICE_CODE_COLUMNS} FROM oauth_device_codes WHERE user_code = $1`,
-    [userCode]
+    [hashUserCode(userCode)]
   );
   return result.rows[0] ?? null;
 }
