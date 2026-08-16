@@ -91,6 +91,20 @@
  * "containerized Ship (testcontainers, per repo pattern)" for that case,
  * exactly as the PRD names it.
  *
+ * ── Two API modes (TRO-621, W6-R55 — ruling I-07 "containerized Ship") ──
+ * By default the API is spawned as a `tsx src/index.ts` child of this
+ * process from the checkout (`spawnApiChild` — unchanged since TRO-455).
+ * When `DRILL_TTFE_API_IMAGE=<image ref>` is set, the API instead runs FROM
+ * THAT CONTAINER IMAGE (the root `Dockerfile` — the same artifact CI's
+ * `build-image` job builds and main pushes to GHCR) via testcontainers'
+ * `GenericContainer`, under the image's own `NODE_ENV=production`, and the
+ * six stages below run against the host-mapped port. Mode selection, the
+ * container's env, and the "which Postgres can a production-mode container
+ * even talk to (TLS!)" decision are pure functions in `./ttfe-api-mode.ts`
+ * (unit-tested); this file only executes the plan. The header line prints
+ * `api: image <ref>` or `api: tsx child` so a log reader can never confuse
+ * the two. Image mode is opt-in and tsx mode is byte-identical to before.
+ *
  * ── What is, and is not, inside the timed/asserted budget ──
  * Postgres startup + migrations + spawning the real api process (whichever
  * DB source above) run BEFORE stage timing begins — standing platform
@@ -114,6 +128,24 @@ import crypto from 'node:crypto';
 import pg from 'pg';
 
 import { evaluateDrillStages, formatDrillEvaluation, type DrillThresholdConfig, type StageTiming } from './thresholds.js';
+import {
+  OWNED_POSTGRES_DB,
+  OWNED_POSTGRES_IMAGE,
+  OWNED_POSTGRES_ALIAS,
+  OWNED_POSTGRES_CERT_PATH,
+  OWNED_POSTGRES_KEY_PATH,
+  OWNED_POSTGRES_PASSWORD,
+  OWNED_POSTGRES_USER,
+  apiBaseUrlForContainer,
+  captureListenerBindHost,
+  describeApiMode,
+  ownedPostgresTlsCommand,
+  planImageApi,
+  resolveApiMode,
+  webhookTargetUrlForMode,
+  type ImagePostgresSource,
+  type TtfeApiMode,
+} from './ttfe-api-mode.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -227,6 +259,153 @@ function spawnApiChild(databaseUrl: string, port: number, secretEncryptionKey: s
   }) as ChildProcessByStdio<null, Readable, Readable>;
 }
 
+/** A running API, whichever mode started it. `stop()` must be safe to call
+ *  exactly once from main()'s finally block. */
+interface ApiHandle {
+  baseUrl: string;
+  stop(): Promise<void>;
+}
+
+/** tsx mode — the pre-TRO-621 path, verbatim: spawn, wait for the stdout
+ *  readiness line, SIGTERM + wait-for-exit on stop. */
+async function startTsxApi(databaseUrl: string, secretEncryptionKey: string): Promise<ApiHandle> {
+  const apiPort = await getFreePort();
+  const apiChild = spawnApiChild(databaseUrl, apiPort, secretEncryptionKey);
+  apiChild.stderr.on('data', (chunk: Buffer) => {
+    if (process.env.DEBUG) process.stderr.write(`[api] ${chunk}`);
+  });
+  await waitForApiReady(apiChild, 30_000);
+  return {
+    baseUrl: `http://127.0.0.1:${apiPort}`,
+    stop: async () => {
+      apiChild.kill('SIGTERM');
+      await new Promise<void>((resolveKill) => {
+        if (apiChild.exitCode !== null) {
+          resolveKill();
+          return;
+        }
+        apiChild.once('exit', () => resolveKill());
+      });
+    },
+  };
+}
+
+/** How long the image is given to `migrate.js && index.js` its way to a
+ *  200 on `GET /health`. Generous on purpose: production boot includes the
+ *  (expected, env-fallback) SSM attempts in `ssm.ts` and a full migration
+ *  pass; a genuinely broken image still fails in bounded time. */
+const IMAGE_API_START_TIMEOUT_MS = 120_000;
+
+/** image mode — start `imageRef` with testcontainers, wired per
+ *  `planImageApi()`, and wait for `/health` to answer 200 from the host. On
+ *  a start failure the container's own last log lines are surfaced (they
+ *  are otherwise lost with the container), because "did not become healthy
+ *  in 120s" alone is not actionable. */
+async function startImageApi(
+  imageRef: string,
+  postgres: ImagePostgresSource,
+  ambientDatabaseUrl: string | undefined,
+  network: import('testcontainers').StartedNetwork | null,
+  secretEncryptionKey: string
+): Promise<ApiHandle> {
+  const { GenericContainer, Wait } = await import('testcontainers');
+  const plan = planImageApi({
+    imageRef,
+    postgres,
+    ambientDatabaseUrl,
+    secretEncryptionKey,
+    sessionSecret: crypto.randomBytes(32).toString('hex'),
+  });
+  if (plan.needsNetwork && !network) {
+    throw new Error('startImageApi: owned Postgres requires the drill-owned docker Network');
+  }
+
+  const recentLogs: string[] = [];
+  let container = new GenericContainer(plan.imageRef)
+    .withEnvironment(plan.env)
+    .withExtraHosts(plan.extraHosts)
+    .withExposedPorts(plan.containerPort)
+    .withWaitStrategy(Wait.forHttp('/health', plan.containerPort).forStatusCode(200))
+    .withStartupTimeout(IMAGE_API_START_TIMEOUT_MS)
+    .withLogConsumer((stream) => {
+      stream.on('data', (chunk: Buffer | string) => {
+        const text = chunk.toString();
+        recentLogs.push(text);
+        if (recentLogs.length > 200) recentLogs.shift();
+        if (process.env.DEBUG) process.stderr.write(`[api-image] ${text}`);
+      });
+    });
+  if (network) container = container.withNetwork(network);
+
+  let started: import('testcontainers').StartedTestContainer;
+  try {
+    started = await container.start();
+  } catch (error) {
+    const tail = recentLogs.join('').split('\n').slice(-40).join('\n');
+    throw new Error(
+      `api image ${plan.imageRef} did not answer GET /health 200 within ${IMAGE_API_START_TIMEOUT_MS}ms ` +
+        `(${error instanceof Error ? error.message : String(error)}). Last container log lines:\n${tail}`
+    );
+  }
+
+  return {
+    baseUrl: apiBaseUrlForContainer(started.getHost(), started.getMappedPort(plan.containerPort)),
+    stop: async () => {
+      await started.stop();
+    },
+  };
+}
+
+/** Image mode + owned Postgres: a throwaway, one-day, self-signed server
+ *  certificate for the drill's own Postgres (`api/src/db/ssl.ts` uses
+ *  `rejectUnauthorized: false`, so any cert works — it only has to EXIST for
+ *  the TLS handshake). Generated with the host's `openssl` CLI (macOS ships
+ *  LibreSSL's; GitHub's ubuntu runners have OpenSSL) into a temp dir that is
+ *  removed before returning — nothing is committed, nothing lingers. */
+async function generateSelfSignedServerCert(commonName: string): Promise<{ cert: string; key: string }> {
+  const dir = await mkdtemp(join(tmpdir(), 'ttfe-drill-pg-tls-'));
+  try {
+    const certPath = join(dir, 'server.crt');
+    const keyPath = join(dir, 'server.key');
+    execFileSync(
+      'openssl',
+      ['req', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '1', '-subj', `/CN=${commonName}`, '-keyout', keyPath, '-out', certPath],
+      { stdio: 'ignore' }
+    );
+    const [cert, key] = await Promise.all([readFile(certPath, 'utf8'), readFile(keyPath, 'utf8')]);
+    return { cert, key };
+  } finally {
+    await rm(dir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
+/** Image mode only: can the ambient `DATABASE_URL` server speak TLS? A
+ *  production-mode container REQUIRES it (`api/src/db/ssl.ts` — see
+ *  `ttfe-api-mode.ts`'s header). Returns 'ambient' when a TLS connection
+ *  succeeds, 'owned' when the server is reachable but plaintext-only (the
+ *  drill then starts its own TLS-enabled Postgres and says so). Any OTHER
+ *  failure (unreachable, bad credentials) is rethrown — that is a real
+ *  environment problem, not a reason to silently switch databases. */
+async function probeAmbientPostgres(databaseUrl: string): Promise<ImagePostgresSource> {
+  const tlsClient = new pg.Client({ connectionString: databaseUrl, ssl: { rejectUnauthorized: false } });
+  try {
+    await tlsClient.connect();
+    await tlsClient.end();
+    return 'ambient';
+  } catch (tlsError) {
+    await tlsClient.end().catch(() => {});
+    const plainClient = new pg.Client({ connectionString: databaseUrl });
+    try {
+      await plainClient.connect();
+      await plainClient.end();
+    } catch {
+      await plainClient.end().catch(() => {});
+      throw tlsError;
+    }
+    return 'owned';
+  }
+}
+
 interface CapturedRequest {
   headers: Record<string, string | string[] | undefined>;
   rawBody: string;
@@ -243,8 +422,9 @@ interface CapturedRequest {
  *  own single fresh delivery); TRO-615 additionally records EVERY request in
  *  `requests` (arrival order) with a `receivedAt` timestamp, and
  *  `waitForCount(n, timeoutMs)` resolves once at least `n` have arrived —
- *  the P95 sample. */
-function createCaptureListener(): {
+ *  the P95 sample. `bindHost` (TRO-621): 127.0.0.1 in tsx mode, 0.0.0.0 in
+ *  image mode so the API container can reach the listener. */
+function createCaptureListener(bindHost: string): {
   listen(): Promise<number>;
   captured: Promise<CapturedRequest>;
   requests: CapturedRequest[];
@@ -282,7 +462,7 @@ function createCaptureListener(): {
     listen(): Promise<number> {
       return new Promise((resolveListen, reject) => {
         server.once('error', reject);
-        server.listen(0, '127.0.0.1', () => {
+        server.listen(0, bindHost, () => {
           const address = server.address() as AddressInfo;
           resolveListen(address.port);
         });
@@ -456,16 +636,67 @@ async function main(): Promise<void> {
   const runId = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const stages: StageTiming[] = [];
 
+  const apiMode: TtfeApiMode = resolveApiMode(process.env);
+
   console.log('=== TRO-455 / PF-603: TTFE drill ===');
+  console.log(`[mode] ${describeApiMode(apiMode)}`);
   console.log('');
 
   // ── Untimed setup: Postgres + real api process ──
   const setupStart = Date.now();
   let ownedContainer: { stop(): Promise<void> } | null = null;
+  let ownedNetwork: import('testcontainers').StartedNetwork | null = null;
   let databaseUrl = process.env.DATABASE_URL;
-  if (databaseUrl) {
+  // image mode only — which Postgres the API CONTAINER talks to (see
+  // ttfe-api-mode.ts's header for the NODE_ENV=production → TLS reasoning).
+  let imagePostgres: ImagePostgresSource = 'owned';
+  if (databaseUrl && apiMode.kind === 'image') {
+    imagePostgres = await probeAmbientPostgres(databaseUrl);
+    if (imagePostgres === 'ambient') {
+      console.log(
+        `[setup] reusing ambient DATABASE_URL (accepts TLS) — the api container reaches it via host.docker.internal`
+      );
+    } else {
+      console.log(
+        `[setup] ambient DATABASE_URL is reachable but PLAINTEXT-ONLY; a NODE_ENV=production api container requires ` +
+          `TLS to Postgres (api/src/db/ssl.ts) — bypassing it and starting the drill's own TLS-enabled ` +
+          `${OWNED_POSTGRES_IMAGE} instead (unset DATABASE_URL to make this the explicit path)`
+      );
+      databaseUrl = undefined;
+    }
+  } else if (databaseUrl) {
     console.log(`[setup] reusing ambient DATABASE_URL (CI service container / .factory-env) — no Docker touched`);
-  } else {
+  }
+  if (!databaseUrl && apiMode.kind === 'image') {
+    // Owned Postgres, image flavour: TLS on (production api pool requires
+    // it), on a private Network the api container joins by alias.
+    console.log(`[setup] starting testcontainers ${OWNED_POSTGRES_IMAGE} (ssl=on) on a private docker network`);
+    const { Network } = await import('testcontainers');
+    const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
+    const tls = await generateSelfSignedServerCert(OWNED_POSTGRES_ALIAS);
+    const network = await new Network().start();
+    ownedNetwork = network;
+    const container = await new PostgreSqlContainer(OWNED_POSTGRES_IMAGE)
+      .withDatabase(OWNED_POSTGRES_DB)
+      .withUsername(OWNED_POSTGRES_USER)
+      .withPassword(OWNED_POSTGRES_PASSWORD)
+      .withCopyContentToContainer([
+        { content: tls.cert, target: OWNED_POSTGRES_CERT_PATH },
+        { content: tls.key, target: OWNED_POSTGRES_KEY_PATH },
+      ])
+      .withCommand(ownedPostgresTlsCommand())
+      .withNetwork(network)
+      .withNetworkAliases(OWNED_POSTGRES_ALIAS)
+      .withStartupTimeout(120_000)
+      .start();
+    ownedContainer = {
+      stop: async () => {
+        await container.stop();
+        await network.stop();
+      },
+    };
+    databaseUrl = container.getConnectionUri();
+  } else if (!databaseUrl) {
     console.log('[setup] no DATABASE_URL set — starting a genuine testcontainers Postgres (local/clean-machine path)');
     const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
     const container = await new PostgreSqlContainer('postgres:15')
@@ -496,14 +727,20 @@ async function main(): Promise<void> {
   await execAsync('pnpm', ['build:sdk'], REPO_ROOT);
 
   const secretEncryptionKey = crypto.randomBytes(32).toString('hex');
-  const apiPort = await getFreePort();
-  const apiChild = spawnApiChild(databaseUrl, apiPort, secretEncryptionKey);
-  apiChild.stderr.on('data', (chunk: Buffer) => {
-    if (process.env.DEBUG) process.stderr.write(`[api] ${chunk}`);
-  });
-  await waitForApiReady(apiChild, 30_000);
-  const baseUrl = `http://127.0.0.1:${apiPort}`;
-  console.log(`[setup] api ready at ${baseUrl} (${Date.now() - setupStart}ms — untimed, not part of totalBudgetMs)`);
+  const api: ApiHandle =
+    apiMode.kind === 'image'
+      ? await startImageApi(
+          apiMode.imageRef,
+          imagePostgres,
+          imagePostgres === 'ambient' ? databaseUrl : undefined,
+          ownedNetwork,
+          secretEncryptionKey
+        )
+      : await startTsxApi(databaseUrl, secretEncryptionKey);
+  const baseUrl = api.baseUrl;
+  console.log(
+    `[setup] api ready at ${baseUrl} (${describeApiMode(apiMode)}; ${Date.now() - setupStart}ms — untimed, not part of totalBudgetMs)`
+  );
   console.log('');
 
   let exitCode = 0;
@@ -550,14 +787,14 @@ async function main(): Promise<void> {
 
     // ── Stage 3: webhook_create ──
     t0 = Date.now();
-    const listener = createCaptureListener();
+    const listener = createCaptureListener(captureListenerBindHost(apiMode));
     const listenerPort = await listener.listen();
     let subscriptionId: string | undefined;
     try {
       const subscription = await client.webhooks.createSubscription({
         app_id: principal.oauthAppId,
         event_type: 'document.created',
-        target_url: `http://127.0.0.1:${listenerPort}/`,
+        target_url: webhookTargetUrlForMode(apiMode, listenerPort),
       });
       subscriptionId = subscription.id;
       stages.push({ name: 'webhook_create', ms: Date.now() - t0 });
@@ -685,6 +922,7 @@ async function main(): Promise<void> {
     }
 
     const evaluation = evaluateDrillStages(stages, config, deliveryLatenciesMs);
+    console.log(`[mode] ${describeApiMode(apiMode)}`);
     console.log(formatDrillEvaluation(stages, evaluation));
     exitCode = evaluation.pass ? 0 : 1;
 
@@ -711,14 +949,7 @@ async function main(): Promise<void> {
     await cleanupPrincipal(pool, principal).catch(() => {});
   } finally {
     if (installDir) await rm(installDir, { recursive: true, force: true }).catch(() => {});
-    apiChild.kill('SIGTERM');
-    await new Promise<void>((resolveKill) => {
-      if (apiChild.exitCode !== null) {
-        resolveKill();
-        return;
-      }
-      apiChild.once('exit', () => resolveKill());
-    });
+    await api.stop();
     await pool.end();
     if (ownedContainer) await ownedContainer.stop();
   }

@@ -292,6 +292,24 @@ each of the 3 writes under the acting human's `user_id` — now lands a row in `
 action it took — a fact that was structurally unobservable before this rewire, because internal
 routes carry no such trail.
 
+**TTFE drill — two API modes (TRO-621, W6-R55).** `pnpm drill ttfe` (`scripts/drill/ttfe.ts`,
+PLUGFORGE.MD §4/§5's timed install → device login → webhook → document → signed delivery →
+`verifyWebhook` proof) runs the API under test in one of two modes, printed as `api: tsx child`
+or `api: image <ref>` in its header and above its per-stage table. The default (`tsx`) spawns
+`api/src/index.ts` from the checkout, unchanged since TRO-455 — what `gate.sh` G12, GitLab's
+`drill-ttfe`, and GitHub's `drill-ttfe` job run. Setting `DRILL_TTFE_API_IMAGE=<image ref>` (ruling
+I-07, "containerized Ship instance") instead starts that image — the root `Dockerfile`, the same
+artifact CI's `build-image` job pushes — with testcontainers' `GenericContainer` under the image's
+own `NODE_ENV=production`, waits for `GET /health` 200, and runs the identical six stages against
+the host-mapped port; GitHub's `drill-ttfe-image` job does this on every PR (GitHub-only: GitLab's
+shared runner cannot start containers). Production mode is what makes this a real proof and what
+constrains it: `api/src/db/ssl.ts` requires TLS to Postgres in production, so the drill either
+reuses an ambient `DATABASE_URL` whose server accepts TLS (reached from the container via
+`host.docker.internal`) or — when the ambient server is plaintext-only, or no `DATABASE_URL` is
+set — starts its own `ssl=on` Postgres on a private docker network the API container joins by
+alias, saying which it did and why. Mode selection, the container env, and that TLS decision are
+pure functions in `scripts/drill/ttfe-api-mode.ts` (unit-tested; see its header).
+
 ---
 
 ## Failure Modes

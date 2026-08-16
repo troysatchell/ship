@@ -404,70 +404,6 @@ API, schema, or SDK changes.
 
 ---
 
-## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
-
-**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
-keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
-Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
-the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
-`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
-(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
-combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
-composite index has to match that whole shape, not just the two cursor columns. Read
-`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
-`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
-'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
-`document_type = 'sprint'` combined with `workspace_id`.
-Added migration `052_documents_workspace_type_created_at_index.sql`:
-`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
-created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
-endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
-every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
-
-**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
-35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
-way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
-large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
-sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
-afterward) to get a plan that actually distinguishes the two states. Before the index:
-- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
-- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
-- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
-
-After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
-re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
-an ad hoc index, produces the win):
-- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
-- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
-  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
-- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
-
-Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
-stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
-scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
-index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
-re-sorts every not-yet-returned row of that type in the workspace.
-
-**How to run it.**
-```bash
-FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
-```
-To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
-large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
-one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
-to show the effect), then run
-`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
-'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
-worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
-Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
-with no `Sort` node.
-
-**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
-schema object with no dependents (nothing else references it by name), so dropping it is a full,
-clean revert. No data was changed by this migration; only the index needs removing.
-
----
-
 ## TRO-444 — PlugForge final demo script + social post drafts, with a real captured `✓ verified` frame (PF-908)
 
 **What.** Docs-only. `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` is rewritten from the stale W5
@@ -545,6 +481,120 @@ entry — no code, no tests, no schema.
 
 **Rollback.** `git rm docs/submission/PLUGFORGE-PRESEARCH.md`, drop the README bullet, delete this
 entry. Docs-only; nothing runtime depends on the file.
+
+---
+
+## TRO-621 — TTFE drill can run the API from the container image (ruling I-07 "containerized Ship")
+
+**What was missing.** `pnpm drill ttfe` (`scripts/drill/ttfe.ts`, TRO-455) always ran the API as a
+`tsx src/index.ts` child of the checkout; only Postgres was ever containerized. Ruling I-07's
+"containerized Ship instance" means the API under test runs from the container image the root
+`Dockerfile` builds (and CI's `build-image` pushes to GHCR) — nothing in CI ever executed the drill's
+stages against that artifact.
+
+**What changed.**
+- `scripts/drill/ttfe-api-mode.ts` (new, pure) — mode selection (`DRILL_TTFE_API_IMAGE` unset →
+  `tsx`; set → `image <ref>`), the label the drill prints (`api: tsx child` / `api: image <ref>`),
+  the production-mode container env (`NODE_ENV=production`, `PORT`, `DATABASE_URL`, `SESSION_SECRET`,
+  `SECRET_ENCRYPTION_KEY`, `CORS_ORIGIN`, `AWS_EC2_METADATA_DISABLED` — each traced to the
+  `api/src/index.ts`/`app.ts`/`config/ssm.ts` line that needs it), loopback → `host.docker.internal`
+  URL rewriting, per-mode webhook-target/listener addressing, and the owned-Postgres TLS command.
+- `scripts/drill/ttfe.ts` — image mode via testcontainers `GenericContainer`: exposes the API port,
+  `host-gateway` extra host, waits for `GET /health` 200 (bounded, 120 s; last container log lines
+  surfaced on failure), runs the same six stages against `http://<docker host>:<mapped port>`, tears
+  down. Prints the mode in the header and above the table. **Postgres in image mode:** because
+  `api/src/db/ssl.ts` requires TLS in production, an ambient `DATABASE_URL` is probed once — TLS ok →
+  reused via `host.docker.internal`; plaintext-only (CI `services:` alpine, default local/factory
+  Postgres) → loudly bypassed in favour of a drill-owned `postgres:15` started `ssl=on` with a
+  one-day self-signed cert generated by the host's `openssl`, on a private docker Network the API
+  container joins by alias (`ttfe-postgres`); no `DATABASE_URL` → the same owned path. tsx mode
+  is untouched (same spawn args/env/readiness detection; loopback listener; the only visible
+  difference is the added `[mode] api: tsx child` line).
+- `.github/workflows/ci.yml` — new job `drill-ttfe-image` ("drill · TTFE image-mode (TRO-621)"),
+  `needs: build-image`, rebuilds the image with `load: true` + `cache-from: type=gha` (build-image's
+  warmed cache; see the job comment for why not a tar artifact) and runs
+  `DRILL_TTFE_API_IMAGE=ship-api:ci pnpm drill ttfe` with no `services:` Postgres (TLS — the drill
+  owns one). Existing `drill-ttfe` (tsx) job unchanged. `.gitlab-ci.yml`: comment only — image mode
+  is GitHub-only because the shared runner cannot start containers.
+- `scripts/drill/__tests__/ttfe-api-mode.test.ts` (new, 16 tests; runs under the drill's scoped
+  vitest config → `gate.sh` G11 + CI's "TTFE drill threshold-logic tests" step).
+- `docs/architecture.md` — one paragraph on the two modes under "Agent as Platform Citizen".
+
+**How to verify.** `docker build -t ship-api:local .` then
+`DRILL_TTFE_API_IMAGE=ship-api:local pnpm drill ttfe` — header prints `[mode] api: image
+ship-api:local`, `[setup]` says which Postgres path it took, six stages + `verdict: pass`.
+`pnpm drill ttfe` alone prints `[mode] api: tsx child` and behaves as before. `DEBUG=1` streams the
+container's own logs (`[api-image] …`), where `Loading secrets from SSM path: /ship/prod` → `SSM
+unavailable … continuing with secrets supplied by the environment` proves it booted in production
+mode. Unit: `pnpm exec vitest run --config scripts/drill/vitest.config.ts`.
+
+**Rollback.** Revert the PR. Image mode is opt-in behind `DRILL_TTFE_API_IMAGE`; with it unset every
+existing caller (`gate.sh` G12, both `drill-ttfe` CI jobs, local runs) is on the unchanged tsx path.
+Removing the `drill-ttfe-image` job alone also fully disables the new mode in CI.
+
+---
+
+## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
+
+**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
+keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
+Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
+the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
+`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
+(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
+combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
+composite index has to match that whole shape, not just the two cursor columns. Read
+`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
+`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
+'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
+`document_type = 'sprint'` combined with `workspace_id`.
+Added migration `052_documents_workspace_type_created_at_index.sql`:
+`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
+created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
+endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
+every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
+
+**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
+35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
+way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
+large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
+sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
+afterward) to get a plan that actually distinguishes the two states. Before the index:
+- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
+- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
+- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
+
+After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
+re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
+an ad hoc index, produces the win):
+- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
+- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
+  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
+- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
+
+Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
+stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
+scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
+index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
+re-sorts every not-yet-returned row of that type in the workspace.
+
+**How to run it.**
+```bash
+FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
+```
+To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
+large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
+one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
+to show the effect), then run
+`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
+'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
+worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
+Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
+with no `Sort` node.
+
+**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
+schema object with no dependents (nothing else references it by name), so dropping it is a full,
+clean revert. No data was changed by this migration; only the index needs removing.
 
 ---
 
