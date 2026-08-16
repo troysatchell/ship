@@ -197,6 +197,19 @@ describe('platform/webhooks/events — registry', () => {
 
       expect(() => eventRegistry.get(type).schema.parse(payload)).toThrow(ZodError)
     })
+
+    // TRO-501 regression. Before this fix, this registry's local IssuePrioritySchema
+    // mirror excluded 'none', so an issue.created payload for an issue created with
+    // priority: 'none' (a real, selectable "No Priority" state — see events.ts's header
+    // comment) failed validation here. Confirmed live via api/src/routes/issues.test.ts's
+    // companion TRO-501 test: the write committed (201) but InProcessEventBus.publish()
+    // threw on exactly this mismatch and the issue.created event was silently dropped.
+    it("accepts an issue.created payload with priority: 'none' (TRO-501)", () => {
+      const payload = structuredClone(VALID_PAYLOADS['issue.created'])
+      payload.data.priority = 'none'
+
+      expect(() => eventRegistry.get('issue.created').schema.parse(payload)).not.toThrow()
+    })
   })
 
   // CodeRabbit PR #180 MAJOR finding: transition-event schemas accepted no-op payloads
