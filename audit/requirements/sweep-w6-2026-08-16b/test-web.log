@@ -1,0 +1,774 @@
+
+> ship@0.0.0 test:web /Users/troy/repos/GAUNTLET/Ship
+> pnpm --filter @ship/web test
+
+
+> @ship/web@0.0.0 test /Users/troy/repos/GAUNTLET/Ship/web
+> vitest run
+
+
+[1m[46m RUN [49m[22m [36mv4.0.17 [39m[90m/Users/troy/repos/GAUNTLET/Ship/web[39m
+
+(node:67866) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/postcss@8.5.25/node_modules/postcss/lib/input.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/nanoid@6.0.1/node_modules/nanoid/non-secure/index.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67875) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67881) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67876) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67880) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67873) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67883) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67884) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67879) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67882) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67885) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67878) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67874) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67877) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/hooks/useAuth.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useAuth.test.tsx:35:1
+
+[90mstderr[2m | src/hooks/useDocumentWriteStatus.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useDocumentWriteStatus.test.tsx:20:1
+
+[90mstderr[2m | src/pages/UnifiedDocumentPage.throttledRead.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/pages/UnifiedDocumentPage.throttledRead.test.tsx:26:1
+
+[90mstderr[2m | src/components/CommandPalette.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/CommandPalette.test.tsx:26:1
+
+[90mstderr[2m | src/components/sidebars/IssueBlockingSection.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/sidebars/IssueBlockingSection.test.tsx:30:1
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mInactivity Timer[2m > [22m[2mDOES call onTimeout when extend-session is rejected by the server
+[22m[39mFailed to extend session - forcing logout
+
+[90mstderr[2m | src/hooks/useSessionTimeout.test.ts[2m > [22m[2museSessionTimeout[2m > [22m[2mInactivity Timer[2m > [22m[2mDOES call onTimeout when extend-session fails with a network error
+[22m[39mNetwork error extending session - forcing logout
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+[90mstderr[2m | src/pages/App.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useAuth.tsx:12:1
+
+ [32m✓[39m src/hooks/useSessionTimeout.test.ts [2m([22m[2m38 tests[22m[2m)[22m[32m 215[2mms[22m[39m
+ [32m✓[39m src/components/sidebars/ProjectContextSidebar.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 290[2mms[22m[39m
+[90mstderr[2m | src/pages/App.actionItemsModalOncePerSession.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/CacheCorruptionAlert.tsx:2:1
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/components/EmojiPicker.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 465[2mms[22m[39m
+ [32m✓[39m src/pages/DeveloperPortal.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[33m 342[2mms[22m[39m
+ [32m✓[39m src/hooks/useDocumentWriteStatus.test.tsx [2m([22m[2m8 tests[22m[2m)[22m[33m 513[2mms[22m[39m
+ [32m✓[39m src/hooks/useAuth.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 508[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/components/CommandPalette.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 391[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+(node:67927) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/pages/UnifiedDocumentPage.tsx:12:1
+
+(node:67926) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/pages/App.test.tsx [2m([22m[2m10 tests[22m[2m)[22m[32m 295[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/pages/App.actionItemsModalOncePerSession.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 336[2mms[22m[39m
+     [33m[2m✓[22m[39m auto-opens on the first mount, stays closed on a remount in the same session, and still opens from the banner [33m 312[2mms[22m[39m
+(node:67928) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67929) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+[90mstderr[2m | src/components/sidebars/IssueBlockingSection.test.tsx[2m > [22m[2mIssueBlockingSection — loading/error states never read as "empty" (CodeRabbit review, PR #120)[2m > [22m[2mrenders a visible error, not "Not blocking any issues", when useBlocksQuery rejects
+[22m[39mQuery associations,issue-A,blocks failed: Error: Failed to load the issues this blocks
+    at fetchBlocks [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useBlockingAssociations.ts:67:11[90m)[39m
+
+[90mstderr[2m | src/components/sidebars/IssueBlockingSection.test.tsx[2m > [22m[2mIssueBlockingSection — loading/error states never read as "empty" (CodeRabbit review, PR #120)[2m > [22m[2mrenders a visible error, not "Not blocked by any issues", when useBlockedByQuery rejects
+[22m[39mQuery associations,issue-A,blocked-by failed: Error: Failed to load the issues blocking this one
+    at fetchBlockedBy [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useBlockingAssociations.ts:81:11[90m)[39m
+
+[90mstderr[2m | src/components/sidebars/IssueBlockingSection.test.tsx[2m > [22m[2mIssueBlockingSection — loading/error states never read as "empty" (CodeRabbit review, PR #120)[2m > [22m[2mrenders a visible error and keeps both pickers disabled, not silently empty option lists, when the issues query rejects
+[22m[39mQuery issues,list, failed: Error: Failed to fetch issues
+    at fetchIssues [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useIssuesQuery.ts:130:19[90m)[39m {
+  status: [33m500[39m
+}
+
+ [32m✓[39m src/components/sidebars/IssueBlockingSection.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[33m 792[2mms[22m[39m
+(node:67930) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67931) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67933) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/pages/App.inboxOverlay.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/CacheCorruptionAlert.tsx:2:1
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/hooks/useInboxQuery.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 234[2mms[22m[39m
+(node:67939) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+(node:67940) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx[2m > [22m[2mProgram Weeks tab navigation (TRO-282 / TEST-13)[2m > [22m[2mredirects a bookmarked legacy /sprints/ URL to the current /weeks/ URL instead of dropping it
+[22m[39mTab "sprints" for document type "program" was renamed to "weeks", redirecting
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+(node:67943) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/pages/OAuthConsent.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 222[2mms[22m[39m
+ [32m✓[39m src/pages/UnifiedDocumentPage.programWeeksNav.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 588[2mms[22m[39m
+     [33m[2m✓[22m[39m clicking a week card lands on the week, not the document root [33m 568[2mms[22m[39m
+ [32m✓[39m src/pages/App.inboxOverlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 282[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/pages/OrgChartPage.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 254[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+(node:67945) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/components/DocumentTreeItem.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 229[2mms[22m[39m
+ [32m✓[39m src/components/agent/AgentPill.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 294[2mms[22m[39m
+ [32m✓[39m src/components/AgentChatPanel.test.tsx [2m([22m[2m17 tests[22m[2m)[22m[33m 1697[2mms[22m[39m
+     [33m[2m✓[22m[39m renders **bold** as styled text with the star markers never on screen, and [n] refs as citation markers [33m 407[2mms[22m[39m
+(node:67951) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67952) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67954) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67953) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/components/InboxSidebar.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/InboxSidebar.test.tsx:26:1
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+[90mstderr[2m | src/pages/Login.recoveryHint.test.tsx[2m > [22m[2mLoginPage — recovery guidance for invalid credentials (WCAG 3.3.3 / TRO-291)[2m > [22m[2mdoes not attach the recovery hint to a network-failure error
+[22m[39mLogin error: Error: network down
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/pages/Login.recoveryHint.test.tsx:118:33
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:145:11
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:915:26
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1243:20
+    at new Promise (<anonymous>)
+    at runWithTimeout (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1209:10)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:37
+    at Traces.$ (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/traces.CCmnQaNT.js:142:27)
+    at trace (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/chunks/test.B8ej_ZHS.js:239:21)
+    at runTest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/@vitest+runner@4.0.17/node_modules/[4m@vitest[24m/runner/dist/index.js:1653:12)
+
+ [32m✓[39m src/pages/Login.recoveryHint.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 286[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/components/IssueCombobox.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 332[2mms[22m[39m
+[90mstderr[2m | src/components/InboxSidebar.test.tsx[2m > [22m[2mInboxSidebar — direct action links (TRO-323 / FG-10, proof 2)[2m > [22m[2mcalls onNavigate when an item link is followed, so the overlay closes on navigation
+[22m[39mWarning: An update to MemoryRouter inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://reactjs.org/link/wrap-tests-with-act
+    at MemoryRouter (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-router@7.12.0_react-dom@18.3.1_react@18.3.1__react@18.3.1/node_modules/react-router/dist/development/chunk-EPOLDU6W.mjs:6521:3)
+    at QueryClientProvider (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@tanstack+react-query@5.90.16_react@18.3.1/node_modules/@tanstack/react-query/build/modern/QueryClientProvider.js:20:3)
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/pages/MyWeekPage.createPlanError.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 248[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/pages/Login.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 198[2mms[22m[39m
+ [32m✓[39m src/pages/NotFound.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 159[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+(node:67964) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/components/InboxSidebar.test.tsx [2m([22m[2m13 tests[22m[2m)[22m[33m 327[2mms[22m[39m
+(node:67963) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67965) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/pages/Dashboard.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 192[2mms[22m[39m
+ [32m✓[39m src/pages/Documents.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 207[2mms[22m[39m
+ [32m✓[39m src/lib/changesLogSections.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 7[2mms[22m[39m
+ [32m✓[39m src/pages/DeveloperApps.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 347[2mms[22m[39m
+ [32m✓[39m src/lib/computeE2eWorkerCount.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+(node:67973) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67974) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/pages/Dashboard.standupsFanout.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 57[2mms[22m[39m
+(node:67975) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67976) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67978) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67977) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67980) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67982) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67984) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67983) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:67985) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/RouteFallback.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 283[2mms[22m[39m
+[90mstderr[2m | src/components/MutationErrorToast.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/MutationErrorToast.tsx:2:1
+
+[90mstderr[2m | src/components/sidebars/PropertiesPanel.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useAuth.tsx:12:1
+
+(node:67993) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/LazyEditor.test.tsx [2m([22m[2m6 tests[22m[2m)[22m[32m 237[2mms[22m[39m
+[90mstderr[2m | src/components/InboxSidebar.contrast.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/components/InboxSidebar.contrast.test.tsx:25:1
+
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/pages/MyWeekPage.loadingAffordance.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 258[2mms[22m[39m
+ [32m✓[39m src/appShellLoading.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 202[2mms[22m[39m
+ [32m✓[39m src/components/MutationErrorToast.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 196[2mms[22m[39m
+ [32m✓[39m src/components/sidebars/PropertiesPanel.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 223[2mms[22m[39m
+ [32m✓[39m src/pages/DeveloperAppDetail.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 526[2mms[22m[39m
+ [32m✓[39m src/components/ui/Combobox.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 374[2mms[22m[39m
+ [32m✓[39m src/hooks/useDocumentsQuery.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 137[2mms[22m[39m
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+Not implemented: HTMLCanvasElement's getContext() method: without installing the canvas npm package
+ [32m✓[39m src/components/InboxSidebar.contrast.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 293[2mms[22m[39m
+ [32m✓[39m src/components/ContextTreeNav.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[33m 414[2mms[22m[39m
+(node:68011) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/components/SelectableList.test.tsx[2m > [22m[2mSelectableList selection column header (TRO-222 / A11Y-8)[2m > [22m[2mgives the selection column header discernible text for screen readers
+[22m[39mWarning: validateDOMNesting(...): <span> cannot appear as a child of <tr>.
+    at span
+    at tr
+    at SelectableRow (/Users/troy/repos/GAUNTLET/Ship/web/src/components/SelectableList.tsx:174:3)
+    at tbody
+    at table
+    at SelectableList (/Users/troy/repos/GAUNTLET/Ship/web/src/components/SelectableList.tsx:8:3)
+
+ [32m✓[39m src/components/SelectableList.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 220[2mms[22m[39m
+ [32m✓[39m src/pages/UnifiedDocumentPage.throttledRead.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[33m 3032[2mms[22m[39m
+     [33m[2m✓[22m[39m retries a throttled (429) read instead of failing permanently on the first attempt [33m 3013[2mms[22m[39m
+(node:68017) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68021) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68022) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68024) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68026) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68027) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68029) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68032) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/editor/EmojiExtension.inputRule.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 59[2mms[22m[39m
+[90mstderr[2m | src/pages/PersonEditor.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/pages/PersonEditor.test.tsx:31:1
+
+(node:68036) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/editor/CommentDisplay.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 151[2mms[22m[39m
+(node:68043) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx:31:1
+
+(node:68045) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68046) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/pages/PersonEditor.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 147[2mms[22m[39m
+ [32m✓[39m src/components/ui/ScrollFade.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 173[2mms[22m[39m
+ [32m✓[39m src/components/editor/BacklinksPanel.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 195[2mms[22m[39m
+ [32m✓[39m src/components/editor/lowlight.test.ts [2m([22m[2m29 tests[22m[2m)[22m[32m 180[2mms[22m[39m
+ [32m✓[39m src/pages/MyWeekPage.contrast.test.tsx [2m([22m[2m7 tests[22m[2m)[22m[32m 152[2mms[22m[39m
+ [32m✓[39m src/components/editor/FileAttachment.test.ts [2m([22m[2m9 tests[22m[2m)[22m[32m 101[2mms[22m[39m
+ [32m✓[39m src/pages/Dashboard.loadingAffordance.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 246[2mms[22m[39m
+ [32m✓[39m src/pages/UnifiedDocumentPage.deletedFocusRefetch.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 196[2mms[22m[39m
+(node:68057) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/editor/DetailsExtension.test.ts [2m([22m[2m12 tests[22m[2m)[22m[32m 138[2mms[22m[39m
+ [32m✓[39m src/components/editor/TableOfContents.test.ts [2m([22m[2m10 tests[22m[2m)[22m[32m 110[2mms[22m[39m
+(node:68073) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/editor/BacklinksPanel.errorLogging.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 99[2mms[22m[39m
+(node:68082) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/editor/linkOptions.test.ts [2m([22m[2m28 tests[22m[2m)[22m[32m 92[2mms[22m[39m
+(node:68088) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Error: useSelectionPersistence must be used within a SelectionPersistenceProvider
+    at useSelectionPersistence (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.tsx:54:11)
+    at /Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.test.tsx:23:26
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:330:27)
+    at renderWithHooks (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:20103:13)
+    at beginWork (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+Error: useSelectionPersistence must be used within a SelectionPersistenceProvider
+    at useSelectionPersistence (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.tsx:54:11)
+    at /Users/troy/repos/GAUNTLET/Ship/web/src/contexts/SelectionPersistenceContext.test.tsx:23:26
+    at TestComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@testing-library+react@16.3.1_@testing-library+dom@10.4.1_@types+react-dom@18.3.7_@type_d9437e0482bb9cab2d9082dbcc570f70/node_modules/@testing-library/react/dist/pure.js:330:27)
+    at renderWithHooks (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:20103:13)
+    at beginWork (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+(node:68086) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68090) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68094) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/contexts/SelectionPersistenceContext.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+(node:68092) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68097) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68099) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68104) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/components/editor/SyncStatusIndicator.test.tsx [2m([22m[2m20 tests[22m[2m)[22m[32m 82[2mms[22m[39m
+(node:68108) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/lib/accountability.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/components/editor/BacklinksPanel.duplicateRequests.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/components/icons/uswds/Icon.test.tsx [2m([22m[2m16 tests[22m[2m)[22m[32m 54[2mms[22m[39m
+ [32m✓[39m src/components/PlanQualityBanner.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 76[2mms[22m[39m
+(node:68111) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/lib/contrast.test.ts [2m([22m[2m17 tests[22m[2m)[22m[32m 10[2mms[22m[39m
+ [32m✓[39m src/hooks/useSelection.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/lib/radixVersionDedupe.test.ts [2m([22m[2m26 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/components/DashboardSidebar.contrast.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+(node:68119) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/pages/TeamMode.duplicateRequests.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 60[2mms[22m[39m
+ [32m✓[39m src/main.routes.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 6[2mms[22m[39m
+(node:68128) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/hooks/useBlockingAssociations.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 9[2mms[22m[39m
+(node:68149) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68143) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68147) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68151) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68156) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68154) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68153) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68158) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/lib/api.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+(node:68161) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+ [32m✓[39m src/selfHostedFonts.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 5[2mms[22m[39m
+ [32m✓[39m src/lib/document-tabs.test.ts [2m([22m[2m33 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/test/sourceImports.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+[90mstderr[2m | src/lib/queryClient.test.ts
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.test.ts:16:1
+
+[90mstderr[2m | src/components/Editor.bubbleMenuAria.test.tsx
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useDocumentWriteStatus.ts:2:1
+
+ [32m✓[39m src/lib/queryClient.test.ts [2m([22m[2m13 tests[22m[2m)[22m[32m 3[2mms[22m[39m
+(node:68165) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68172) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/pages/ReviewsPage.reviewCellMerge.test.ts
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useAuth.tsx:12:1
+
+ [32m✓[39m src/pages/ReviewsPage.reviewCellMerge.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+Browserslist: browsers data (caniuse-lite) is 8 months old. Please run:
+  npx update-browserslist-db@latest
+  Why you should do it regularly: https://github.com/browserslist/update-db#readme
+ [32m✓[39m src/components/Editor.bubbleMenuAria.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 9[2mms[22m[39m
+(node:68187) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+Error: usePortalToken must be used within a DeveloperPortalProvider
+    at Module.usePortalToken (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/DeveloperPortalContext.tsx:130:11)
+    at Probe (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/DeveloperPortalContext.test.tsx:20:48)
+    at renderWithHooks (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:20103:13)
+    at beginWork (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at HTMLUnknownElementImpl._dispatch (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+Error: usePortalToken must be used within a DeveloperPortalProvider
+    at Module.usePortalToken (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/DeveloperPortalContext.tsx:130:11)
+    at Probe (/Users/troy/repos/GAUNTLET/Ship/web/src/contexts/DeveloperPortalContext.test.tsx:20:48)
+    at renderWithHooks (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:15486:18)
+    at mountIndeterminateComponent (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:20103:13)
+    at beginWork (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:21626:16)
+    at HTMLUnknownElement.callCallback (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/react-dom@18.3.1_react@18.3.1/node_modules/react-dom/cjs/react-dom.development.js:4164:14)
+    at HTMLUnknownElement.callTheUserObjectsOperation (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/generated/EventListener.js:26:30)
+    at innerInvokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:360:16)
+    at invokeEventListeners (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:296:3)
+    at HTMLUnknownElementImpl._dispatch (/Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/jsdom@27.4.0/node_modules/jsdom/lib/jsdom/living/events/EventTarget-impl.js:243:9)
+ [32m✓[39m src/contexts/DeveloperPortalContext.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 41[2mms[22m[39m
+ [32m✓[39m src/components/editor/ImageUpload.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+(node:68195) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68197) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+(node:68198) ExperimentalWarning: CommonJS module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/html-encoding-sniffer@6.0.0/node_modules/html-encoding-sniffer/lib/html-encoding-sniffer.js is loading ES Module /Users/troy/repos/GAUNTLET/Ship/node_modules/.pnpm/@exodus+bytes@1.8.0/node_modules/@exodus/bytes/encoding-lite.js using require().
+Support for loading ES Module in require() is an experimental feature and might change at any time
+(Use `node --trace-warnings ...` to show where the warning was created)
+[90mstderr[2m | src/components/Editor.cacheResetSaving.test.ts
+[22m[39m[Schema] Migration check failed: ReferenceError: indexedDB is not defined
+    at getDB (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:14:25)
+    at file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:24:34
+    at get (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/idb-keyval@6.2.2/node_modules/[4midb-keyval[24m/dist/index.js:40:12)
+    at checkAndMigrateSchema [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:25:33[90m)[39m
+    at initializeCache [90m(/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:325:11[90m)[39m
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/lib/queryClient.ts:328:3
+    at VitestModuleEvaluator._runInlinedModule (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vitest@4.0.17_@types+node@22.19.5_@vitest+ui@4.0.17_jiti@1.21.7_jsdom@27.4.0_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvitest[24m/dist/module-evaluator.js:197:4)
+    at VitestModuleRunner.directRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1284:61)
+    at VitestModuleRunner.cachedRequest (file:///Users/troy/repos/GAUNTLET/Ship/node_modules/[4m.pnpm[24m/vite@6.4.1_@types+node@22.19.5_jiti@1.21.7_terser@5.44.1_tsx@4.21.0_yaml@2.9.0/node_modules/[4mvite[24m/dist/node/module-runner.js:1180:76)
+    at [90m/Users/troy/repos/GAUNTLET/Ship/web/[39msrc/hooks/useDocumentWriteStatus.ts:2:1
+
+ [32m✓[39m src/styles/drag-handle.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/Editor.cacheResetSaving.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 4[2mms[22m[39m
+ [32m✓[39m src/pages/Projects.updateProjectTypeSafety.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+[90mstderr[2m | src/components/SessionTimeoutModal.test.tsx[2m > [22m[2mSessionTimeoutModal[2m > [22m[2mabsolute warning: clicking "I Understand" calls onDismissAbsolute, NOT onStayLoggedIn
+[22m[39m`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+ [32m✓[39m src/components/editor/MentionExtension.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 2[2mms[22m[39m
+[90mstderr[2m | src/components/SessionTimeoutModal.test.tsx[2m > [22m[2mSessionTimeoutModal[2m > [22m[2minactivity warning: clicking "Stay Logged In" calls onStayLoggedIn, NOT onDismissAbsolute
+[22m[39m`DialogContent` requires a `DialogTitle` for the component to be accessible for screen reader users.
+
+If you want to hide the `DialogTitle`, you can wrap it with our VisuallyHidden component.
+
+For more information, see https://radix-ui.com/primitives/docs/components/dialog
+Warning: Missing `Description` or `aria-describedby={undefined}` for {DialogContent}.
+
+ [32m✓[39m src/components/SessionTimeoutModal.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 159[2mms[22m[39m
+ [32m✓[39m src/components/editor/DragHandle.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 1[2mms[22m[39m
+ [32m✓[39m src/components/ShownOnceSecretModal.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 230[2mms[22m[39m
+
+[2m Test Files [22m [1m[32m86 passed[39m[22m[90m (86)[39m
+[2m      Tests [22m [1m[32m606 passed[39m[22m[90m (606)[39m
+[2m   Start at [22m 08:41:09
+[2m   Duration [22m 8.22s[2m (transform 6.36s, setup 6.12s, import 22.78s, tests 19.69s, environment 38.14s)[22m
+

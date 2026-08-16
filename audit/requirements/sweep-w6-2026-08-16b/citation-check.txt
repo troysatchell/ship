@@ -1,0 +1,549 @@
+W6-R2	OK	api/src/platform/oauth/appRegistration.ts:109	createOAuthApp() — generates client_id, raw secret (confidential apps), returns both once	|| export async function createOAuthApp(params: CreateOAuthAppParams): Promise<CreateOAuthAppResult> {
+W6-R2	OK	api/src/platform/oauth/appRegistration.ts:112	only hashClientSecret(rawSecret) is stored; raw secret is never persisted	||   const secretHash = rawSecret ? hashClientSecret(rawSecret) : null;
+W6-R2	OK	api/src/platform/oauth/credentials.ts:35	hashClientSecret = SHA-256 hex digest	||   return crypto.createHash('sha256').update(secret).digest('hex');
+W6-R2	OK	api/src/routes/oauth-apps.ts:39	router.use(authMiddleware, workspaceAdminMiddleware) — admin-only	|| router.use(authMiddleware, workspaceAdminMiddleware);
+W6-R2	OK	api/src/routes/oauth-apps.ts:60	POST / (mounted at /api/oauth-apps) — registration handler	|| router.post('/', authed(async (req, res): Promise<void> => {
+W6-R2	OK	api/src/routes/oauth-apps.ts:109	response carries client_secret 'shown exactly once — never stored, never returned again'	||         client_secret: clientSecret, // shown exactly once — never stored, never returned again (AC-1, AC-3)
+W6-R2	OK	api/src/app.ts:507	app.use('/api/oauth-apps', conditionalCsrf, oauthAppsRoutes) — route mounted	||   app.use('/api/oauth-apps', conditionalCsrf, oauthAppsRoutes);
+W6-R2	OK	api/src/openapi/schemas/oauth-apps.ts:140	registry.registerPath path '/oauth-apps' (POST) — OpenAPI registration per ship-openapi co	||   path: '/oauth-apps',
+W6-R2	OK	api/src/platform/oauth/__tests__/app-registration.test.ts:88	AC-1 test: creation returns client_id + raw secret exactly once, SHA-256 hashed at rest	||   it('AC-1: creation returns client_id + raw secret exactly once, SHA-256 hashed at rest', async () => {
+W6-R2	OK	api/src/platform/oauth/__tests__/app-registration.test.ts:236	AC-3 test: raw secret absent from any later response	||   it('AC-3: raw secret is absent from any later response for the same app', async () => {
+W6-R3	OK	api/src/routes/oauth-authorize.ts:289	GET /authorize handler (mounted at /oauth by app.ts:554)	||   router.get('/authorize', async (req: Request, res: Response): Promise<void> => {
+W6-R3	OK	api/src/routes/oauth-token.ts:100	POST /token handler (mounted at /oauth by app.ts:565)	||   router.post('/token', async (req: Request, res: Response): Promise<void> => {
+W6-R3	OK	web/src/pages/OAuthConsent.tsx:69	OAuthConsentPage — the consent UI (Approve/Deny)	|| export function OAuthConsentPage() {
+W6-R3	OK	web/src/main.tsx:211	path="/oauth-consent" route registration for the consent page	||         path="/oauth-consent"
+W6-R3	OK	e2e/oauth-pkce-chain.spec.ts:172	Playwright: authorize -> consent -> token -> real access token authenticates /api/v1/me	||   test('graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me', async ({
+W6-R3	OK	e2e/oauth-pkce-chain.spec.ts:244	the /api/v1/me leg — proves the token is usable	||     const meRes = await request.get(`${apiServer.url}/api/v1/me`, {
+W6-R3	OK	e2e/oauth-pkce-chain.spec.ts:265	mandatory negative: wrong code_verifier -> 400 invalid_grant	||   test('negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant', async ({
+W6-R3	OK	e2e/oauth-authorize.spec.ts:102	earlier spec: login -> authorize -> consent -> redirect-with-code (first half only)	||   test('login -> authorize -> consent -> redirect with code (graded PKCE scenario, first half)', async ({
+W6-R4	OK	api/src/platform/oauth/bearerAuth.ts:123	no/blank Authorization header -> reject 'missing_token'	||     reject(req, res, 'missing_token', 'No access token provided.');
+W6-R4	OK	api/src/platform/oauth/bearerAuth.ts:199	no matching token row -> reject 'invalid_token'	||     reject(req, res, 'invalid_token', INVALID_TOKEN_MESSAGE);
+W6-R4	OK	api/src/platform/oauth/bearerAuth.ts:146	expires_at in the past -> reject 'expired_token' (distinct reason)	||         reject(req, res, 'expired_token', 'Access token has expired.');
+W6-R4	OK	api/src/platform/oauth/bearerAuth.ts:140	revoked token -> 'invalid_token' (PM decision TRO-430: no separate revoked reason)	||           req, res, 'invalid_token', INVALID_TOKEN_MESSAGE,
+W6-R4	OK	api/src/platform/api/v1/errors.ts:28	Unauthorized401Reason closed 3-value enum: missing_token | invalid_token | expired_token	|| export type Unauthorized401Reason = 'missing_token' | 'invalid_token' | 'expired_token';
+W6-R4	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:347	enumerates every live /api/v1 route and asserts 401 with no Authorization header — the 'ev	||         expect(res.status, `expected 401 for ${route.method.toUpperCase()} ${probePath} with no Authorization header, got ${res.status}: ${JSON.stringify(res.bo
+W6-R4	OK	api/src/platform/oauth/__tests__/bearerAuth.test.ts:246	AC-4 describe: 401 variants — missing / invalid / expired, asserting details.reason for ea	||   describe('AC-4: 401 variants — missing / invalid / expired', () => {
+W6-R5	OK	api/src/platform/api/v1/resources/documents.ts:337	GET / (list) mounts requireScope('documents:read') after bearerAuth + rateLimitBuckets	||   requireScope('documents:read'),
+W6-R5	OK	api/src/platform/api/v1/resources/documents.ts:426	GET /:id mounts requireScope('documents:read')	||   requireScope('documents:read'),
+W6-R5	OK	api/src/platform/api/v1/resources/documents.ts:481	POST / mounts requireScope('documents:write')	||   requireScope('documents:write'),
+W6-R5	OK	api/src/platform/scopes/requireScope.ts:50	export function requireScope(scope) — the require(scope) middleware factory; throws at reg	|| export function requireScope(scope: string) {
+W6-R5	OK	api/src/platform/api/v1/resources/__tests__/documents.test.ts:128	AC-1 cursor-paginated list; AC-2 GET /:id (l.257); AC-3 POST with documents:write + 403 wi	||   describe('AC-1: cursor-paginated list — stable across a mid-iteration insertion', () => {
+W6-R6	OK	api/src/platform/api/v1/errors.ts:31	export interface ApiErrorBody { code, message, details?, request_id } — the wire shape	|| export interface ApiErrorBody {
+W6-R6	OK	api/src/platform/api/v1/errorMiddleware.ts:75	export const errorMiddleware — terminal v1 error handler; l.90 serializes ApiError as-is v	|| export const errorMiddleware: ErrorRequestHandler = (err, req, res, next) => {
+W6-R6	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:339	check (c): every discovered v1 route's generic failure path (401 no-auth, or 404 wrong-met	||     it('(c) its generic failure path returns the §2.5 ApiError shape', async () => {
+W6-R7	OK	api/src/platform/scopes/registry.ts:23	class ScopeRegistryImpl — Map-backed scopes-as-data	|| class ScopeRegistryImpl {
+W6-R7	OK	api/src/platform/scopes/requireScope.ts:65	insufficient scope -> forbiddenError(...) 403	||       const err = forbiddenError(
+W6-R7	OK	api/src/platform/scopes/requireScope.ts:68	details.missing_scope names the exact scope the caller lacked	||         { missing_scope: scope }
+W6-R7	OK	api/src/platform/oauth/__tests__/bearerAuth.test.ts:220	test: token with only issues:read gets 403, code forbidden, details.missing_scope=document	||     it('a token with only issues:read gets 403, code forbidden, details.missing_scope=documents:read', async () => {
+W6-R8	OK	api/src/platform/openapi/registry.ts:67	generateV1OpenAPIDocument() builds the doc in-process with OpenApiGeneratorV31 from v1Regi	||   const generator = new OpenApiGeneratorV31(v1Registry.definitions);
+W6-R8	OK	api/src/platform/openapi/index.ts:23	export const v1OpenApiDocument = generateV1OpenAPIDocument() — generated once at module lo	|| export const v1OpenApiDocument: OpenAPIObject = generateV1OpenAPIDocument();
+W6-R8	OK	api/src/platform/api/v1/router.ts:103	v1Routes.get('/openapi.json') serves the cached document, public/no auth	||   v1Routes.get('/openapi.json', (_req, res) => {
+W6-R8	OK	api/src/platform/openapi/__tests__/document.test.ts:182	it('validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)') via @se	||   it('validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)', async () => {
+W6-R8	OK	api/src/platform/openapi/__tests__/endpoint.test.ts:30	it('200s with a JSON OpenAPI 3.1 document, no auth required')	||   it('200s with a JSON OpenAPI 3.1 document, no auth required', async () => {
+W6-R9	OK	pnpm-workspace.yaml:6	'sdk' is a declared pnpm workspace package	||   - 'sdk'
+W6-R9	OK	sdk/package.json:2	"name": "@ship/sdk"	||   "name": "@ship/sdk",
+W6-R9	OK	sdk/package.json:34	"dependencies": {} — zero runtime deps	||   "dependencies": {},
+W6-R9	OK	sdk/src/client.ts:110	export class ShipClient	|| export class ShipClient {
+W6-R9	OK	sdk/src/client.ts:174	async me(): Promise<Me> — GET /api/v1/me (line 175)	||   async me(): Promise<Me> {
+W6-R9	OK	sdk/src/__tests__/client.liveServer.test.ts:64	describe 'PF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP	|| describe('PF-400: ShipClient against a real running Ship API + the seeded worktree DB (MVP gate check)', () => {
+W6-R9	OK	sdk/src/__tests__/client.liveServer.test.ts:163	it: new ShipClient({ token, baseUrl }).me() returns the typed user for a real bearer token	||   it('new ShipClient({ token, baseUrl }).me() returns the typed user for a real bearer token, over a real TCP round trip', async () => {
+W6-R9	OK	.github/workflows/ci.yml:212	CI step 'SDK unit tests': pnpm --filter @ship/sdk test	||         run: pnpm --filter @ship/sdk test
+W6-R10	OK	CHANGES.md:236	TRO-609 entry: program-mode-week-ux.spec.ts sprint-filter cascade fixed (PR #266, merged 2	|| ## TRO-609 — e2e/program-mode-week-ux.spec.ts: sprint filter test asserted a `<select>` that never existed, cascaded to 30 skipped tests
+W6-R10	OK	CHANGES.md:1627	TRO-593 entry: session-timeout.spec.ts 29/58 browser-context crashes root-caused and fixed	|| ## TRO-593 — `e2e/session-timeout.spec.ts`: 29/58 tests crashed the browser context at a consistent ~60s timeout
+W6-R10	OK	CHANGES.md:1782	TRO-596 entry: 8 e2e tests asserting never-built owner-selection UI deleted	|| ## TRO-596 — E2E tests assert never-built owner-selection UI: deleted 8 tests following TRO-293 precedent
+W6-R10	OK	CHANGES.md:2107	TRO-595 entry: admin-workspace-members.spec.ts click timeout was a test deadlock, fixed	|| ## TRO-595 — `admin-workspace-members.spec.ts`: "can add existing user" click timeout was a test deadlock, not an app bug
+W6-R10	OK	CHANGES.md:2162	TRO-594 entry: accessibility-remediation.spec.ts tooltip hang was a Playwright mouse race,	|| ## TRO-594 — `accessibility-remediation.spec.ts`: tooltip "hide on mouse-away" hang was a Playwright teleporting-mouse race, not a Radix hide-delay
+W6-R10	OK	audit/api-perf/compare-w6-r10-aug14/after-w6-r10-aug14.md:1	line 1 = file title; whole-file artifact. P95 compare vs Part-1 baseline: verdict PASS (li	|| # API Response Time — Compare (w6-r10-aug14)
+W6-R10	OK	audit/db-query/compare-w6-r10-aug14/after-w6-r10-aug14.md:1	line 1 = file title; whole-file artifact. Per-route query counts all under baseline (line 	|| # Database Query Efficiency — Compare (w6-r10-aug14)
+W6-R10	OK	audit/bundle/compare-w6-aug14/after-w6-aug14.md:1	line 1 = file title; whole-file artifact. Bundle gate verdict PASS, every delta a reductio	|| ## Bundle Size — Compare (W6, post-platform-tickets, 2026-08-14)
+W6-R10	OK	.github/workflows/ci.yml:328	CI's only Playwright job `e2e-agent` runs just two agent specs (line 405) — the full regre	||   e2e-agent:
+W6-R11	OK	README.md:392	'Working credentials for the deployed site' — grader OAuth app section for https://ship-rr	|| **Working credentials for the deployed site**, same disclosure basis as `alice.chen`'s web-login
+W6-R11	OK	README.md:401	client_id `ship_app_grader_9ea6a33b` printed in the credentials table (scopes documents:re	|| | `client_id` | `ship_app_grader_9ea6a33b` |
+W6-R11	OK	api/src/platform/oauth/seedGraderApp.ts:56	GRADER_APP_SCOPES = documents:read, issues:read, sprints:read — read-only by construction	|| export const GRADER_APP_SCOPES = ['documents:read', 'issues:read', 'sprints:read'] as const;
+W6-R11	OK	api/src/platform/oauth/seedGraderApp.ts:80	seedGraderApp() — idempotent seed of the grader app, secret from GRADER_OAUTH_CLIENT_SECRE	|| export async function seedGraderApp(pool: Pool, workspaceId: string): Promise<SeedGraderAppResult> {
+W6-R11	OK	api/src/db/seed.ts:104	db:seed calls seedGraderApp(pool, workspaceId)	||     const graderAppSeedResult = await seedGraderApp(pool, workspaceId);
+W6-R11	OK	terraform/render/web_service.tf:100	GRADER_OAUTH_CLIENT_SECRET provisioned as a render_web_service.ship env var (Terraform, no	||     GRADER_OAUTH_CLIENT_SECRET = {
+W6-R11	OK	CHANGES.md:1889	TRO-604: .dockerignore bug that silently broke every deploy on 2026-08-15 — fixed same day	|| ## TRO-604 — `.dockerignore`'s test-file patterns never matched anything, breaking every deploy since ~05:00 UTC today
+W6-R12	OK	terraform/render/web_service.tf:9	resource render_web_service.ship — the app container (docker runtime) for the graded deplo	|| resource "render_web_service" "ship" {
+W6-R12	OK	terraform/render/postgres.tf:9	resource render_postgres.ship — the database	|| resource "render_postgres" "ship" {
+W6-R12	OK	terraform/render/agent_service.tf:13	resource render_web_service.agent — second service in the topology	|| resource "render_web_service" "agent" {
+W6-R12	OK	terraform/render/versions.tf:9	provider render-oss/render pinned to exact version 1.9.1 (comment on line 7: exact pin, no	||       version = "1.9.1"
+W6-R12	OK	terraform/render/.terraform.lock.hcl:5	lock file records version 1.9.1 / constraints 1.9.1 with hashes	||   version     = "1.9.1"
+W6-R12	OK	terraform/render/variables.tf:372	validation block on secret_encryption_key (TRO-488, PR #273 — new since prior sweep); sibl	||   validation {
+W6-R12	OK	terraform/render/plan/tro-411-pf900-w6-env-vars.md:120	'Live plan capture — terraform plan -var-file=terraform.tfvars' — the committed, credentia	|| ### Live plan capture — `terraform plan -var-file=terraform.tfvars`
+W6-R12	OK	terraform/render/plan/tro-411-pf900-w6-env-vars.md:359	'Plan: 3 to add, 0 to change, 0 to destroy.' — clean plan output; annotation table at :384	|| Plan: 3 to add, 0 to change, 0 to destroy.
+W6-R12	OK	CHANGES.md:156	TRO-488 entry: `terraform validate -no-color`: Success! re-run after the validation blocks	|| `terraform validate -no-color`: `Success!`, the same two pre-existing `pull_request_previews_enabled`
+W6-R12	OK	docs/IAM-ADAPTATION-RENDER.md:10	§1 AWS task/execution-role adaptation memo — the brief's IAM-role language mapped onto Ren	|| ## 1. AWS side: task/execution role + the least-privilege exercise (observed)
+W6-R12	OK	terraform/render/plan/tro-316-destroy-redeploy-proof.md:12	destroy-redeploy proof explicitly scoped: 'not the pre-existing ship/ship-db resources, wh	|| `ship`/`ship-db` resources, which stay on their Week-4 import (unchanged, deliberately, per the
+W6-R12	OK	terraform/render/plan/tro-316-destroy-redeploy-proof.md:39	`terraform apply ... # re-create, config alone, no import` — real destroy→apply, but for r	|| terraform apply -var-file=terraform.tfvars -auto-approve   # re-create, config alone, no import
+W6-R12	OK	terraform/render/README.md:39	'Known provider bug — render_web_service.agent cannot be updated by terraform apply' — an 	|| ## Known provider bug — `render_web_service.agent` cannot be updated by `terraform apply`
+W6-R13	OK	api/src/db/migrations/042_oauth_apps.sql:31	CREATE TABLE oauth_apps (id, workspace_id, name, client_id, client_type, client_secret_has	|| CREATE TABLE IF NOT EXISTS oauth_apps (
+W6-R13	OK	api/src/db/migrations/042_oauth_apps.sql:40	client_secret_hash TEXT — hash column, never raw	||   client_secret_hash TEXT,
+W6-R13	OK	api/src/platform/oauth/appRegistration.ts:218	rotateOAuthAppSecret() — mints a new secret, stores only its hash	|| export async function rotateOAuthAppSecret(params: {
+W6-R13	OK	api/src/platform/oauth/appRegistration.ts:271	returns { ok: true, clientSecret: rawSecret } — raw secret returned once on rotation	||   return { ok: true, clientSecret: rawSecret };
+W6-R13	OK	api/src/platform/oauth/appRegistration.ts:249	UPDATE ... WHERE id AND workspace_id AND revoked_at IS NULL AND client_secret_hash IS NOT 	||      WHERE id = $2 AND workspace_id = $3 AND revoked_at IS NULL
+W6-R13	OK	api/src/routes/oauth-apps.ts:252	POST /:id/rotate response carries client_secret 'shown exactly once'	||         client_secret: result.clientSecret, // shown exactly once (AC-1/AC-3 apply equally to rotation)
+W6-R13	OK	api/src/platform/oauth/__tests__/app-registration.test.ts:300	AC-4 test: rotation invalidates the old secret immediately, no grace period	||   it('AC-4: rotation invalidates the old secret immediately, no grace period', async () => {
+W6-R13	OK	api/src/platform/oauth/__tests__/app-registration.test.ts:412	forced concurrent-rotation race test: exactly one wins, loser gets 'conflict' (TRO-492)	||     it('calls the REAL rotateOAuthAppSecret twice, forced to genuinely race: exactly one wins, the loser gets a defined "conflict" error, and the persisted hash
+W6-R14	OK	api/src/platform/oauth/authorize.ts:139	issueAuthorizationCode() — records code_challenge on the code	|| export async function issueAuthorizationCode(
+W6-R14	OK	api/src/platform/oauth/authorize.ts:148	INSERT columns include code_challenge, code_challenge_method (hardcoded 'S256')	||        (code_hash, app_id, user_id, scopes, code_challenge, code_challenge_method, redirect_uri, expires_at)
+W6-R14	OK	api/src/db/migrations/043_oauth_tokens_and_codes.sql:35	code_challenge_method CHECK (= 'S256') — S256-only at the DB level	||   code_challenge_method TEXT NOT NULL DEFAULT 'S256' CHECK (code_challenge_method = 'S256'),
+W6-R14	OK	api/src/platform/oauth/token.ts:227	verifyPkce(): BASE64URL(SHA256(code_verifier)) vs stored challenge	|| function verifyPkce(codeVerifier: string, codeChallenge: string): boolean {
+W6-R14	OK	api/src/platform/oauth/token.ts:231	constant-time compare (crypto.timingSafeEqual)	||   return computedBuf.length === challengeBuf.length && crypto.timingSafeEqual(computedBuf, challengeBuf);
+W6-R14	OK	api/src/platform/oauth/token.ts:439	mismatch -> invalidGrant('code_verifier does not match ...') → 400 invalid_grant	||     return invalidGrant('code_verifier does not match the authorization request.');
+W6-R14	OK	api/src/platform/oauth/__tests__/token.test.ts:400	negative test: wrong code_verifier -> 400 invalid_grant (asserts error === 'invalid_grant'	||   describe('negative: wrong code_verifier -> 400 invalid_grant', () => {
+W6-R15	OK	api/src/routes/oauth-device.ts:90	POST /device/code handler (mounted at /oauth by app.ts:576)	||   router.post('/device/code', async (req: Request, res: Response): Promise<void> => {
+W6-R15	OK	api/src/routes/oauth-device.ts:133	POST /device/verify handler — accepts the user_code decision	||   router.post('/device/verify', async (req: Request, res: Response): Promise<void> => {
+W6-R15	OK	api/src/platform/oauth/device.ts:189	createDeviceCode() issues user_code + device_code	|| export async function createDeviceCode(params: CreateDeviceCodeParams): Promise<CreateDeviceCodeResult> {
+W6-R15	OK	api/src/platform/oauth/device.ts:300	decideDeviceCode() — approve/deny by user_code	|| export async function decideDeviceCode(params: DecideDeviceCodeParams): Promise<DecideDeviceCodeResult> {
+W6-R15	OK	api/src/platform/oauth/device.ts:365	pollDeviceCode() — the /oauth/token urn:ietf:params:oauth:grant-type:device_code poll	|| export async function pollDeviceCode(params: PollDeviceCodeParams): Promise<TokenGrantResult> {
+W6-R15	OK	api/src/platform/oauth/device.ts:401	polled before interval elapsed -> error 'slow_down' and interval_seconds incremented serve	||         error: 'slow_down',
+W6-R15	OK	api/src/db/migrations/046_oauth_device_codes_polling.sql:35	last_polled_at column backing the slow_down rate check	|| ALTER TABLE oauth_device_codes ADD COLUMN IF NOT EXISTS last_polled_at TIMESTAMPTZ;
+W6-R15	OK	api/src/platform/oauth/__tests__/device.test.ts:256	integration test: pending -> slow_down (interval increases, twice) -> approve -> real toke	||     it('pending -> slow_down (interval increases, twice) -> approve -> real token -> reused device_code is invalid_grant', async () => {
+W6-R15	OK	sdk/src/deviceLogin.ts:220	client honors slow_down by adding 5s to its poll interval	||       intervalMs += SLOW_DOWN_INCREMENT_MS;
+W6-R16	OK	api/src/platform/scopes/registry.ts:32	ScopeRegistryImpl.register(definition) — the only way a scope enters the registry	||   register(definition: ScopeDefinition): void {
+W6-R16	OK	api/src/platform/scopes/registry.ts:57	first of the seven §2.3 scopes registered at module load (documents:read ... webhooks:mana	|| ScopeRegistry.register({
+W6-R16	OK	api/src/platform/scopes/registry.ts:85	eighth scope audit:read (PF-501/TRO-432) added by one more register() call — the OCP exten	|| ScopeRegistry.register({
+W6-R16	OK	api/src/platform/scopes/__tests__/registry.test.ts:11	test header documents that the 8th scope was added via register() only, no other file chan	||   // §2.3 named seven scopes; PF-501 (TRO-432) adds an eighth (`audit:read`)
+W6-R16	OK	api/src/platform/scopes/__tests__/registry.test.ts:27	asserts exactly the eight named scopes are registered at module load	||   it('registers exactly the eight scopes at module load', () => {
+W6-R17	OK	api/src/platform/oauth/bearerAuth.ts:163	OAuth-token path: req.principal = { app, user, scopes }	||       req.principal = principal;
+W6-R17	OK	api/src/platform/oauth/bearerAuth.ts:190	scoped personal-token path: req.principal = { app: null, user, scopes }	||       req.principal = {
+W6-R17	OK	api/src/platform/oauth/bearerAuth.ts:199	invalid token -> 401 invalid_token	||     reject(req, res, 'invalid_token', INVALID_TOKEN_MESSAGE);
+W6-R17	OK	api/src/platform/scopes/requireScope.ts:68	insufficient scope -> 403 with details.missing_scope	||         { missing_scope: scope }
+W6-R17	OK	api/src/platform/oauth/__tests__/bearerAuth.test.ts:177	AC-1 test: req.principal = { app, user, scopes } for an OAuth access token (and :190 for p	||     it('class 1 (OAuth access token): req.principal = { app, user, scopes }', async () => {
+W6-R18	OK	api/src/platform/oauth/token.ts:650	rotateRefreshToken() — refresh grant entry point	|| export async function rotateRefreshToken(params: RotateRefreshTokenParams): Promise<TokenGrantResult> {
+W6-R18	OK	api/src/platform/oauth/token.ts:701	single-use: atomic UPDATE ... SET revoked_at WHERE id AND revoked_at IS NULL RETURNING (lo	||        WHERE id = $1 AND revoked_at IS NULL
+W6-R18	OK	api/src/platform/oauth/token.ts:658	presenting an already-revoked (rotated) refresh token ->	||   if (tokenRow.revoked_at) {
+W6-R18	OK	api/src/platform/oauth/token.ts:659	revokeTokenFamily(family_id) — stolen-token detection kills the whole family	||     await revokeTokenFamily(tokenRow.family_id);
+W6-R18	OK	api/src/platform/oauth/token.ts:590	revokeTokenFamily(): UPDATE oauth_tokens SET revoked_at WHERE family_id = $1	|| async function revokeTokenFamily(familyId: string): Promise<void> {
+W6-R18	OK	api/src/db/migrations/043_oauth_tokens_and_codes.sql:66	family_id column (and parent_id at :67) — the rotation lineage	||   family_id UUID NOT NULL DEFAULT gen_random_uuid(),
+W6-R18	OK	api/src/platform/oauth/__tests__/token.test.ts:891	test: reuse of a rotated refresh token revokes the whole family (and :943 concurrent-rotat	||   describe('negative: reuse of a rotated refresh token -> revokes the whole family', () => {
+W6-R18	OK	api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts:305	PF-800 narrated drill asserts reuse -> invalid_grant with the reuse-specific error_descrip	||     expect(reuseError.error).toBe('invalid_grant');
+W6-R19	OK	api/src/platform/api/v1/router.ts:19	the public API router — every /api/v1/* endpoint attaches here	||  * The public API router — `/api/v1/*` (PLUGFORGE.MD §2.1, §4 PF-001/PF-002).
+W6-R19	OK	api/src/app.ts:427	app.use('/api/v1', mountedV1Router) — public surface mounted at /api/v1 only; internal rou	||   app.use('/api/v1', mountedV1Router);
+W6-R19	OK	eslint.config.mjs:113	'no-restricted-imports': ['error', ...] — the boundary rule	||   'no-restricted-imports': [
+W6-R19	OK	eslint.config.mjs:118	group: ['**/routes/**', '**/routes'] — forbids importing internal route handlers	||           group: ['**/routes/**', '**/routes'],
+W6-R19	OK	eslint.config.mjs:164	rule scoped to files: ['api/src/platform/api/v1/**/*.ts']	||     files: ['api/src/platform/api/v1/**/*.ts'],
+W6-R19	OK	.github/workflows/ci.yml:110	CI 'Lint' step runs pnpm lint — a violation fails the build	||         run: pnpm lint
+W6-R19	OK	api/src/platform/__tests__/boundary-lint.test.ts:77	loads the real ESLint config and asserts a fixture importing api/src/routes/** fails no-re	||   it('fixture (a): importing from api/src/routes/** fails no-restricted-imports', async () => {
+W6-R19	OK	api/src/platform/__tests__/boundary-lint.test.ts:92	control: sibling api/src/services/** import produces zero violations	||   it('fixture (b): importing from api/src/services/** (a sibling, non-routes path) produces ZERO no-restricted-imports errors', async () => {
+W6-R20	OK	api/src/platform/api/v1/pagination.ts:139	encodeCursor(): base64url(JSON.stringify({id, created_at})) — opaque cursor over {id, time	|| export function encodeCursor(cursor: KeysetCursor): string {
+W6-R20	OK	api/src/platform/api/v1/pagination.ts:157	decodeCursor(): returns null on malformed input, never throws	|| export function decodeCursor(raw: string): KeysetCursor | null {
+W6-R20	OK	api/src/platform/api/v1/pagination.ts:42	PreciseTimestamp nominal brand — TRO-602 fix for same-millisecond row drops	|| export type PreciseTimestamp = string & { readonly __brand: 'PreciseTimestamp' };
+W6-R20	OK	api/src/platform/api/v1/resources/documents.ts:385	keyset predicate (created_at, id) < ($n-1, $n); response {data, next_cursor} at l.415	||       whereClauses.push(`(created_at, id) < ($${values.length - 1}, $${values.length})`);
+W6-R20	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:367	check (d): every GET collection route's registered 200 schema carries data + next_cursor, 	||     it('(d) paginates with { data, next_cursor } if it is a GET collection route, or is exempt', () => {
+W6-R20	OK	api/src/platform/api/v1/resources/__tests__/documents.test.ts:128	AC-1: cursor-paginated list stable across a mid-iteration insertion; TRO-602 same-millisec	||   describe('AC-1: cursor-paginated list — stable across a mid-iteration insertion', () => {
+W6-R21	OK	api/src/platform/openapi/index.ts:23	v1OpenApiDocument generated in-process at module load from the registry	|| export const v1OpenApiDocument: OpenAPIObject = generateV1OpenAPIDocument();
+W6-R21	OK	api/src/platform/api/v1/router.ts:103	served at GET /api/v1/openapi.json	||   v1Routes.get('/openapi.json', (_req, res) => {
+W6-R21	OK	api/src/platform/openapi/__tests__/document.test.ts:182	unit test validates against the official OpenAPI 3.1 schema	||   it('validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)', async () => {
+W6-R21	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:288	check (a): every live v1 route has a v1Registry.registerPath entry with security matching 	||     it('(a) has an OpenAPI entry, with security matching real bearerAuth presence', () => {
+W6-R22	OK	api/src/platform/webhooks/events.ts:110	EVENT_TYPES const array begins; lines 111-118 list exactly the 8 named types (document.cre	|| export const EVENT_TYPES = [
+W6-R22	OK	api/src/platform/webhooks/events.ts:248	EVENT_DEFINITIONS map typed { [K in EventType]: EventDefinition } — one Zod schema per typ	|| const EVENT_DEFINITIONS: { [K in EventType]: EventDefinition } = {
+W6-R22	OK	api/src/platform/webhooks/__tests__/events.test.ts:170	test: 'exposes exactly the 8 named event types, no more/fewer'	||     it('exposes exactly the 8 named event types, no more/fewer', () => {
+W6-R22	OK	api/src/platform/webhooks/__tests__/events.test.ts:207	new since prior sweep: issue.created schema accepts priority 'none' (TRO-501, PR #276)	||     it("accepts an issue.created payload with priority: 'none' (TRO-501)", () => {
+W6-R23	OK	api/src/platform/webhooks/eventBus.ts:48	export interface IEventBus { publish(...); subscribe(...) }	|| export interface IEventBus {
+W6-R23	OK	api/src/platform/webhooks/eventBus.ts:62	export class InProcessEventBus implements IEventBus — the in-process must-ship implementat	|| export class InProcessEventBus implements IEventBus {
+W6-R23	OK	api/src/services/documentService.ts:13	file header: publish() (via IEventBus) is called ONLY from this file — never from a route 	||  * `publish()` (via `IEventBus`, `platform/webhooks/eventBus.ts`) is called ONLY
+W6-R23	OK	api/src/services/documentService.ts:451	bus.publish('document.created', ...) — an actual publish call in the domain write path (ot	||   bus.publish('document.created', row.workspace_id, {
+W6-R23	OK	api/src/services/documentService.ts:82	states the collab-server Yjs persistence exclusion from event publication, pointing to doc	||  * Collab-server Yjs persistence (`api/src/collaboration/index.ts`) never calls
+W6-R23	OK	api/src/platform/webhooks/__tests__/publish-boundary.test.ts:70	grep-based test: api/src/routes/**/*.ts (excluding *.test.ts) contains zero publish()/getE	||   it('api/src/routes/**/*.ts (excluding *.test.ts) contains zero publish()/getEventBus() call sites', () => {
+W6-R23	OK	api/src/platform/webhooks/__tests__/publish-boundary.test.ts:88	positive control: documentService.ts DOES call publish() (regex not vacuous)	||   it('positive control: documentService.ts DOES call publish() (the regex is not vacuous)', () => {
+W6-R23	OK	docs/architecture.md:369	'Collab-persist events excluded from webhook publication (PF-301, landed TRO-426)' — defen	|| **Collab-persist events excluded from webhook publication (PF-301, landed TRO-426).** The Yjs
+W6-R24	OK	api/src/db/migrations/047_webhook_subscriptions.sql:47	CREATE TABLE webhook_subscriptions — app_id (49), event_type (50), target_url (51), signin	|| CREATE TABLE IF NOT EXISTS webhook_subscriptions (
+W6-R24	OK	api/src/platform/api/v1/resources/webhooks.ts:331	export function createWebhooksRouter(...) — POST / (336), GET / (407), GET /:id (809), DEL	|| export function createWebhooksRouter(injectedDeliverer?: IWebhookDeliverer): RouterType {
+W6-R24	OK	api/src/platform/scopes/registry.ts:82	name: 'webhooks:manage' — the scope is registered	||   name: 'webhooks:manage',
+W6-R24	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:357	POST / creates a subscription, returns the plaintext secret once, and encrypts it at rest	||     it('POST / creates a subscription, returns the plaintext secret once, and encrypts it at rest', async () => {
+W6-R24	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:521	AC: list/get responses never carry the secret, in any form, after the create response is g	||     it('list/get responses never carry the secret, in any form, after the create response is gone', async () => {
+W6-R24	OK	docs/architecture.md:354	Documented Deviations: 'Signing secret: encrypted, not hashed (§2.2 note)' — defends AES-2	|| **Signing secret: encrypted, not hashed (§2.2 note).** The brief says "hashed signing secret." A
+W6-R25	OK	api/src/platform/webhooks/signer.ts:121	export function sign(rawBody, secret, clock) → returns `t=<unix-seconds>,v1=<hex>` (line 1	|| export function sign(rawBody: string, secret: string, clock: Clock = systemClock): string {
+W6-R25	OK	api/src/platform/webhooks/signer.ts:144	export function verify(...) with toleranceSeconds default DEFAULT_TOLERANCE_SECONDS (148)	|| export function verify(
+W6-R25	OK	api/src/platform/webhooks/signer.ts:30	export const DEFAULT_TOLERANCE_SECONDS = 300	|| export const DEFAULT_TOLERANCE_SECONDS = 300
+W6-R25	OK	api/src/platform/webhooks/signer.ts:34	SHIP_SIGNATURE_HEADER_NAME = 'Ship-Signature'	|| export const SHIP_SIGNATURE_HEADER_NAME = 'Ship-Signature'
+W6-R25	OK	api/src/platform/webhooks/__tests__/signer.test.ts:71	positive case: verifies a freshly signed signature	||   it('verifies a signature freshly signed for the same body and timestamp', () => {
+W6-R25	OK	api/src/platform/webhooks/__tests__/signer.test.ts:82	tamper case: rejects a different body	||   it('rejects verification against a body different from the one that was signed', () => {
+W6-R25	OK	api/src/platform/webhooks/__tests__/signer.test.ts:91	expired case: rejects outside tolerance window	||   it('rejects a signature signed outside the tolerance window', () => {
+W6-R25	OK	api/src/platform/webhooks/__tests__/signer.test.ts:100	missing-v1 case: rejects header with no v1 component	||   it('rejects a header with no v1 component, without throwing', () => {
+W6-R25	OK	api/src/platform/webhooks/__tests__/signer.test.ts:185	boundary: accepts exactly at 300s (inclusive); line 193 rejects one second past	||     it('accepts a signature exactly at the 300s boundary (inclusive)', () => {
+W6-R26	OK	api/src/platform/webhooks/deliverer.ts:109	RETRY_SCHEDULE_MS = [1_000, 4_000, 16_000, 60_000, 300_000, 1_800_000] — 1s, 4s, 16s, 1m, 	|| export const RETRY_SCHEDULE_MS = [1_000, 4_000, 16_000, 60_000, 300_000, 1_800_000] as const;
+W6-R26	OK	api/src/platform/webhooks/deliverer.ts:744	delayMs = baseDelayMs + this.random() * baseDelayMs — full jitter on top of the base sched	||     const delayMs = baseDelayMs + this.random() * baseDelayMs;
+W6-R26	OK	api/src/platform/webhooks/deliverer.ts:849	response.status >= 500 → kind 'retryable'; 4xx falls through to 'permanent' (852-854); fet	||       if (response.status >= 500) {
+W6-R26	OK	api/src/platform/webhooks/deliverer.ts:707	'permanent' outcome (4xx) → status='dead' immediately, no retry row (705-713)	||       // 4xx (or any other non-2xx/non-5xx response) — dead-letter
+W6-R26	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:229	500x3 then 200 succeeds on attempt 4, waits boundary-checked at 999/1000, 3999/4000, 15999	||   it('500x3 then 200 succeeds on attempt 4, with waits correctly >= 1s/4s/16s per the injected clock — fast and deterministic', async () => {
+W6-R26	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:319	applies jitter on top of the base schedule	||   it('applies jitter on top of the base schedule (does not fire at exactly the base delay when jitter > 0)', async () => {
+W6-R26	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:393	a 4xx response dead-letters immediately on attempt 1 — no retry is ever scheduled	||   it('a 4xx response dead-letters immediately on attempt 1 — no retry is ever scheduled', async () => {
+W6-R27	OK	api/src/platform/webhooks/deliverer.ts:112	MAX_ATTEMPTS = 6; line 719-725: retryable outcome at attemptNumber >= MAX_ATTEMPTS → statu	|| export const MAX_ATTEMPTS = 6;
+W6-R27	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:353	6 consecutive failures land in webhook_deliveries with status = dead — deterministic clock	||   it('6 consecutive failures land in webhook_deliveries with status = dead — fast and deterministic', async () => {
+W6-R27	OK	api/src/platform/api/v1/resources/webhooks.ts:621	POST '/deliveries/:id/replay' route; 574-582 comment: re-runs with the SAME idempotency_ke	||     '/deliveries/:id/replay',
+W6-R27	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:1156	replays a dead (DLQ) delivery successfully — the graded replay-after-DLQ scenario	||     it('replays a dead (DLQ) delivery successfully — the graded replay-after-DLQ scenario', async () => {
+W6-R27	OK	web/src/pages/DeveloperPortal.tsx:127	status filter option { value: 'dead', label: 'Dead (DLQ)' } — DLQ visible in portal	||   { value: 'dead', label: 'Dead (DLQ)' },
+W6-R27	OK	web/src/pages/DeveloperPortal.tsx:391	<button ... aria-label=`Replay delivery ...`> calling handleReplay() (296) which POSTs /we	||                     <button
+W6-R27	OK	web/src/pages/DeveloperPortal.test.tsx:152	jsdom test: shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the	||   it('shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the original Idempotency-Key', async () => {
+W6-R27	OK	e2e/developer-portal-dlq-replay.spec.ts:169	Playwright: dead-lettered-after-6 visible in DLQ view; replay against healthy target succe	||   test('a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key', async
+W6-R28	OK	api/src/db/migrations/048_webhook_deliveries.sql:38	CREATE TABLE webhook_deliveries — subscription_id (40), event_id (44), attempt_number (65)	|| CREATE TABLE IF NOT EXISTS webhook_deliveries (
+W6-R28	OK	api/src/platform/api/v1/resources/webhooks.ts:483	GET '/deliveries' — workspace-scoped via oauth_apps join, filter by subscription_id/status	||     '/deliveries',
+W6-R28	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:670	describe 'PF-305: GET /api/v1/webhooks/deliveries (Linear TRO-442)'	||   describe('PF-305: GET /api/v1/webhooks/deliveries (Linear TRO-442)', () => {
+W6-R28	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:770	lists attempts for a subscription with attempt_number/response_status/latency_ms present, 	||     it('lists attempts for a subscription with attempt_number/response_status/latency_ms present, newest first', async () => {
+W6-R28	OK	web/src/pages/DeveloperPortal.tsx:257	portal DeliveriesTab fetches /webhooks/deliveries — the per-app portal query path	||         const res = await callV1<ListPage<WebhookDelivery>>(`/webhooks/deliveries${query}`);
+W6-R29	OK	api/src/platform/api/v1/resources/webhooks.ts:621	route path '/deliveries/:id/replay' (POST at 620)	||     '/deliveries/:id/replay',
+W6-R29	OK	api/src/platform/api/v1/resources/webhooks.ts:578	comment: re-runs through the deliverer with the SAME idempotency_key the original delivery	||   // deliverer with the SAME idempotency_key the original delivery used (read
+W6-R29	OK	api/src/platform/api/v1/resources/webhooks.ts:774	attemptNow({... idempotencyKey: original.idempotency_key ...}) — original key on the wire	||           idempotencyKey: original.idempotency_key,
+W6-R29	OK	api/src/platform/api/v1/resources/webhooks.ts:331	createWebhooksRouter(injectedDeliverer?) — TRO-603 fix, real shared deliverer used at 764	|| export function createWebhooksRouter(injectedDeliverer?: IWebhookDeliverer): RouterType {
+W6-R29	OK	api/src/index.ts:119	production constructs the singleton InMemoryWebhookDeliverer; 134 wires it to the event bu	||   const webhookDeliverer = new InMemoryWebhookDeliverer(pool, systemClock);
+W6-R29	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:1071	replays a successful delivery: reaches the subscriber with the ORIGINAL Idempotency-Key, r	||     it('replays a successful delivery: reaches the subscriber with the ORIGINAL Idempotency-Key, records a NEW row, and leaves the original untouched', async ()
+W6-R29	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:1317	TRO-603 FIX: real shared deliverer injected — retry sibling drained by its own processDue(	||     it('TRO-603 FIX: when the app is built with its real, shared deliverer injected, a retryable replay\'s retry sibling is queued on THAT instance and gets dra
+W6-R29	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:1503	PF-801/TRO-447: fresh delivery and its replay carry the SAME Idempotency-Key on the wire; 	||     it('a fresh delivery and its replay carry the SAME Idempotency-Key on the wire; the reference-subscriber fixture recognizes the second as a duplicate withou
+W6-R30	OK	sdk/src/client.ts:115	readonly documents: DocumentsClient	||   readonly documents: DocumentsClient;
+W6-R30	OK	sdk/src/client.ts:119	readonly issues: IssuesClient	||   readonly issues: IssuesClient;
+W6-R30	OK	sdk/src/client.ts:122	readonly sprints: SprintsClient	||   readonly sprints: SprintsClient;
+W6-R30	OK	sdk/src/client.ts:130	readonly webhooks: WebhooksClient	||   readonly webhooks: WebhooksClient;
+W6-R30	OK	sdk/src/__tests__/parity.test.ts:248	describe 'PF-405: /api/v1 <-> @ship/sdk bidirectional parity fitness test (Linear TRO-422)	|| describe('PF-405: /api/v1 <-> @ship/sdk bidirectional parity fitness test (Linear TRO-422)', () => {
+W6-R30	OK	sdk/src/__tests__/parity.test.ts:296	every OpenAPI operation must have a typed SDK method or a documented exemption (spec→SDK d	||     it('has a corresponding typed SDK method, or is a documented exemption', () => {
+W6-R30	OK	sdk/src/__tests__/parity.test.ts:316	every SDK method must map to a currently-registered /api/v1 operation or exemption (SDK→sp	||     it('maps to a real, currently-registered /api/v1 operation, or is a documented exemption', () => {
+W6-R30	OK	sdk/src/resources/webhooks.ts:181	WebhookSubscription interface matches serializer field-for-field (TRO-599 fix)	|| export interface WebhookSubscription {
+W6-R30	OK	sdk/src/resources/webhooks.ts:220	CreateWebhookSubscriptionBody declares app_id/event_type/target_url (TRO-607 fix)	|| export interface CreateWebhookSubscriptionBody {
+W6-R30	OK	.github/workflows/ci.yml:212	CI runs pnpm --filter @ship/sdk test (parity suite included) — drift fails CI	||         run: pnpm --filter @ship/sdk test
+W6-R30	OK	.gitlab-ci.yml:147	same on the GitLab (graded) pipeline	||     - pnpm --filter @ship/sdk test
+W6-R31	OK	sdk/src/client.ts:186	static async deviceLogin(...) — persists to opts.tokenStore (line 199-200)	||   static async deviceLogin(
+W6-R31	OK	sdk/src/client.ts:222	static async authorizationCodeFlow(opts: PkceFlowOptions): Promise<ShipClient>	||   static async authorizationCodeFlow(opts: PkceFlowOptions): Promise<ShipClient> {
+W6-R31	OK	sdk/src/deviceLogin.ts:188	runDeviceLoginFlow — RFC 8628 polling loop	|| export async function runDeviceLoginFlow(opts: DeviceLoginFlowOptions): Promise<TokenSet> {
+W6-R31	OK	sdk/src/deviceLogin.ts:219	honors slow_down by increasing the poll interval	||     if (outcome.kind === 'slow_down') {
+W6-R31	OK	sdk/src/authorizationCodeFlow.ts:218	runAuthorizationCodeFlow — two-leg PKCE (S256), sessionStorage-held verifier	|| export async function runAuthorizationCodeFlow(
+W6-R31	OK	sdk/src/tokenStore.ts:45	export interface ITokenStore — the pluggable contract	|| export interface ITokenStore {
+W6-R31	OK	sdk/src/tokenStore.ts:56	MemoryTokenStore implements ITokenStore (in-memory)	|| export class MemoryTokenStore implements ITokenStore {
+W6-R31	OK	sdk/src/fileTokenStore.ts:112	FileTokenStore implements ITokenStore (file, 0600)	|| export class FileTokenStore implements ITokenStore {
+W6-R31	OK	sdk/src/fileTokenStore.ts:169	TRO-600 fix: writes temp file with mode 0o600, flag 'wx'	||       await fs.writeFile(tempPath, data, { mode: 0o600, flag: 'wx' });
+W6-R31	OK	sdk/src/fileTokenStore.ts:181	then fs.rename(tempPath, filePath) — atomic replace	||       await fs.rename(tempPath, this.filePath);
+W6-R31	OK	integrations/browser-demo/src/localStorageTokenStore.ts:25	LocalStorageTokenStore implements ITokenStore (browser localStorage) — lives in the browse	|| export class LocalStorageTokenStore implements ITokenStore {
+W6-R31	OK	sdk/src/tokenStore.test.ts:155	describe 'set() atomicity (TRO-600)'	||   describe('set() atomicity (TRO-600)', () => {
+W6-R31	OK	sdk/src/__tests__/client.deviceLogin.liveServer.test.ts:46	deviceLogin() end-to-end against a real running Ship API	|| describe('PF-404: ShipClient.deviceLogin() end-to-end against a real running Ship API + the seeded worktree DB', () => {
+W6-R32	OK	sdk/src/internal/pagination.ts:51	export async function* iteratePages<T>(fetchPage) — one shared async generator	|| export async function* iteratePages<T>(fetchPage: FetchPage<T>): AsyncGenerator<T, void, undefined> {
+W6-R32	OK	sdk/src/internal/pagination.ts:61	stops when page.next_cursor === null; cursor held in the closure only	||     if (page.next_cursor === null) return;
+W6-R32	OK	sdk/src/resources/documents.ts:94	DocumentsClient.iterate(params): AsyncGenerator<Document>	||   iterate(params: IterateDocumentsParams = {}): AsyncGenerator<Document, void, undefined> {
+W6-R32	OK	sdk/src/resources/documents.ts:95	delegates to iteratePages((cursor) => this.list({...params, cursor}))	||     return iteratePages<Document>((cursor) => this.list({ ...params, cursor }));
+W6-R32	OK	sdk/src/resources/issues.ts:50	IssuesClient.iterate	||   iterate(params: IterateIssuesParams = {}): AsyncGenerator<Issue, void, undefined> {
+W6-R32	OK	sdk/src/resources/sprints.ts:41	SprintsClient.iterate	||   iterate(params: IterateSprintsParams = {}): AsyncGenerator<Sprint, void, undefined> {
+W6-R32	OK	sdk/src/types.ts:140	IterateDocumentsParams = Omit<ListDocumentsParams, 'cursor'> — the consumer type has no cu	|| export type IterateDocumentsParams = Omit<ListDocumentsParams, 'cursor'>;
+W6-R32	OK	sdk/src/resources/__tests__/iterate.test.ts:78	3-page full iteration, exactly 3 requests, no dupes/gaps	||   it('yields every item across 3 pages, in order, with no duplicates or gaps, using exactly 3 requests', async () => {
+W6-R32	OK	sdk/src/resources/__tests__/iterate.test.ts:129	early break after first item makes exactly 1 request (no overfetch)	||   it('breaking after the first item of a multi-item first page makes exactly 1 request', async () => {
+W6-R32	OK	sdk/src/resources/__tests__/iterate.test.ts:203	yielded items are bare elements — no next_cursor anywhere the caller sees	||   it('the yielded items are the bare element type — no page wrapper, no next_cursor anywhere in what the caller sees', async () => {
+W6-R33	OK	sdk/src/verifyWebhook.ts:185	export function verifyWebhook(headers, rawBody, secret, toleranceSec=300, now?) — boolean,	|| export function verifyWebhook(
+W6-R33	OK	sdk/src/verifyWebhook.ts:202	expired timestamp: |now - t| > toleranceSec -> false	||   if (Math.abs(now - parsed.t) > toleranceSec) return false;
+W6-R33	OK	sdk/src/verifyWebhook.ts:168	crypto.timingSafeEqual on the v1 digest	||   return timingSafeEqual(bufA, bufB);
+W6-R33	OK	sdk/src/node.ts:13	exported from @ship/sdk/node (Node-only entry, uses node:crypto)	|| export {
+W6-R33	OK	sdk/src/verifyWebhook.test.ts:112	tampered body -> false	||   it('rejects verification against a body different from the one that was signed', () => {
+W6-R33	OK	sdk/src/verifyWebhook.test.ts:121	signature outside tolerance window -> false	||   it('rejects a signature signed outside the tolerance window', () => {
+W6-R33	OK	sdk/src/verifyWebhook.test.ts:129	header with no v1 component -> false, without throwing	||   it('rejects a header with no v1 component, without throwing', () => {
+W6-R33	OK	sdk/src/verifyWebhook.test.ts:277	300s inclusive boundary passes	||     it('accepts a signature exactly at the 300s boundary (inclusive)', () => {
+W6-R33	OK	sdk/src/verifyWebhook.test.ts:284	301s fails	||     it('rejects a signature one second past the 300s boundary', () => {
+W6-R33	OK	sdk/src/verifyWebhook.test.ts:361	cross-validated against shared/fixtures/webhook-signature-vectors.json (same vectors the s	||   describe('shared fixture (shared/fixtures/webhook-signature-vectors.json)', () => {
+W6-R34	OK	sdk/src/errors.ts:39	export type SdkErrorKind = 'auth' | 'forbidden' | 'not_found' | 'validation' | 'rate_limit	|| export type SdkErrorKind =
+W6-R34	OK	sdk/src/errors.ts:76	mapApiErrorCodeToKind(code) — server ApiErrorCode -> kind, unknown -> 'server'	|| export function mapApiErrorCodeToKind(code: string): SdkErrorKind {
+W6-R34	OK	sdk/src/errors.ts:115	export class ShipSdkError extends Error implements SdkErrorShape	|| export class ShipSdkError extends Error implements SdkErrorShape {
+W6-R34	OK	sdk/src/errors.ts:116	readonly kind: SdkErrorKind — the discriminant	||   readonly kind: SdkErrorKind;
+W6-R34	OK	sdk/src/errors.ts:145	static fromNetworkError -> kind 'network'	||   static fromNetworkError(cause: unknown): ShipSdkError {
+W6-R34	OK	sdk/src/errors.test.ts:10	describe mapApiErrorCodeToKind	|| describe('mapApiErrorCodeToKind', () => {
+W6-R34	OK	sdk/src/errors.test.ts:21	it.each over every documented ApiErrorCode -> kind	||   it.each(cases)('maps %s -> %s', (code, expectedKind) => {
+W6-R34	OK	sdk/src/errors.test.ts:67	network kind via fromNetworkError	|| describe('ShipSdkError.fromNetworkError (the network-failure case)', () => {
+W6-R35	OK	api/src/platform/ratelimit/middleware.ts:21	RATE_LIMIT_HEADERS = X-RateLimit-Limit / -Remaining / -Reset	|| export const RATE_LIMIT_HEADERS = {
+W6-R35	OK	api/src/platform/ratelimit/middleware.ts:131	rateLimitDefaults sets baseline headers pre-auth; mounted globally at router.ts:88 before 	||   const rateLimitDefaults: RequestHandler = (_req: Request, res: Response, next: NextFunction): void => {
+W6-R35	OK	api/src/platform/ratelimit/middleware.ts:171	rateLimitBuckets: per-token (t:hash) and per-app (a:clientId) buckets, peek-then-consume; 	||   const rateLimitBuckets: RequestHandler = (req: Request, res: Response, next: NextFunction): void => {
+W6-R35	OK	api/src/platform/ratelimit/middleware.ts:202	res.setHeader('Retry-After', ...) on the 429 path	||       res.setHeader('Retry-After', String(retryAfterSeconds));
+W6-R35	OK	api/src/middleware/rate-limit.ts:212	isLegacyLimiterExemptPath(): path === '/v1' || startsWith('/v1/') — used as skip() by both	|| export function isLegacyLimiterExemptPath(path: string): boolean {
+W6-R36	OK	api/src/db/migrations/049_public_api_audit.sql:40	CREATE TABLE public_api_audit (request_id, app_client_id, user_id, method, route, scope_us	|| CREATE TABLE IF NOT EXISTS public_api_audit (
+W6-R36	OK	api/src/platform/audit/middleware.ts:111	auditLogMiddleware — one row per /api/v1 response via res.on('finish'); INSERT at l.61; mo	|| export function auditLogMiddleware(req: Request, res: Response, next: NextFunction): void {
+W6-R36	OK	api/src/platform/api/v1/resources/audit.ts:89	GET /api/v1/audit — cursor-paginated, ?app_client_id= filter, admin/owner/first-party gate	||   app_client_id: z.string().min(1).optional(),
+W6-R36	OK	sdk/src/resources/audit.ts:68	SDK audit.list() typed client for the endpoint	||   async list(params: ListAuditParams = {}): Promise<AuditRowList> {
+W6-R36	OK	web/src/contexts/DeveloperPortalContext.tsx:35	portal token mints 'audit:read' scope — but no web/src code calls /api/v1/audit (grep 'v1/	||   'audit:read',
+W6-R36	OK	web/src/components/sidebars/DeveloperSidebar.tsx:21	DEVELOPER_NAV has exactly two entries: /developer/apps and /developer/webhooks (l.23) — no	||   { to: '/developer/apps', label: 'Apps' },
+W6-R37	OK	web/src/pages/DeveloperApps.tsx:215	'Register app' button — app registration + listing (TRO-436/PF-502)	||             {creating ? 'Registering…' : 'Register app'}
+W6-R37	OK	web/src/pages/DeveloperApps.tsx:250	<ShownOnceSecretModal — client_secret shown exactly once on registration	||         <ShownOnceSecretModal
+W6-R37	OK	web/src/pages/DeveloperAppDetail.tsx:45	handleRotate() — client_secret rotation, shown-once via the same modal (import at :4)	||   async function handleRotate() {
+W6-R37	OK	web/src/pages/DeveloperPortal.tsx:163	'Deliveries & DLQ' tab — browsing the delivery log incl. dead-lettered rows (TRO-439/PF-50	||             Deliveries &amp; DLQ
+W6-R37	OK	web/src/pages/DeveloperPortal.tsx:166	'Subscriptions' tab — managing subscriptions	||             Subscriptions
+W6-R37	OK	web/src/pages/DeveloperPortal.tsx:296	handleReplay() — POST /webhooks/deliveries/:id/replay from the portal (replaying failed de	||   async function handleReplay(delivery: WebhookDelivery) {
+W6-R37	OK	web/src/components/sidebars/DeveloperSidebar.tsx:21	portal nav entries /developer/apps and /developer/webhooks (:23)	||   { to: '/developer/apps', label: 'Apps' },
+W6-R37	OK	web/src/pages/App.tsx:269	'developer' mode routes to /developer/apps inside the existing Ship web app	||       case 'developer': void navigate('/developer/apps'); break;
+W6-R37	OK	e2e/developer-portal-apps.spec.ts:31	e2e: register, view shown-once secret, rotate, and revoke	||   test('register, view shown-once secret, rotate, and revoke', async ({ page }) => {
+W6-R37	OK	e2e/developer-portal-apps.spec.ts:108	e2e: portal calls hit the real /api/v1 surface (network-tab evidence)	||   test('portal calls hit the real /api/v1 surface (network-tab evidence, PF-502 AC)', async ({ page }) => {
+W6-R37	OK	e2e/developer-portal-dlq-replay.spec.ts:169	e2e: dead-lettered delivery visible in DLQ view; replay succeeds and preserves Idempotency	||   test('a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key', async
+W6-R37	OK	e2e/developer-portal-dlq-replay.spec.ts:254	e2e: subscription CRUD from the portal UI	||   test('subscription CRUD from the portal UI: create, list, delete', async ({ page, apiServer, dbContainer }) => {
+W6-R38	OK	terraform/render/web_service.tf:9	app container: resource render_web_service.ship	|| resource "render_web_service" "ship" {
+W6-R38	OK	terraform/render/postgres.tf:9	database: resource render_postgres.ship (private-network only per header comment lines 4-8	|| resource "render_postgres" "ship" {
+W6-R38	OK	terraform/render/versions.tf:9	provider exact-pinned 1.9.1; required_version >= 1.9.0 at :2	||       version = "1.9.1"
+W6-R38	OK	terraform/render/.terraform.lock.hcl:6	constraints = "1.9.1" — no ~>/>= range on the provider	||   constraints = "1.9.1"
+W6-R38	OK	terraform/render/plan/tro-411-pf900-w6-env-vars.md:359	committed plan ran cleanly: 'Plan: 3 to add, 0 to change, 0 to destroy.'	|| Plan: 3 to add, 0 to change, 0 to destroy.
+W6-R38	OK	CHANGES.md:156	TRO-488: `terraform validate` Success after adding validation blocks (2026-08-16) — the co	|| `terraform validate -no-color`: `Success!`, the same two pre-existing `pull_request_previews_enabled`
+W6-R38	OK	docs/IAM-ADAPTATION-RENDER.md:48	§2 'Render's equivalent' — defends why no VPC/subnet/SG primitives exist in this config (P	|| ## 2. Render's equivalent (observed from `terraform/render/*.tf`, `README.md`)
+W6-R38	OK	terraform/render/README.md:96	'Local-provider deliverable' section distinguishing terraform/render/ (Render) from audit/	|| ## Local-provider deliverable (Category 8, the other half)
+W6-R39	OK	docs/IAM-ADAPTATION-RENDER.md:10	§1 AWS side: eb_instance role + the three custom least-privilege policies (ssm.tf:164-262)	|| ## 1. AWS side: task/execution role + the least-privilege exercise (observed)
+W6-R39	OK	docs/IAM-ADAPTATION-RENDER.md:48	§2 Render's equivalent — API-key scoping, service isolation, env-var secret handling	|| ## 2. Render's equivalent (observed from `terraform/render/*.tf`, `README.md`)
+W6-R39	OK	docs/IAM-ADAPTATION-RENDER.md:100	§3 what this deployment's permission model cannot express (stated plainly)	|| ## 3. What this deployment's permission model cannot express (stated plainly)
+W6-R39	OK	docs/IAM-ADAPTATION-RENDER.md:131	§4 why the trade is acceptable — per-permission rationale in prose	|| ## 4. Why the trade is acceptable for this deployment (specific, not generic)
+W6-R39	OK	terraform/ssm.tf:164	aws_iam_role_policy eb_ssm_access — resource-scoped SSM read (one of the three least-privi	|| resource "aws_iam_role_policy" "eb_ssm_access" {
+W6-R39	OK	CHANGES.md:8540	TRO-420 — PF-902 IAM adaptation memo entry	|| ## TRO-420 — PF-902: IAM adaptation memo, AWS least-privilege ⇄ Render's permission model
+W6-R40	OK	audit/terraform/drift-demo/main.tf:11	hashicorp/local pinned 2.5.2; two local_file resources at :17 and :28 — the drift fixture 	||       version = "2.5.2"
+W6-R40	OK	audit/terraform/raw/drift-2-clean-plan.txt:4	'No changes. Your infrastructure matches the configuration.' — clean plan before the manua	|| No changes. Your infrastructure matches the configuration.
+W6-R40	OK	audit/terraform/raw/drift-3-drift-plan.txt:49	'Plan: 2 to add, 0 to change, 0 to destroy.' — drift detected after the out-of-band edit	|| Plan: 2 to add, 0 to change, 0 to destroy.
+W6-R40	OK	audit/terraform/baseline.md:63	'Drift detection demonstration (cloud-free, hashicorp/local)' — the write-up of that run	|| ### Drift detection demonstration (cloud-free, `hashicorp/local`)
+W6-R40	OK	terraform/render/README.md:100	README confirms audit/terraform/drift-demo/main.tf is the local-provider drift deliverable	|| exists and needs no changes:** `audit/terraform/drift-demo/main.tf` manages two `local_file`
+W6-R40	OK	terraform/render/plan/tro-316-destroy-redeploy-proof.md:37	`curl .../health # 200 — ship/ship-db untouched by the targeted destroy` — the only real d	|| curl https://ship-rr6m.onrender.com/health   # 200 — ship/ship-db untouched by the targeted destroy
+W6-R40	OK	terraform/render/plan/tro-316-destroy-redeploy-proof.md:12	explicit scope: ship/ship-db 'stay on their Week-4 import (unchanged, deliberately...)'	|| `ship`/`ship-db` resources, which stay on their Week-4 import (unchanged, deliberately, per the
+W6-R41	OK	docs/submission/PLUGFORGE-DEFENSE-DECK.html:430	defense deck slide 05 'Infrastructure & blast radius' — 'Terraform is the truth. Here's ho	||     <div class="eyebrow reveal" style="--i:0"><span class="dot"></span> 05 · Infrastructure & blast radius</div>
+W6-R41	OK	terraform/render/plan/tro-411-pf900-w6-env-vars.md:384	'Annotation — every new env var called out, one sentence per resource' with blast-radius c	|| ## Annotation — every new env var called out, one sentence per resource
+W6-R41	OK	terraform/render/plan/plan-annotated.md:114	'Annotation — one sentence per resource' table with Blast radius / Safe-or-risky columns	|| ## Annotation — one sentence per resource
+W6-R41	OK	audit/terraform/baseline.md:36	'Annotated inventory + blast radius' — AWS-root resource walkthrough ordered worst-first	|| ### Annotated inventory + blast radius
+W6-R41	OK	docs/IAM-ADAPTATION-RENDER.md:1	line 1 = title; whole-file proxy: resource-by-resource permission reasoning	|| # IAM Adaptation Memo — AWS Least-Privilege ⇄ Render's Permission Model
+W6-R42	OK	e2e/oauth-pkce-chain.spec.ts:172	graded scenario: authorize -> consent -> token -> real access token authenticates /api/v1/	||   test('graded scenario: authorize -> consent -> token -> a real access token that authenticates /api/v1/me', async ({
+W6-R42	OK	e2e/oauth-pkce-chain.spec.ts:265	mandatory negative: wrong code_verifier on token exchange -> 400 invalid_grant	||   test('negative (mandatory): wrong code_verifier on token exchange -> 400 invalid_grant', async ({
+W6-R42	OK	api/src/platform/oauth/__tests__/token.test.ts:400	backend unit proof of the same negative case (400 invalid_grant), executed this sweep	||   describe('negative: wrong code_verifier -> 400 invalid_grant', () => {
+W6-R43	OK	integrations/cli/src/commands/login.ts:66	ship login calls ShipClient.deviceLogin() — the device grant	||     const client = await ShipClient.deviceLogin({
+W6-R43	OK	integrations/cli/src/commands/whoami.ts:82	ship whoami calls client.me() → GET /api/v1/me with the stored token	||     const me = await client.me();
+W6-R43	OK	sdk/src/deviceLogin.ts:219	poll loop: on slow_down ...	||     if (outcome.kind === 'slow_down') {
+W6-R43	OK	sdk/src/deviceLogin.ts:220	intervalMs += SLOW_DOWN_INCREMENT_MS — genuinely backs off	||       intervalMs += SLOW_DOWN_INCREMENT_MS;
+W6-R43	OK	sdk/src/deviceLogin.test.ts:121	test: honors slow_down by genuinely increasing the wait per poll (injected clock)	||   it('honors slow_down by GENUINELY increasing the wait for every subsequent poll — not retrying at the same cadence (this ticket\'s own AC)', async () => {
+W6-R43	OK	sdk/src/__tests__/client.deviceLogin.liveServer.test.ts:122	live-server test: device flow round trip, returned client works against /api/v1/me	||       'the returned ShipClient works against /api/v1/me, and its tokens (incl. a real refresh token) reach the supplied tokenStore',
+W6-R43	OK	integrations/cli/src/__tests__/login.liveServer.test.ts:196	PF-600 e2e: spawns real api/ as a subprocess, drives runLogin() then runWhoami()	|| describe('PF-600: ship login / ship whoami end-to-end against a real running Ship API', () => {
+W6-R43	OK	integrations/cli/src/__tests__/login.liveServer.test.ts:390	runWhoami(...) — the token minted by the CLI login is used against /api/v1/me	||       const whoamiCode = await runWhoami({ io: whoamiIo, env: {}, clientId, baseUrl, credentialsPath });
+W6-R43	OK	api/src/platform/oauth/__tests__/device.test.ts:256	server-side poll-to-approval with slow_down honored — executed this sweep	||     it('pending -> slow_down (interval increases, twice) -> approve -> real token -> reused device_code is invalid_grant', async () => {
+W6-R44	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:161	discoverV1Routes() — structural walk of the live v1Routes router (walkRouter at l.129), no	|| function discoverV1Routes(): RouteDescriptor[] {
+W6-R44	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:288	check (a): has an OpenAPI entry	||     it('(a) has an OpenAPI entry, with security matching real bearerAuth presence', () => {
+W6-R44	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:311	check (b): declares a scope via requireScope(...) or is in KNOWN_EXEMPTIONS (l.186: /healt	||     it('(b) declares a scope via requireScope(...), or is a documented exemption', () => {
+W6-R44	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:339	check (c): generic failure path returns the ApiError shape	||     it('(c) its generic failure path returns the §2.5 ApiError shape', async () => {
+W6-R44	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:367	check (d): GET collection routes register {data, next_cursor}	||     it('(d) paginates with { data, next_cursor } if it is a GET collection route, or is exempt', () => {
+W6-R44	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:402	check (e) (beyond the brief's four): X-RateLimit-* headers on the failure path	||     it('(e) carries X-RateLimit-* headers on its generic failure path (PF-500, TRO-427)', async () => {
+W6-R45	OK	api/src/platform/openapi/__tests__/document.test.ts:182	spec validity against the official OpenAPI 3.1 JSON Schema (same as W6-R8) — PASSED this s	||   it('validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)', async () => {
+W6-R45	OK	sdk/src/__tests__/parity.test.ts:133	discoverOpenApiOperations() walks the real v1OpenApiDocument.paths	|| function discoverOpenApiOperations(): OpenApiOperation[] {
+W6-R45	OK	sdk/src/__tests__/parity.test.ts:164	discoverSdkMethods() walks the real SDK class prototypes	|| function discoverSdkMethods(): SdkMethod[] {
+W6-R45	OK	sdk/src/__tests__/parity.test.ts:296	per spec operation: 'has a corresponding typed SDK method, or is a documented exemption'; 	||     it('has a corresponding typed SDK method, or is a documented exemption', () => {
+W6-R45	OK	sdk/src/types.ts:170	SDK IssuePriority = 'low'|'medium'|'high'|'urgent' — omits 'none' that shared/src/types/do	|| export type IssuePriority = 'low' | 'medium' | 'high' | 'urgent';
+W6-R46	OK	scripts/drill/ttfe.ts:476	client.webhooks.createSubscription(...) — subscription created via the SDK against the dri	||       const subscription = await client.webhooks.createSubscription({
+W6-R46	OK	scripts/drill/ttfe.ts:486	client.documents.create(...) — document created via the SDK	||       await client.documents.create({ title: `TRO-455 TTFE drill ${runId}` });
+W6-R46	OK	scripts/drill/ttfe.ts:491	wait_for_delivery timeout = stageBudgetsMs.wait_for_delivery (15000ms) — the only latency 	||       const timeoutMs = config.stageBudgetsMs.wait_for_delivery ?? 15_000;
+W6-R46	OK	scripts/drill/ttfe.ts:502	verifyWebhook(captured.headers, captured.rawBody, subscription.secret) on the real deliver	||       const verified = verifyWebhook(captured.headers, captured.rawBody, subscription.secret);
+W6-R46	OK	scripts/drill/ttfe.config.json:9	"wait_for_delivery": 15000 — the asserted ceiling for first delivery	||     "wait_for_delivery": 15000,
+W6-R46	OK	sdk/src/verifyWebhook.test.ts:117	tamper negative: verifyWebhook(headers, tamperedBody, SECRET) === false — a UNIT test on a	||     expect(verifyWebhook(headers, tamperedBody, SECRET)).toBe(false);
+W6-R46	OK	.github/workflows/ci.yml:471	drill-ttfe job runs `pnpm drill ttfe` on every PR/push	||         run: pnpm drill ttfe
+W6-R47	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:229	it('500x3 then 200 succeeds on attempt 4, with waits correctly >= 1s/4s/16s per the inject	||   it('500x3 then 200 succeeds on attempt 4, with waits correctly >= 1s/4s/16s per the injected clock — fast and deterministic', async () => {
+W6-R47	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:276	clock.advance(999) → processDue()=0, then advance(1) → 1 (attempt 2 at exactly >=1s); same	||     clock.advance(999);
+W6-R47	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:301	expects statuses ['failed','failed','failed','success'] and response_status [500,500,500,2	||     expect(rows.map((r) => r.status)).toEqual(['failed', 'failed', 'failed', 'success']);
+W6-R48	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:353	6 consecutive failures → status='dead'; 379-380 assert attempt_numbers 1..6 and statuses f	||   it('6 consecutive failures land in webhook_deliveries with status = dead — fast and deterministic', async () => {
+W6-R48	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:1156	replays a dead (DLQ) delivery successfully — graded replay-after-DLQ scenario	||     it('replays a dead (DLQ) delivery successfully — the graded replay-after-DLQ scenario', async () => {
+W6-R48	OK	web/src/pages/DeveloperPortal.tsx:163	'Deliveries & DLQ' tab; 127 'Dead (DLQ)' filter option; 391-399 the Replay button	||             Deliveries &amp; DLQ
+W6-R48	OK	web/src/pages/DeveloperPortal.test.tsx:152	jsdom: shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the orig	||   it('shows a dead-lettered (DLQ) delivery and replaying it succeeds, preserving the original Idempotency-Key', async () => {
+W6-R48	OK	e2e/developer-portal-dlq-replay.spec.ts:169	Playwright: seeds a 6-row dead chain (123-154), filters to 'dead' (216), asserts DLQ row v	||   test('a delivery dead-lettered after 6 attempts is visible in the DLQ view; replay against a healthy target succeeds and preserves the Idempotency-Key', async
+W6-R49	OK	package.json:36	root script "drill": "tsx scripts/drill/run.ts" — `pnpm drill ttfe`	||     "drill": "tsx scripts/drill/run.ts",
+W6-R49	OK	scripts/drill/run.ts:13	dispatcher: name === 'ttfe' -> import('./ttfe.js')	|| if (name === 'ttfe') {
+W6-R49	OK	scripts/drill/ttfe.ts:334	installSdkInCleanDir(): npm pack the real @ship/sdk + npm install into a fresh mkdtemp dir	|| /** Stage 1: pack the already-built `@ship/sdk` and `npm install` it into a
+W6-R49	OK	scripts/drill/ttfe.ts:447	ShipClient.deviceLogin(...) — RFC 8628 device login, auto-approved via real POST /oauth/de	||     const client = await ShipClient.deviceLogin({
+W6-R49	OK	scripts/drill/ttfe.ts:486	documents.create — the 'create document' step	||       await client.documents.create({ title: `TRO-455 TTFE drill ${runId}` });
+W6-R49	OK	scripts/drill/ttfe.ts:502	verifyWebhook on the captured real delivery — the 'receive verified webhook' step	||       const verified = verifyWebhook(captured.headers, captured.rawBody, subscription.secret);
+W6-R49	OK	.github/workflows/ci.yml:418	drill-ttfe job (GitHub mirror)	||   drill-ttfe:
+W6-R49	OK	.gitlab-ci.yml:244	drill-ttfe job (graded GitLab platform)	|| drill-ttfe:
+W6-R49	OK	CHANGES.md:1445	clean-machine run documented: `pnpm drill ttfe` with DATABASE_URL unset (genuine testconta	|| - `pnpm drill ttfe` with `DATABASE_URL` unset (genuine testcontainers path): same result,
+W6-R49	OK	docs/submission/PLUGFORGE-EPIC-WRITEUPS.md:221	Epic E6 write-up records a local end-to-end run: total 1998ms / 60000ms budget	|| total: 1998ms / 60000ms budget
+W6-R50	OK	scripts/drill/ttfe.config.json:3	"totalBudgetMs": 60000 — the CI <60s target committed as config	||   "totalBudgetMs": 60000,
+W6-R50	OK	scripts/drill/thresholds.ts:70	totalOverBudget = totalMs > config.totalBudgetMs	||   const totalOverBudget = totalMs > config.totalBudgetMs;
+W6-R50	OK	scripts/drill/thresholds.ts:81	pass only if total AND every per-stage ceiling hold	||     pass: !totalOverBudget && overBudgetStages.length === 0,
+W6-R50	OK	scripts/drill/ttfe.ts:541	exitCode = evaluation.pass ? 0 : 1 — over budget fails the process (and so the CI job)	||     exitCode = evaluation.pass ? 0 : 1;
+W6-R50	OK	scripts/drill/ttfe.ts:426	setup (Postgres/migrations/api spawn) logged as 'untimed, not part of totalBudgetMs' — onl	||   console.log(`[setup] api ready at ${baseUrl} (${Date.now() - setupStart}ms — untimed, not part of totalBudgetMs)`);
+W6-R50	OK	CHANGES.md:1445	the <=30 min clean-machine target: testcontainers-path run documented as pass	|| - `pnpm drill ttfe` with `DATABASE_URL` unset (genuine testcontainers path): same result,
+W6-R51	OK	e2e/browser-demo-pkce.spec.ts:66	clock starts at the user's click (roundTripStartMs)	||     const roundTripStartMs = Date.now();
+W6-R51	OK	e2e/browser-demo-pkce.spec.ts:77	logs '[TRO-449] Browser demo PKCE round trip (click -> documents rendered): Nms'	||     console.log(`[TRO-449] Browser demo PKCE round trip (click -> documents rendered): ${roundTripMs}ms`);
+W6-R51	OK	e2e/browser-demo-pkce.spec.ts:78	expect(roundTripMs).toBeLessThan(3000) — full browser round trip	||     expect(roundTripMs, `round trip was ${roundTripMs}ms, target <3000ms (PLUGFORGE.MD §4)`).toBeLessThan(3000);
+W6-R51	OK	e2e/oauth-pkce-chain.spec.ts:210	roundTripMs = Date.now() - authorizeNavStartMs (authorize nav -> token response)	||     const roundTripMs = Date.now() - authorizeNavStartMs;
+W6-R51	OK	e2e/oauth-pkce-chain.spec.ts:236	logs '[TRO-597] PKCE round trip (authorize nav -> token response): Nms'	||     console.log(`[TRO-597] PKCE round trip (authorize nav -> token response): ${roundTripMs}ms`);
+W6-R51	OK	e2e/oauth-pkce-chain.spec.ts:237	expect(roundTripMs).toBeLessThan(3000) — target asserted directly (W6-R51)	||     expect(roundTripMs, `authorize->token round trip was ${roundTripMs}ms, target <3000ms (W6-R51)`).toBeLessThan(
+W6-R51	OK	CHANGES.md:5885	recorded observation from TRO-597's PR: 87ms	|| console output): `[TRO-597] PKCE round trip (authorize nav -> token response): 87ms` — comfortably
+W6-R52	OK	api/src/platform/webhooks/deliverer.ts:694	latencyMs = Math.max(0, this.clock.now() - startedAtMs) — measured per attempt; persisted 	||     const latencyMs = Math.max(0, this.clock.now() - startedAtMs);
+W6-R52	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:770	lists attempts with attempt_number/response_status/latency_ms present	||     it('lists attempts for a subscription with attempt_number/response_status/latency_ms present, newest first', async () => {
+W6-R52	OK	scripts/drill/ttfe.ts:498	stages.push({ name: 'wait_for_delivery', ms: ... }) — the drill times document-create → fi	||       stages.push({ name: 'wait_for_delivery', ms: Date.now() - t0 });
+W6-R52	OK	scripts/drill/ttfe.config.json:9	"wait_for_delivery": 15000 — the only ceiling asserted on that stage is 15 s, NOT 2 s; lin	||     "wait_for_delivery": 15000,
+W6-R52	OK	scripts/drill/thresholds.ts:18	header: only totalBudgetMs (60s) and per-stage ceilings are asserted — no P95 aggregation 	||  *   1. `totalBudgetMs` — the drill's own headline number (TTFE CI P95 < 60s,
+W6-R52	OK	.github/workflows/ci.yml:418	drill-ttfe job — runs the drill on every PR (single run per CI job, no cross-run P95)	||   drill-ttfe:
+W6-R53	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:229	transient 500×3 → 200 on attempt 4, within the 1s/4s/16s schedule; delivery log ends 'succ	||   it('500x3 then 200 succeeds on attempt 4, with waits correctly >= 1s/4s/16s per the injected clock — fast and deterministic', async () => {
+W6-R53	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:353	6 consecutive failures → terminal 'dead' with next_attempt_at NULL and nothing further sch	||   it('6 consecutive failures land in webhook_deliveries with status = dead — fast and deterministic', async () => {
+W6-R53	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:612	rehydrate() restores a pending attempt into a fresh deliverer after a simulated crash — re	||   it('rehydrate() restores a pending attempt into a FRESH deliverer instance after a simulated crash', async () => {
+W6-R53	OK	api/src/platform/api/v1/resources/__tests__/webhooks.test.ts:1317	TRO-603: replay retry siblings drained by the shared deliverer — closes the orphaned-retry	||     it('TRO-603 FIX: when the app is built with its real, shared deliverer injected, a retryable replay\'s retry sibling is queued on THAT instance and gets dra
+W6-R54	OK	api/src/platform/api/v1/__tests__/route-fitness.test.ts:402	check (e): every discovered v1 route carries X-RateLimit-Limit/-Remaining/-Reset on its ge	||     it('(e) carries X-RateLimit-* headers on its generic failure path (PF-500, TRO-427)', async () => {
+W6-R54	OK	api/src/platform/api/v1/router.ts:88	v1Router.use(rateLimitDefaults) — global, before routing, so even pre-auth failures carry 	||   v1Router.use(rateLimitDefaults);
+W6-R54	OK	api/src/platform/ratelimit/__tests__/middleware.test.ts:143	429 path carries headers + Retry-After	||   it('429s with Retry-After once the per-token bucket is exhausted, headers included', async () => {
+W6-R55	OK	package.json:36	`pnpm drill` root script exists	||     "drill": "tsx scripts/drill/run.ts",
+W6-R55	OK	scripts/drill/run.ts:13	'ttfe' argument routes to ttfe.ts — `pnpm drill ttfe` is the literal command	|| if (name === 'ttfe') {
+W6-R55	OK	scripts/drill/ttfe.ts:349	clean working directory: SDK installed from a real npm tarball into a fresh mkdtemp dir	||   const installDir = await mkdtemp(join(tmpdir(), 'ttfe-drill-install-'));
+W6-R55	OK	scripts/drill/ttfe.ts:386	if DATABASE_URL set (CI/factory) reuse it — no Docker touched	||   if (databaseUrl) {
+W6-R55	OK	scripts/drill/ttfe.ts:390	else start @testcontainers/postgresql (local/clean-machine path) — Postgres containerized	||     const { PostgreSqlContainer } = await import('@testcontainers/postgresql');
+W6-R55	OK	scripts/drill/ttfe.ts:186	the Ship API itself is spawned as a child process (`pnpm --filter @ship/api exec tsx src/i	||   return spawn('pnpm', ['--filter', '@ship/api', 'exec', 'tsx', 'src/index.ts'], {
+W6-R55	OK	.github/workflows/ci.yml:440	CI: Postgres via a `services:` (:438) container, image: postgres:15-alpine	||         image: postgres:15-alpine
+W6-R55	OK	.gitlab-ci.yml:244	GitLab: same shape (services: postgres:15-alpine), no testcontainers because the shared ru	|| drill-ttfe:
+W6-R56	OK	scripts/drill/ttfe.ts:435	stages.push({ name: 'install_sdk', ms }) — 'install'	||     stages.push({ name: 'install_sdk', ms: Date.now() - t0 });
+W6-R56	OK	scripts/drill/ttfe.ts:468	'device_login' — 'login'	||     stages.push({ name: 'device_login', ms: Date.now() - t0 });
+W6-R56	OK	scripts/drill/ttfe.ts:482	'webhook_create' — 'register subscription'	||       stages.push({ name: 'webhook_create', ms: Date.now() - t0 });
+W6-R56	OK	scripts/drill/ttfe.ts:487	'document_create' — 'create document'	||       stages.push({ name: 'document_create', ms: Date.now() - t0 });
+W6-R56	OK	scripts/drill/ttfe.ts:498	'wait_for_delivery' — 'receive webhook'	||       stages.push({ name: 'wait_for_delivery', ms: Date.now() - t0 });
+W6-R56	OK	scripts/drill/ttfe.ts:504	'verify_webhook' — 'verify signature'; six stages, 1:1 with the requirement, each Date.now	||       stages.push({ name: 'verify_webhook', ms: verifyElapsed });
+W6-R56	OK	scripts/drill/thresholds.ts:93	formatDrillEvaluation prints one '<stage>: <ms>ms' line per stage plus total/verdict	|| export function formatDrillEvaluation(stages: readonly StageTiming[], evaluation: DrillEvaluation): string {
+W6-R56	OK	scripts/drill/ttfe.config.json:4	per-stage stageBudgetsMs — every stage individually asserted, not just logged	||   "stageBudgetsMs": {
+W6-R57	OK	.github/workflows/ci.yml:9	on: pull_request — every PR	||   pull_request:
+W6-R57	OK	.github/workflows/ci.yml:418	drill-ttfe job (needs: verify, timeout 10m)	||   drill-ttfe:
+W6-R57	OK	.github/workflows/ci.yml:471	run: pnpm drill ttfe	||         run: pnpm drill ttfe
+W6-R57	OK	.github/workflows/ci.yml:139	verify job also runs the threshold-logic unit tests (`vitest run --config scripts/drill/vi	||         run: pnpm exec vitest run --config scripts/drill/vitest.config.ts
+W6-R57	OK	.gitlab-ci.yml:29	workflow rule: pipelines on merge_request_event (every MR) — graded platform	||     - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+W6-R57	OK	.gitlab-ci.yml:244	drill-ttfe job, stage e2e, needs: [verify]	|| drill-ttfe:
+W6-R57	OK	.gitlab-ci.yml:267	script: pnpm drill ttfe	||     - pnpm drill ttfe
+W6-R57	OK	scripts/drill/ttfe.ts:541	exit code 1 when evaluateDrillStages fails -> job fails -> build fails	||     exitCode = evaluation.pass ? 0 : 1;
+W6-R57	OK	scripts/drill/__tests__/thresholds.test.ts:65	unit test: a single stage over its own ceiling fails even if the total is under budget	||   it('fails when a single stage exceeds ITS OWN ceiling, even though the total stays under totalBudgetMs', () => {
+W6-R57	OK	scripts/drill/ttfe.ts:116	DRILL_TTFE_SIMULATE_SLOW_MS test-only override used to demonstrate 'regression past thresh	|| function parseSimulateSlowOverride(): { stage: string; extraMs: number } | null {
+W6-R57	OK	scripts/factory/gate.sh:588	the local factory gate (G12) also runs `pnpm drill ttfe` before a PR opens	|| if pnpm drill ttfe > "$OUT_DIR/drill-ttfe.log" 2>&1; then
+W6-R58	OK	sdk/src/verifyWebhook.test.ts:300	comment: AC < 1ms per call; asserted at a generous 5ms mean to avoid runner-load flake	||   // AC: < 1ms per call (perf test). Target per PLUGFORGE.MD §2.8/§4 is < 1ms; asserted against a
+W6-R58	OK	sdk/src/verifyWebhook.test.ts:307	perf test: 100-iter warmup, 1000 timed iterations via real performance.now()	||   it('verifies in well under a generous CI-safe ceiling (target: < 1ms, asserted at < 5ms mean)', () => {
+W6-R58	OK	sdk/src/verifyWebhook.test.ts:324	expect(meanMs).toBeLessThan(5)	||     expect(meanMs).toBeLessThan(5);
+W6-R58	OK	sdk/src/verifyWebhook.ts:185	the function under measurement	|| export function verifyWebhook(
+W6-R59	OK	.github/workflows/ci.yml:418	drill-ttfe job — the job whose history is counted	||   drill-ttfe:
+W6-R59	OK	.github/workflows/ci.yml:14	concurrency cancel-in-progress: true — explains the one 'cancelled' job (a superseded push	||   cancel-in-progress: true
+W6-R59	OK	.gitlab-ci.yml:244	GitLab drill-ttfe job has no `retry:` key (grep of :244-268 for 'retry' returns nothing) —	|| drill-ttfe:
+W6-R59	OK	CHANGES.md:1453	implementing PR itself said 'Not verified' — 0%-flake-over-20 is an operational follow-up 	|| **Not verified.** The 0%-flake-over-20-CI-runs target (PLUGFORGE.MD §4's own AC) is explicitly an
+W6-R60	OK	.github/workflows/ci.yml:238	step name: SDK size gate (<250 KB min+gz)	||       - name: SDK size gate (<250 KB min+gz)
+W6-R60	OK	.github/workflows/ci.yml:239	run: pnpm --filter @ship/sdk size-check	||         run: pnpm --filter @ship/sdk size-check
+W6-R60	OK	.gitlab-ci.yml:160	same step on the GitLab pipeline	||     - pnpm --filter @ship/sdk size-check
+W6-R60	OK	sdk/package.json:32	"size-check": "node scripts/measure-size.mjs"	||     "size-check": "node scripts/measure-size.mjs"
+W6-R60	OK	sdk/package.json:34	"dependencies": {} — production deps only = the package itself	||   "dependencies": {},
+W6-R60	OK	sdk/scripts/measure-size.mjs:44	DEFAULT_THRESHOLD_KB = 250	|| export const DEFAULT_THRESHOLD_KB = 250;
+W6-R60	OK	sdk/scripts/measure-size.mjs:55	checkSize(gzipBytes, thresholdKb) pure pass/fail	|| export function checkSize(gzipBytes, thresholdKb = DEFAULT_THRESHOLD_KB) {
+W6-R60	OK	sdk/scripts/measure-size.mjs:59	pass: gzipBytes < thresholdBytes (strict)	||     pass: gzipBytes < thresholdBytes,
+W6-R60	OK	sdk/src/__tests__/sizeGate.test.ts:27	describe 'PF-405: size gate decision logic (checkSize)'	|| describe('PF-405: size gate decision logic (checkSize)', () => {
+W6-R60	OK	sdk/src/__tests__/sizeGate.test.ts:45	AC proof: simulated bloat against a lowered threshold FAILS the gate	||   it('AC proof: simulated bloat — a real measured size against an artificially lowered threshold FAILS the gate', () => {
+W6-R61	OK	pnpm-workspace.yaml:7	'integrations/*' — the workspace glob the three integration packages live under	||   - 'integrations/*'
+W6-R61	OK	integrations/cli/package.json:2	1. CLI — @ship/cli (bin 'ship', line 8); TRO-448/450/452	||   "name": "@ship/cli",
+W6-R61	OK	integrations/slack/package.json:2	2. Slack — @ship/slack-integration; TRO-451	||   "name": "@ship/slack-integration",
+W6-R61	OK	integrations/slack/src/server.ts:82	Slack receiver verifies every delivery with verifyWebhook before posting	||       if (!verifyWebhook(req.headers, rawBody, options.webhookSecret)) {
+W6-R61	OK	integrations/slack/src/server.ts:109	posts document.created / issue.assigned via chat.postMessage	||         await options.slackClient.chat.postMessage({ channel: options.channel, ...message });
+W6-R61	OK	integrations/browser-demo/package.json:2	3. Browser SDK demo — @ship/browser-demo; TRO-449	||   "name": "@ship/browser-demo",
+W6-R61	OK	integrations/browser-demo/src/main.ts:41	SPA uses LocalStorageTokenStore + ShipClient.authorizationCodeFlow (PKCE, no secret in bro	|| const tokenStore = new LocalStorageTokenStore();
+W6-R61	OK	e2e/oauth-refresh-rotation-stolen-token.spec.ts:153	4. Refresh-rotation drill (PF-800/TRO-445) — lives as an e2e spec, not under integrations/	||   test('rotate -> replay the old refresh token -> family invalidated, active session killed, distinguishable error', async ({
+W6-R61	OK	e2e/webhook-idempotency-key-drill.spec.ts:197	5. Idempotency-Key drill (PF-801/TRO-447) — e2e spec	||   test('deliver -> replay via API -> reference subscriber dedupes on the key; delivery log distinguishes fresh vs replayed', async ({
+W6-R62	OK	integrations/cli/package.json:8	bin: "ship": "./dist/bin.js"	||     "ship": "./dist/bin.js"
+W6-R62	OK	integrations/cli/src/bin.ts:23	.command('login')	||   .command('login')
+W6-R62	OK	integrations/cli/src/bin.ts:60	docs .command('ls')	||   .command('ls')
+W6-R62	OK	integrations/cli/src/bin.ts:74	docs .command('get')	||   .command('get')
+W6-R62	OK	integrations/cli/src/bin.ts:90	docs .command('create')	||   .command('create')
+W6-R62	OK	integrations/cli/src/bin.ts:113	webhooks .command('tail')	||   .command('tail')
+W6-R62	OK	integrations/cli/src/commands/login.ts:66	runLogin -> ShipClient.deviceLogin({...}) — RFC 8628 device flow via the SDK	||     const client = await ShipClient.deviceLogin({
+W6-R62	OK	integrations/cli/src/commands/docs.ts:125	ship docs ls pages via client.documents.iterate()	||     for await (const doc of client.documents.iterate()) {
+W6-R62	OK	integrations/cli/src/commands/docs.ts:146	runDocsGet	|| export async function runDocsGet(opts: RunDocsGetOptions): Promise<number> {
+W6-R62	OK	integrations/cli/src/commands/docs.ts:175	runDocsCreate	|| export async function runDocsCreate(opts: RunDocsCreateOptions): Promise<number> {
+W6-R62	OK	integrations/cli/src/commands/webhooksTail.ts:322	runWebhooksTail — local listener + subscription + stream	|| export async function runWebhooksTail(opts: RunWebhooksTailOptions): Promise<number> {
+W6-R62	OK	integrations/cli/src/commands/webhooksTail.ts:206	each delivery checked live with verifyWebhook() -> ✓ verified / ✗ rejected	||           verified = verifyWebhook(req.headers, rawBody, secret);
+W6-R62	OK	integrations/cli/src/commands/webhooksTail.test.ts:79	prints ✓ verified line + 200 for a valid signature	||   it('prints a ✓ verified line (with the event type) and responds 200 for a delivery with a valid signature', async () => {
+W6-R62	OK	integrations/cli/src/commands/webhooksTail.test.ts:99	prints ✗ rejected + 401 under the wrong secret	||   it('prints a ✗ rejected line and responds 401 for a delivery with a signature under the WRONG secret', async () => {
+W6-R62	OK	integrations/cli/src/__tests__/login.liveServer.test.ts:196	ship login end-to-end against a real spawned Ship API	|| describe('PF-600: ship login / ship whoami end-to-end against a real running Ship API', () => {
+W6-R62	OK	integrations/cli/src/__tests__/docs.liveServer.test.ts:156	ship docs ls|get|create end-to-end against a real spawned Ship API	|| describe('PF-601: ship docs ls|get|create end-to-end against a real running Ship API', () => {
+W6-R62	OK	scripts/drill/ttfe.ts:19	TTFE drill stages: install SDK -> device_login -> webhook_create -> document_create -> fir	||  *   2. device_login      — RFC 8628 device grant via `ShipClient.deviceLogin`,
+W6-R62	OK	.github/workflows/ci.yml:228	CI step 'CLI unit tests': pnpm --filter @ship/cli test	||         run: pnpm --filter @ship/cli test
+W6-R62	OK	.github/workflows/ci.yml:418	drill-ttfe CI job	||   drill-ttfe:
+W6-R63	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:17	§1 'Platform is LLM-free — corrected': states the premise and traces the actual LLM call p	|| ## 1. Platform is LLM-free — corrected
+W6-R63	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:34	§1b discloses a SECOND, pre-existing (Feb 2026) LLM path in api/ — plan/retro quality scor	|| ### 1b. Weekly plan/retro AI quality scoring — NOT user-initiated in the agent sense, and NOT part of Epic 7
+W6-R63	OK	api/src/services/ai-analysis.ts:13	the only LLM client in api/: BedrockRuntimeClient — under api/src/services (base Ship, com	|| import { BedrockRuntimeClient, InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+W6-R63	OK	docs/submission/PF-704-COST-LEDGER-DELTA.md:69	cost-ledger before/after: same number (6 invocations on 2026-08-05); no Epic 7 work append	|| **"Before" and "after" are the same number** — no new rows have been appended to the ledger by any
+W6-R63	OK	agent/cost-ledger-snapshot.jsonl:1	line 1 = first ledger row; whole-file artifact (7 rows, committed, TRO-373) — the ledger t	|| {"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":435,"outputTokens":211,"documentsPulled":12,"timestamp":"2026-08
+W6-R63	OK	api/src/__tests__/pf905CostAnalysisDocSections.test.ts:63	structural test: doc states the LLM-free premise and corrects it with real file:line citat	||   it('states the platform-is-LLM-free premise and corrects it with real file:line citations', () => {
+W6-R64	OK	docs/submission/PF-704-COST-LEDGER-DELTA.md:38	ledger = agent/cost-ledger-snapshot.jsonl, 7 invocations 2026-08-05..07 — all BEFORE Epic 	|| `agent/cost-ledger-snapshot.jsonl` (committed, TRO-373) — 7 real recorded invocations,
+W6-R64	OK	docs/submission/PF-704-COST-LEDGER-DELTA.md:69	before == after (6) — but the doc says this does NOT establish sdk-mode == internal-mode t	|| **"Before" and "after" are the same number** — no new rows have been appended to the ledger by any
+W6-R64	OK	docs/submission/PF-704-COST-LEDGER-DELTA.md:88	'Not yet measured: a live, matched-workload run of both modes' — the token-volume confirma	||    which would give a real number instead of a structural argument either way.
+W6-R64	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:67	§2.1 'LLM spend during Epic 7' is still the TODO(TRO-434) placeholder — never backfilled a	|| > TODO(TRO-434): pull real numbers from docs/submission/PF-704-COST-LEDGER-DELTA.md once PR #263 (TRO-440/PF-704) merges — do not fill this in from estimates.
+W6-R64	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:338	summary table row: E7 LLM spend before/after = TODO	|| | E7 LLM spend before/after | **TODO** — blocked on PR #263 (PF-704/TRO-440), left as placeholder per this ticket's scope constraint |
+W6-R64	OK	api/src/__tests__/pf905CostAnalysisDocSections.test.ts:71	structural test PINS the §2.1 TODO placeholder in place ('leaves the Epic-7 cost-ledger se	||   it('leaves the Epic-7 cost-ledger section as the exact mandated TODO placeholder, not an estimate', () => {
+W6-R64	OK	agent/src/shipClient.ts:554	the traced structural cause of possible token-volume difference (sdk-mode getDocument retu	||       content: null,
+W6-R64	OK	agent/cost-ledger-snapshot.jsonl:1	line 1 = first row; whole-file artifact — the committed per-invocation ledger (tokens per 	|| {"node":"composeAnswer","trigger":"on_demand","model":"claude-haiku-4-5-20251001","inputTokens":435,"outputTokens":211,"documentsPulled":12,"timestamp":"2026-08
+W6-R65	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:235	§3 'Production projections at 100 / 1,000 / 10,000 / 100,000 users'	|| ## 3. Production projections at 100 / 1,000 / 10,000 / 100,000 users
+W6-R65	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:239	assumption: webhook fanout ratio (ASSUMED, schema-grounded)	|| **Webhook fanout ratio — ASSUMED, with schema grounding:**
+W6-R65	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:252	assumption: agent active rate (ASSUMED, explicitly not from usage data)	|| **Agent active rate — ASSUMED, explicitly NOT derived from usage data:** Ship has no production
+W6-R65	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:264	assumption: retention windows with in-codebase rationale (Aurora 30-day log retention prec	|| **Retention windows — ASSUMED policy recommendation, with real in-codebase rationale:**
+W6-R65	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:288	tier table rows 100 / 1,000 / 10,000 / 100,000 (:288-291) in traceable units — apps, subs,	|| | 100 | 5 | 15 | 1,200 | 360 | ~0.3 MB | 60 | 660 | ~0.5 MB |
+W6-R65	OK	docs/submission/PF-905-AI-COST-ANALYSIS.md:17	cost driver framing: platform paths are API-traffic/webhook-driven; LLM only in agent turn	|| ## 1. Platform is LLM-free — corrected
+W6-R65	OK	api/src/__tests__/pf905CostAnalysisDocSections.test.ts:95	structural test asserts the four mandated tiers are present; :104 asserts OBSERVED/DERIVED	||   it('has the mandated production-projection tiers: 100 / 1,000 / 10,000 / 100,000 users', () => {
+W6-R66	OK	tsconfig.json:13	root compilerOptions: "strict": true	||     "strict": true,
+W6-R66	OK	sdk/tsconfig.json:2	extends ../tsconfig.json; overrides only rootDir/outDir/composite — no strict weakening	||   "extends": "../tsconfig.json",
+W6-R66	OK	api/tsconfig.json:2	extends ../tsconfig.json; no strict weakening (platform/** is under src/ and type-checked)	||   "extends": "../tsconfig.json",
+W6-R66	OK	integrations/cli/tsconfig.json:2	extends ../../tsconfig.json (browser-demo and slack tsconfigs identical at line 2)	||   "extends": "../../tsconfig.json",
+W6-R66	OK	api/src/platform/openapi/registry.ts:30	OpenApiGeneratorV31 from @asteasolutions/zod-to-openapi — Zod schemas drive request/respon	||   OpenApiGeneratorV31,
+W6-R67	OK	agent/src/config.ts:347	parsePlatformMode: only the literal 'sdk' activates sdk mode; anything else -> 'internal' 	|| function parsePlatformMode(value: string | undefined): 'internal' | 'sdk' {
+W6-R67	OK	agent/src/index.ts:208	boot: in sdk mode, refuse to start without FLEETGRAPH_OAUTH_CLIENT_SECRET (:209-214), then	||   if (config.agentPlatformMode === 'sdk') {
+W6-R67	OK	agent/src/index.ts:291	sdkClientFactory set only in sdk mode — gated writes get a fresh @ship/sdk client bound to	||     sdkClientFactory:
+W6-R67	OK	agent/src/shipClient.ts:40	PF-702: in sdk mode each of the 10 read methods delegates to @ship/sdk's /api/v1/* resourc	||  * PF-702 (TRO-428) — `AGENT_PLATFORM_MODE=sdk` mode. When `ShipClientOptions
+W6-R67	OK	agent/src/shipClient.ts:1083	GateShipClientOptions.sdkClientFactory — per-call human-token SDK client for writes	||   sdkClientFactory?: (token: string) => GateSdkClientLike;
+W6-R67	OK	agent/src/gate.ts:49	GateDeps.shipClient is typed GateShipClientLike — the write path goes through the gate cli	||   shipClient: GateShipClientLike;
+W6-R67	OK	api/src/platform/oauth/seedFirstPartyApp.ts:84	FLEETGRAPH_CLIENT_ID = 'ship_app_fleetgraph' (first-party app seed, PF-701); scopes at :93	|| export const FLEETGRAPH_CLIENT_ID = 'ship_app_fleetgraph';
+W6-R67	OK	api/src/index.ts:102	API boot calls seedFirstPartyApp (idempotent) so the app exists in every environment; also	||         const result = await seedFirstPartyApp(pool, workspaceRow.id);
+W6-R67	OK	.github/workflows/ci.yml:195	'Agent tests (AGENT_PLATFORM_MODE=sdk)' step — flag matrix, both modes (flag-off step at :	||       - name: Agent tests (AGENT_PLATFORM_MODE=sdk)
+W6-R67	OK	.gitlab-ci.yml:140	AGENT_PLATFORM_MODE=sdk pnpm --filter @ship/agent test — GitLab mirror of the flag matrix	||     - AGENT_PLATFORM_MODE=sdk pnpm --filter @ship/agent test
+W6-R67	OK	agent/src/__tests__/auditTrailProof.liveServer.test.ts:284	real sdk-mode turn: 3 app-identity reads each land a public_api_audit row with app_client_	||     it(
+W6-R67	OK	agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts:430	sdk-mode write-boundary proof routed through /api/v1/* with human attribution in public_ap	||   describe('sdk mode — the same write-boundary proof, routed through /api/v1/*, plus human-attribution evidence in public_api_audit', () => {
+W6-R67	OK	agent/src/__tests__/shipClientParity.liveServer.test.ts:92	per-method read parity internal vs sdk mode against a real server + DB	|| describe('PF-702: ShipClient parity — internal mode vs sdk mode, same fixtures, real server + real DB', () => {
+W6-R67	OK	agent/src/__tests__/config.test.ts:92	AGENT_PLATFORM_MODE parsing: only exact 'sdk' activates	||   it('AGENT_PLATFORM_MODE falls back to "internal" for anything other than the literal "sdk" (unset, empty, a typo)', () => {
+W6-R67	OK	agent/src/shipClient.ts:554	LIVE GAP (not a blocker for this row): getDocumentViaSdk still hard-codes content: null / 	||       content: null,
+W6-R68	OK	api/src/platform/webhooks/clock.ts:44	export class ManualClock implements Clock — advance(ms) at 59, now() at 51; never auto-tic	|| export class ManualClock implements Clock {
+W6-R68	OK	api/src/platform/webhooks/deliverer.ts:54	deliverer reads the injected Clock (clock.ts), never Date.now(), for latency and schedulin	||  * (`latency_ms`) — reads the injected `Clock` (`clock.ts`), never `Date.now()`
+W6-R68	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:11	header '── Zero real-time waits (this ticket's hard AC) ──': every test drives an injected	||  * ── Zero real-time waits (this ticket's hard AC) ──
+W6-R68	OK	api/src/platform/webhooks/__tests__/deliverer.test.ts:242	const clock = new ManualClock(0) injected into InMemoryWebhookDeliverer (representative; a	||     const clock = new ManualClock(0);
+W6-R69	OK	pnpm-workspace.yaml:7	'integrations/*' — integrations live under integrations/ as workspace packages	||   - 'integrations/*'
+W6-R69	OK	scripts/check-integration-deps.mjs:44	ALLOWED_RUNTIME_DEP = '@ship/sdk'	|| export const ALLOWED_RUNTIME_DEP = '@ship/sdk'
+W6-R69	OK	scripts/check-integration-deps.mjs:52	checkPackageDeps(pkgJson): flags any integrations/* runtime dependency other than @ship/sd	|| export function checkPackageDeps(pkgJson) {
+W6-R69	OK	scripts/__tests__/check-integration-deps.test.mjs:47	node:test — @ship/sdk PLUS express reports a violation naming express	|| test('checkPackageDeps: a package with @ship/sdk PLUS express reports a violation naming express', () => {
+W6-R69	OK	scripts/__tests__/check-integration-deps.test.mjs:128	node:test — a violating package on disk is caught by name	|| test('scanIntegrations: a violating package (this ticket AC top-line evidence, local form) is caught by name', () => {
+W6-R69	OK	.github/workflows/ci.yml:118	CI step: node scripts/check-integration-deps.mjs	||         run: node scripts/check-integration-deps.mjs
+W6-R69	OK	.github/workflows/ci.yml:124	CI step: node --test scripts/__tests__/check-integration-deps.test.mjs	||         run: node --test scripts/__tests__/check-integration-deps.test.mjs
+W6-R69	OK	.gitlab-ci.yml:97	same check on the GitLab (graded) pipeline (test at line 103)	||     - node scripts/check-integration-deps.mjs
+W6-R69	OK	scripts/factory/gate.sh:285	same check wired into the local factory gate	|| if node scripts/check-integration-deps.mjs > "$OUT_DIR/integration-deps.log" 2>&1; then
+W6-R69	OK	integrations/cli/package.json:23	cli: dependencies = { "@ship/sdk": "workspace:*" } only	||     "@ship/sdk": "workspace:*"
+W6-R69	OK	integrations/slack/package.json:16	slack: dependencies = @ship/sdk only (express/@slack/web-api are devDeps, bundled by scrip	||   "dependencies": {
+W6-R69	OK	integrations/browser-demo/package.json:15	browser-demo: dependencies = @ship/sdk only	||   "dependencies": {
+W6-R69	OK	integrations/slack/scripts/build.mjs:4	documents why express/@slack/web-api/zod are build-time (bundled) not runtime deps	|| // what keeps this package's package.json `dependencies` down to just
+W6-R69	OK	CHANGES.md:2707	TRO-448 record: commander/pg are devDependencies only, per PF-600's own instruction	|| one runtime dependency (`"dependencies": {"@ship/sdk": "workspace:*"}`); `commander`/`pg`/etc. are
+W6-R69	OK	PLUGFORGE.MD:220	PF-003 as specified: 'workspace rule + lint: integrations/* depend only on @ship/sdk; CI f	|| - **PF-003 — Boundary lint rules.** ESLint `no-restricted-imports`: `platform/api/v1/**` cannot import `api/src/routes/**`; workspace rule + lint: `integrations
+W6-R70	OK	docs/architecture.md:23	## Module Layout	|| ## Module Layout
+W6-R70	OK	docs/architecture.md:46	## SOLID Rationale	|| ## SOLID Rationale
+W6-R70	OK	docs/architecture.md:56	## Composition Root	|| ## Composition Root
+W6-R70	OK	docs/architecture.md:91	## Public/Internal Boundary — Sequence Diagram	|| ## Public/Internal Boundary — Sequence Diagram
+W6-R70	OK	docs/architecture.md:118	## OAuth Flow Diagrams (PKCE :129, Device grant :153)	|| ## OAuth Flow Diagrams
+W6-R70	OK	docs/architecture.md:167	## Webhook Pipeline	|| ## Webhook Pipeline
+W6-R70	OK	docs/architecture.md:240	## SDK Surface	|| ## SDK Surface
+W6-R70	OK	docs/architecture.md:270	## Agent as Platform Citizen — Before / After	|| ## Agent as Platform Citizen — Before / After
+W6-R70	OK	docs/architecture.md:297	## Failure Modes	|| ## Failure Modes
+W6-R70	OK	api/src/__tests__/architectureDocSections.test.ts:78	describe('docs/architecture.md — mandated sections present (PF-903 / TRO-424)') — one it()	|| describe('docs/architecture.md — mandated sections present (PF-903 / TRO-424)', () => {
+W6-R70	OK	CHANGES.md:8595	TRO-424 / PF-903 entry: skeleton with all nine mandated sections, gated by a section-prese	|| ## TRO-424 / PF-903 — `docs/architecture.md`: Day-1 skeleton with all nine mandated defense sections, gated by a new section-presence test
+W6-R71	OK	README.md:24	README states this is the public GauntletAI-audited fork of Treasury's Ship (context only 	|| > This is a fork of [US-Department-of-the-Treasury/ship](https://github.com/US-Department-of-the-Treasury/ship), audited for the GauntletAI **ShipShape** sprint
+W6-R72	OK	docs/submission/PLUGFORGE-DEMO-SCRIPT.md:1	title: 'PlugForge Demo Script — DRAFT (rehearsal, not the final PF-904/PF-908 recording)'	|| # PlugForge Demo Script — DRAFT (rehearsal, not the final PF-904/PF-908 recording)
+W6-R72	OK	docs/submission/PLUGFORGE-DEMO-SCRIPT.md:8	'This is not the PF-908 final video script.' — self-declared rehearsal draft	|| **This is not the PF-908 final video script.** PF-904 is a 🔔 HUMAN CHECKPOINT — the real recording
+W6-R72	OK	docs/submission/PLUGFORGE-DEMO-SCRIPT.md:16	5-minute core demo is curl-based ('No CLI (PF-600 is failing CI)') — does not follow the p	|| **webhooks are signed and verifiable**. That's the actual platform story ("Ship becomes a
+W6-R72	OK	docs/submission/PLUGFORGE-DEMO-SCRIPT.md:389	'What's NOT ready yet' table is stale (dated 2026-08-14: lists PF-600 failing, PF-603 not 	|| ## What's NOT ready yet
+W6-R73	OK	PRESEARCH.MD:1	'# PRESEARCH — FleetGraph' — the only pre-search doc in the repo is Week 5's (agent trigge	|| # PRESEARCH — FleetGraph
+W6-R73	OK	PLUGFORGE.MD:300	PF-904 AC: 'pre-search complete with Troy's real answers attached; the saved AI conversati	|| - **PF-904 — 🔔 HUMAN CHECKPOINT: pre-search + demo.** Draft the three-phase Pre-Search document with everything derivable from this PRD pre-filled; **notify Tr
+W6-R74	OK	docs/openapi.json:1	line 1 = '{' (whole-file artifact): committed static spec, openapi 3.1.0, 21 paths; last r	|| {
+W6-R74	OK	api/src/scripts/generate-v1-openapi.ts:81	diffAgainstCommitted() — regenerate in memory and diff; --check mode (l.98) exits 1 on dri	|| export function diffAgainstCommitted(committedPath: string): DriftResult {
+W6-R74	OK	.github/workflows/ci.yml:98	run: pnpm openapi:check — 'OpenAPI v1 spec drift check (docs/openapi.json)' step	||         run: pnpm openapi:check
+W6-R74	OK	.gitlab-ci.yml:83	- pnpm openapi:check — mirrored GitLab step	||     - pnpm openapi:check
+W6-R74	OK	api/src/platform/api/v1/router.ts:103	live route GET /api/v1/openapi.json	||   v1Routes.get('/openapi.json', (_req, res) => {
+W6-R75	OK	docs/submission/PLUGFORGE-EPIC-WRITEUPS.md:1	title: per-epic write-ups, before→fix→after→proof (TRO-437/PF-906)	|| # PlugForge — Per-Epic Write-Ups
+W6-R75	OK	docs/submission/PLUGFORGE-EPIC-WRITEUPS.md:14	'E7 (Agent as platform citizen)' listed as deliberately absent — waiting on PF-704 (which 	|| - **E7 (Agent as platform citizen)** — PF-704 (the flag-matrix + audit-trail proof — literally
+W6-R75	OK	docs/submission/PLUGFORGE-EPIC-WRITEUPS.md:195	## Epic E6 — CLI + TTFE drill — section present	|| ## Epic E6 — CLI + TTFE drill (PF-600–603)
+W6-R75	OK	docs/submission/PLUGFORGE-EPIC-WRITEUPS.md:212	E6 proof is a local `pnpm drill ttfe` run ('verdict: pass', 1998 ms) — not a link to the T	|| a simulation): `pnpm drill ttfe` —
+W6-R75	OK	.github/workflows/ci.yml:418	drill-ttfe job 'drill · TTFE (PF-603)' exists (runs `pnpm drill ttfe` at :471) — the CI pr	||   drill-ttfe:
+W6-R75	OK	docs/submission/PF-704-COST-LEDGER-DELTA.md:1	TRO-440/PF-704 artifact — the E7 proof material now exists as a separate doc, not folded i	|| # TRO-440 / PF-704 — Cost-ledger before/after: the Epic 7 rewire vs. LLM token volume
+W6-R75	OK	agent/src/__tests__/auditTrailProof.liveServer.test.ts:1	line 1 = file header; whole-file artifact: the audit-log-rows proof for E7 (TRO-440) — exi	|| /**
+W6-R76	OK	docs/submission/PLUGFORGE-DISCOVERIES.md:3	'Three technical write-ups drafted from the PRD's four candidate topics' (TRO-437/PF-906)	|| PF-906 (TRO-437). Three technical write-ups drafted from the PRD's four candidate topics
+W6-R76	OK	docs/submission/PLUGFORGE-DISCOVERIES.md:16	## Discovery: OAuth Device Authorization Grant in TypeScript	|| ## Discovery: OAuth Device Authorization Grant in TypeScript
+W6-R76	OK	docs/submission/PLUGFORGE-DISCOVERIES.md:57	## Discovery: Zod-Driven OpenAPI with Bidirectional Fitness-Test Parity	|| ## Discovery: Zod-Driven OpenAPI with Bidirectional Fitness-Test Parity
+W6-R76	OK	docs/submission/PLUGFORGE-DISCOVERIES.md:97	## Discovery: Stripe-Style HMAC Signing and the Encrypt-Not-Hash Trade-off	|| ## Discovery: Stripe-Style HMAC Signing and the Encrypt-Not-Hash Trade-off
+W6-R77	OK	README.md:311	'### Grader Access — Public API (OAuth)' section	|| ### Grader Access — Public API (OAuth)
+W6-R77	OK	README.md:320	'One-command setup' — GRADER_OAUTH_CLIENT_SECRET=... ./start.sh seeds the read-only grader	|| **One-command setup**, from a clean checkout, alongside the normal `./start.sh` / `pnpm dev` flow:
+W6-R77	OK	README.md:392	'Working credentials for the deployed site' — client_id/secret table for https://ship-rr6m	|| **Working credentials for the deployed site**, same disclosure basis as `alice.chen`'s web-login
+W6-R77	OK	README.md:387	STALE: 'Portal reachability ... depends on E5 (developer portal), which doesn't exist on t	|| - **Portal reachability** is a DoD item for a deployed instance and depends on E5 (developer
+W6-R77	OK	api/src/platform/oauth/seedGraderApp.ts:56	grader scopes documents:read/issues:read/sprints:read — read-only	|| export const GRADER_APP_SCOPES = ['documents:read', 'issues:read', 'sprints:read'] as const;
+W6-R77	OK	web/src/pages/App.tsx:269	'developer' mode navigates to /developer/apps — the portal route a grader reaches after lo	||       case 'developer': void navigate('/developer/apps'); break;
+W6-R78	OK	docs/submission/SOCIAL-POST.md:1	'DRAFT — for Troy to personalize' — sourced from audit/AUDIT_REPORT.md: this is the Week-4	|| > **DRAFT** — for Troy to personalize before posting. Numbers cited are sourced from
+W6-R78	OK	docs/submission/SOCIAL-POST.md:14	@GauntletAI tag present but the copy is '68 findings / 700+ untyped DB queries' — no webho	|| > silent editor data-loss bug, 700+ untyped DB queries now type-checked. @GauntletAI
+W6-R78	OK	docs/submission/SOCIAL-THREAD-W4-W5.md:1	'# X thread — FleetGraph (Week 5)' — the other social draft is W5's	|| # X thread — FleetGraph (Week 5)
+W6-R79	OK	docs/submission/PF-100-OAUTH-STUDY-BRIEF.md:1	PF-100 OAuth study brief (TRO-403, HUMAN CHECKPOINT, Done) — interview prep for the OAuth-	|| # PF-100 — OAuth Study Brief (🔔 HUMAN CHECKPOINT)
+W6-R79	OK	docs/submission/PLUGFORGE-DEFENSE-DECK.html:430	defense deck — slide 05 infra/blast radius (other slides cover boundary, OAuth, agent-as-c	||     <div class="eyebrow reveal" style="--i:0"><span class="dot"></span> 05 · Infrastructure & blast radius</div>
+W6-R79	OK	docs/architecture.md:91	Public/Internal Boundary section — the boundary the interview asks Troy to defend	|| ## Public/Internal Boundary — Sequence Diagram
+W6-R79	OK	docs/architecture.md:270	Agent as Platform Citizen — Before / After — the third named defense topic	|| ## Agent as Platform Citizen — Before / After

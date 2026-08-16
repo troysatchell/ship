@@ -59,6 +59,1118 @@ application code touched.
 
 ---
 
+## TRO-490 — jsonToYaml emitted unparseable/mis-indented openapi.yaml; converter fixed and proven by round-trip
+
+**Observed, on `main`, by reading the tracked artifact directly.** `api/src/swagger.ts`'s hand-rolled
+`jsonToYaml` (the only code that produces `api/openapi.yaml`; `api/openapi.json` is generated
+separately via `JSON.stringify` and was never affected) emits YAML that a real parser rejects or
+silently mangles:
+- `api/openapi.yaml:4873-4874` on main: an empty-object value (`parameters: {}`) came out as
+  `  parameters:` on one line and `{}` alone at column 0 on the next — invalid/ambiguous YAML.
+  Cause: the object branch always emitted `key:\n` followed by a recursive call, and
+  `jsonToYaml({})` returned the bare string `{}` with no indentation of its own.
+- `api/openapi.yaml:4884-4886` on main: array items that are objects came out over-indented — a
+  `- schema:` list marker at 8 spaces followed by its `type`/`enum` children at 22 spaces instead
+  of 12. Cause: the array branch called `jsonToYaml(item, indent + 1)` (already indented relative
+  to the array) and then *also* prefixed every continuation line with an extra `${spaces}  ` —
+  double indentation.
+- Not visible in a spot-check but the same root cause: strings that look like other YAML scalar
+  types (`'true'`, `'123'`, `''`, leading/trailing spaces, strings starting with `*`, `&`, `!`,
+  `[`, `{`, `-`, `?`, `%`, `@`, backtick, or quotes) were emitted bare, so a parser would hand back
+  a boolean/number/null instead of the original string; and object keys containing YAML-special
+  characters (e.g. `/api/issues/{id}`) were emitted unquoted.
+
+**Red before green.** Added a `TRO-490` describe block to `api/src/swagger.test.ts` — full-spec
+round-trip (`parse(jsonToYaml(swaggerSpec))` must equal the spec), the exact empty-object/array-item
+indentation fixture above (asserting the literal output string, not just that it parses), and a
+type-ambiguous-scalar fixture. Run against the pre-fix converter, all three failed with
+`YAMLParseError` (`Missing closing "quote`, `Implicit map keys need to be followed by map values`).
+The four existing TRO-309 tests (backslash-escaping regression coverage) were left untouched and
+stayed green throughout.
+
+**What changed, in `jsonToYaml` only.**
+- Added `needsQuoting(s)`: a string is safe to emit bare only if it matches a narrow "looks like a
+  plain YAML word" shape (starts with a letter/underscore, no leading/trailing space, only
+  `[A-Za-z0-9_ .\/()-]`) *and* isn't one of YAML's reserved boolean/null spellings
+  (`true/false/null/yes/no/on/off/y/n/~`, case-insensitive). Everything else gets quoted.
+- String branch now reuses `JSON.stringify` for quoting (a JSON string literal is a valid YAML
+  double-quoted scalar) instead of a hand-rolled escape — same backslash-then-quote escaping order
+  TRO-309 already required, verified by rerunning its four tests unchanged.
+- Object branch: empty nested object/array values are now emitted inline (`key: {}` / `key: []`)
+  instead of `key:` + a bare `{}`/`[]` on the next line; keys are quoted via the same
+  `needsQuoting` check; entries whose value is `undefined` are skipped (matching
+  `JSON.stringify`'s behavior for object properties).
+- Array branch: object/array items are rendered unindented first (`jsonToYaml(item, 0)`), then
+  every line gets exactly one extra level of indentation added (`${spaces}` on the first line via
+  the `- ` marker, `${spaces}  ` on continuation lines) — removing the double-indentation bug.
+  Empty object/array items render inline (`- {}` / `- []`); `undefined` items render as `- null`.
+
+**Also changed:** `yaml@2.9.0` added as an `api`-only devDependency (`api/package.json`,
+`pnpm-lock.yaml`) — used exclusively by the new test to parse the converter's output with a real
+YAML parser; not a runtime dependency of `swagger.ts` itself, which stays dependency-free by design.
+
+**How to verify.** `pnpm --filter @ship/api vitest run src/swagger.test.ts` — 7 tests (4 TRO-309 +
+3 TRO-490) pass. `pnpm --filter @ship/api openapi:generate` is now idempotent and produces YAML
+that a parser round-trips to the same structure as `api/openapi.json`; observed directly by parsing
+the regenerated `api/openapi.yaml` with the `yaml` package and comparing to `api/openapi.json` —
+both serialized to identical JSON. `api/openapi.json` was not touched by this change (it comes from
+`JSON.stringify`, not `jsonToYaml`).
+
+**Rollback.** `git revert <this-commit-sha>` (single commit: `api/src/swagger.ts`,
+`api/src/swagger.test.ts`, `api/package.json`, `pnpm-lock.yaml`, `api/openapi.yaml`, this entry).
+`api/openapi.json` is unaffected either way — reverting does not reintroduce any JSON regression
+because there wasn't one.
+
+---
+
+## TRO-491 — OpenAPI scopes enum derived from ScopeRegistry; APIToken.scopes required-nullable
+
+**Observed, not inferred.** `api/openapi.json` (before this change, lines ~3679-3690 and
+~3716-3725) typed `CreateAPIToken.scopes` and `APIToken.scopes` items as `{"type": "string"}` with
+no `enum` — free-form strings — even though the runtime accepts only names registered in
+`ScopeRegistry` (`api/src/platform/scopes/registry.ts`), enforced by `api/src/routes/api-tokens.ts`'s
+`scopeSchema` zod refine. Separately, `APIToken.required` did not list `"scopes"`, even though both
+response sites that build an `APIToken` (`api/src/routes/api-tokens.ts:112` and `:150`) always emit
+the `scopes` key (array or `null`) — never omit it.
+
+**Decision (made by the orchestrator, not re-litigated here): derive, don't copy.**
+`api/src/openapi/schemas/auth.ts` now imports `ScopeRegistry` and builds a shared `ScopeNameSchema
+= z.enum(ScopeRegistry.names())` at module load, used by both `APITokenScopesSchema` (nullable
+array) and `CreateAPITokenSchema.scopes`. `registry.ts` has zero imports and registers all 8 scopes
+at the bottom of the file at load time, so importing it guarantees `names()` is complete by the time
+`auth.ts` evaluates — a hand-copied enum list was rejected because it would be a second source of
+truth free to drift from the registry (the exact failure mode TRO-430's registry work was built to
+prevent). A defensive `if (scopeNames.length === 0) throw` guards against a silent empty enum if
+import order ever regresses. Runtime enforcement is untouched — `api/src/routes/api-tokens.ts`'s
+`scopeSchema` refine still does the actual rejection; this change only makes the *documented* shape
+match what the route already enforced.
+`APITokenSchema.scopes` changed from `APITokenScopesSchema.optional()` to `APITokenScopesSchema`
+(required-nullable), matching the two response sites confirmed above by reading the route file.
+
+**Regression test, red before green (observed).** New file
+`api/src/openapi/schemas/__tests__/auth-scopes.test.ts`, 3 cases: `CreateAPIToken.scopes`
+items-enum equals `ScopeRegistry.names()` (plus a `length >= 7` guard against a vacuous empty-enum
+pass), `APIToken.scopes` items-enum equals `ScopeRegistry.names()` and `scopes` is both `nullable`
+and in `required`, and the enum is a genuine derivation (`Set` equality against
+`ScopeRegistry.list().map(s => s.name)`), not a second literal copy. Ran before the fix: all 3
+failed with `expected undefined to deeply equal [...]` (`items.enum` didn't exist yet). Ran after:
+all 3 pass.
+
+**How to verify.**
+```bash
+source .factory-env
+pnpm --filter @ship/api vitest run src/openapi/schemas/__tests__/auth-scopes.test.ts
+pnpm --filter @ship/api vitest run src/openapi src/routes/api-tokens.test.ts src/swagger.test.ts
+pnpm --filter @ship/api openapi:generate   # observed idempotent: ran twice, second run produced no further diff
+```
+`pnpm type-check` was run from repo root: the `api` package (and `shared`, `sdk`, `agent`) type-check
+clean. `integrations/browser-demo` fails with `Cannot find module '@ship/sdk'` — observed pre-existing
+and unrelated: `sdk/dist` does not exist in this worktree (the `sdk` package hasn't been built), and
+this change touches nothing under `sdk/` or `integrations/`. Confirmed by also running
+`pnpm --filter @ship/api type-check` alone, which is clean.
+
+**Rollback.** `git revert <this-commit-sha>` (single commit touching `api/src/openapi/schemas/auth.ts`,
+the new test file, and the regenerated `api/openapi.json`/`api/openapi.yaml`).
+
+---
+
+## TRO-590 — CodeQL `js/missing-rate-limiting` blind spot: test-only Express apps flagged as production routes
+
+**Non-code / CI-config ticket — `terraform validate`-style proof, not vitest** (same disclosed-exception
+class as TRO-488/TF-1..TF-10: no unit test can exercise a GitHub Actions CodeQL config, so the proof is
+static verification of the config plus confirmation against the *live* alerts it addresses).
+
+**What was flagged.** `api/src/platform/oauth/__tests__/device.test.ts:51` defines `introspectionApp`, a
+scratch `express()` instance created purely to mount the real `bearerAuth` middleware and prove it works
+(`GET /scratch-protected`) — never imported by `api/src/app.ts`, never reachable in production. CodeQL's
+`js/missing-rate-limiting` query has no way to distinguish a test fixture from a real route and flagged it
+as an unprotected production endpoint. Same blind-spot class TRO-307 already documented for this query.
+
+**Verified beyond the ticket's own claim, not just trusted.** Pulled the live open alerts via
+`gh api code-scanning/alerts` rather than assuming the ticket's one cited instance was the only one:
+found **5** open alerts rooted in the same "CodeQL treats test helper code as production" pattern, not 1:
+- `#371` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/device.test.ts:51` (the ticket's
+  own citation).
+- `#369` `js/missing-rate-limiting` — `api/src/platform/oauth/__tests__/token.test.ts:61`, an identical
+  scratch-app pattern the ticket didn't mention.
+- `#4`/`#5` `js/incomplete-multi-character-sanitization` — `web/src/components/editor/lowlight.test.ts:176,191`,
+  a naive `html.replace(/<[^>]*>/g, '')` used only to strip markup for a test assertion, not shipped
+  sanitization logic. Read in full before including in scope.
+- `#6` `js/incomplete-sanitization` — `web/src/lib/radixVersionDedupe.test.ts:47`, a regex parsing
+  `pnpm-lock.yaml` inside a test helper, not user input handling. Also read in full before including.
+
+All five are the same root cause (test/fixture code scanned as if it were production surface), so the fix
+is scoped to test-file paths generally — as the ticket's own suggested fix asked for — rather than only
+the one file it cited, since a file-by-file allowlist would leave every *future* scratch test app hitting
+this again.
+
+**Fix.** New `.github/codeql/codeql-config.yml` (didn't exist before — repo had no CodeQL config file,
+only workflow-inline `init`/`analyze` steps) with `paths-ignore: ['**/__tests__/**', '**/*.test.ts',
+'**/*.test.tsx']`. Wired in via `config-file:` on the existing `Initialize CodeQL` step in
+`.github/workflows/ci.yml` (`codeql` job) — one line added, nothing else in that job changed.
+
+**Verification.**
+- `python3 -c "import yaml; yaml.safe_load(...)"` — both the new config file and the edited
+  `ci.yml` parse as valid YAML.
+- Confirmed the three glob patterns actually match all 5 flagged files (`__tests__/` directory segment
+  or a `.test.ts`/`.test.tsx` suffix) and do not match any production entry point — `api/src/app.ts`
+  mounts none of `bearerAuth`'s test-only callers, confirmed via `grep` for `scratch-protected`/
+  `introspectionApp` returning zero hits outside the test file.
+- Cannot run CodeQL's actual analysis locally (GitHub-hosted action, no local CLI in this repo's
+  toolchain) — the real green/red proof is the next `security scan (CodeQL)` run on this PR's own CI,
+  which analyzes this exact config. Flagging this limitation rather than asserting local verification
+  that didn't happen.
+
+**Scope note.** Did not dismiss alerts `#371`/`#369`/`#4`/`#5`/`#6` via the API (the TRO-587/TRO-492
+precedent for confirmed false positives) — excluding the paths going forward is the ticket's actual ask;
+whether GitHub auto-resolves the existing alert records once the paths stop being analyzed, or whether
+they need a manual dismissal pass, is not yet observed and is worth a fast follow-up if they don't
+clear on their own after this merges.
+
+**Rollback.** Revert this commit — deletes `.github/codeql/codeql-config.yml` and the `config-file:`
+line in `ci.yml`; CodeQL returns to scanning every path, including test fixtures.
+
+---
+
+## TRO-614 — `OrgChartPage.test.tsx`'s "renders each person..." race, confirmed on 2 unrelated CI runs
+
+**What was broken.** `web/src/pages/OrgChartPage.tsx:229-230` sets its default-expanded tree state
+in a *second*, separate `useEffect` that only fires after the fetch-driven first effect has already
+rendered the tree with `expandedIds` empty. `OrgChartPage.test.tsx`'s `"renders each person..."`
+test (line 125) did `const tree = await screen.findByRole('tree', ...)` — correctly async, waits
+for the tree container — then immediately did a **synchronous** `within(tree).getByRole('treeitem',
+{ name: /Grace Hopper/ })`. Grace is a level-2 (nested) child, only present in the flattened rows
+after the second effect auto-expands the tree. `findByRole('tree', ...)` can resolve on the very
+first, collapsed render — before React flushes the second effect — so the synchronous query for
+Grace's row raced it. Confirmed as a real, pre-existing, CI-timing-sensitive defect (not local
+machine contention): two completely unrelated PRs tonight (TRO-589, oauth-only; TRO-488,
+terraform-only — neither touches `web/`) both hit this exact failure on isolated GitHub Actions
+runners, while passing 100% of the time locally. Root-caused via the failing CI run's own
+downloaded `web-tests.json` artifact and captured DOM snapshot (only Ada/Bob rendered, both
+level-1; Grace's `<li>` entirely absent) — not guessed.
+
+**What changed.** `web/src/pages/OrgChartPage.test.tsx` — replaced the synchronous `getByRole` for
+Grace with `await within(tree).findByRole('treeitem', { name: /Grace Hopper/ })`, moved before the
+`ada`/`bob` lookups. Grace is the deepest node under test, so awaiting her presence proves the
+auto-expand effect has already flushed before the rest of the test's synchronous assertions run.
+No product code changed — `OrgChartPage.tsx` itself is untouched; the two-effect split may still be
+worth simplifying later, but the test fix alone resolves the flake.
+
+**Proof.** Can't reproduce GitHub Actions' exact timing locally, so repetition is the best local
+proxy: `cd web && npx vitest run src/pages/OrgChartPage.test.tsx` run **5 times consecutively**,
+5/5 clean (all 5 tests in the file, including the previously-racing one). Full `pnpm --filter
+@ship/web test` also green. **Gate exception, disclosed:** the `regression-test` check looks for a
+newly-added test case; this ticket hardens an *existing* test's timing rather than adding coverage,
+so no new `it(...)` block was added — same class of accepted exception as this project's
+terraform-only tickets (proof is repetition-based, not a new assertion count).
+
+**How to run it.**
+```bash
+cd web && npx vitest run src/pages/OrgChartPage.test.tsx
+```
+
+**Roll back.** Revert this commit — reverts the test to its prior synchronous-query form, which is
+correct but timing-fragile under GitHub Actions specifically (not observed to fail locally).
+
+---
+
+## TRO-618 — `@ship/sdk`'s `IssuePriority` lacked `'none'` — added it, plus runtime enum arrays and an enum-member parity test
+
+**What was broken.** PR #276 (TRO-501) widened `shared/src/types/document.ts`'s `IssuePriority`
+and `api/src/platform/openapi/schemas/issues.ts`'s `IssuePrioritySchema` to include `'none'`, but
+`sdk/src/types.ts`'s hand-duplicated copy (duplicated on purpose — zero-dependency SDK, see that
+file's own comment) stayed at `'low' | 'medium' | 'high' | 'urgent'`. Observed, not derived: the
+committed `docs/openapi.json` `#/components/schemas/Issue/properties/priority/enum` lists five
+members; `sdk/src/types.ts:170` listed four. Consequence (derived): every SDK consumer's type said
+`priority: 'none'` cannot arrive on the wire while the server serializes it — an exhaustive
+`switch` on `Issue['priority']` in a consumer would compile clean and hit an unreachable branch at
+runtime. Nothing caught it because `sdk/src/__tests__/parity.test.ts` (PF-405) proves
+operation-level parity only — it never looks inside a schema's enum members.
+
+**What changed.**
+- `sdk/src/types.ts` — `IssuePriority` gains `'none'`; new exported runtime mirrors
+  `ISSUE_STATES` / `ISSUE_PRIORITIES` (`as const satisfies readonly IssueState[]` /
+  `readonly IssuePriority[]`) so callers can iterate/validate the members without re-typing them.
+- `sdk/src/index.ts` — exports the two arrays from the browser-safe barrel (plain string arrays,
+  no Node built-ins).
+- `sdk/src/__tests__/enumParity.test.ts` (new) — imports `v1OpenApiDocument` exactly the way
+  `parity.test.ts` does (the ticket text said "load `docs/openapi.json` the same way
+  `parity.test.ts` does"; `parity.test.ts` actually imports the live generated document, not the
+  file — adapted, and the committed `docs/openapi.json` is checked as a second source since CI's
+  `pnpm openapi:check:v1` keeps the two identical). Walks the whole document, collects every
+  string `enum`, tags any containing `'urgent'` as a priority enum and any containing
+  `'in_progress'` as a state enum, and asserts each occurrence (components AND inline schemas)
+  is set-equal to the SDK array. Zero occurrences fails (no vacuous pass).
+- `sdk/src/types.ts` also carries compile-time `Equal<>` guards that
+  `(typeof ISSUE_PRIORITIES)[number]` is exactly `IssuePriority` (and likewise for states) — in
+  `types.ts` rather than the test file because `sdk/tsconfig.json` excludes `src/__tests__/**`
+  from `tsc`, so `pnpm type-check` is what enforces them (a CodeRabbit finding on the first gate
+  run, applied). `satisfies` alone only proves the array is a subset of the union.
+- Ticket step 3 (grep `sdk/` and `integrations/cli/` for `switch`/maps over priority): grepped
+  `urgent` and `priority` across both — the only occurrence outside tests is the union itself.
+  No exhaustive switch or map exists in either package, so no `'none'` case to add. Stated so
+  the absence is on record, not assumed.
+
+**Red-before-green.** With the arrays added but still mirroring the old four-member union, the
+new suite failed 2/5: `DRIFT: OpenAPI issue priority enum at
+#/components/schemas/Issue/properties/priority/enum is [low, medium, high, urgent, none] but
+@ship/sdk's runtime array is [low, medium, high, urgent]` (once against the live document, once
+against `docs/openapi.json`). After adding `'none'`: 5/5 pass.
+
+**How to verify.**
+```bash
+set -a; . ./.factory-env; set +a          # worktree DATABASE_URL — never run tests without it
+pnpm --filter @ship/sdk build
+pnpm test:sdk                              # 26 files / 234 tests passed
+pnpm test:cli                              # 9 files / 58 tests passed
+pnpm type-check
+```
+To watch the new test bite: delete `'none'` from `ISSUE_PRIORITIES` in `sdk/src/types.ts` and
+re-run `pnpm --filter @ship/sdk exec vitest run src/__tests__/enumParity.test.ts`.
+
+**Rollback.** Revert the PR. Consumers that started importing `ISSUE_STATES`/`ISSUE_PRIORITIES`
+would need to stop.
+
+---
+
+## TRO-617 — `@ship/sdk` now ships `LocalStorageTokenStore` (third built-in `ITokenStore`)
+
+**What was wrong.** The brief (p.4) promises a "Pluggable ITokenStore (in-memory, file, browser
+localStorage)", and ruling I-06 says the SDK must ship all three. Observed by reading the files:
+`sdk/src/index.ts` exported only `MemoryTokenStore`, `sdk/src/node.ts` only `FileTokenStore`, and
+the localStorage implementation lived solely in `integrations/browser-demo/src/localStorageTokenStore.ts`
+— demo-private code, invisible to any other browser consumer. `sdk/src/tokenStore.ts`'s header and
+the demo README both stated the SDK "deliberately ships no browser `ITokenStore`", which was
+accurate at the time but is the exact gap I-06 closes.
+
+**What changed.**
+- `sdk/src/localStorageTokenStore.ts` (new) — the demo's implementation moved into the SDK, with a
+  `{ storageKey?: string }` constructor option (default `'ship_sdk_tokens'`, exported as
+  `DEFAULT_LOCAL_STORAGE_KEY`). Zero deps, no `dom` lib needed (a local `StorageLike` interface),
+  and no top-level `localStorage` access: the module and constructor are Node-safe (the main
+  barrel is imported by Node tests), only `get`/`set`/`clear` require the global and each rejects
+  with an Error naming `localStorage` and pointing at `MemoryTokenStore`/`FileTokenStore`. Methods
+  are `async` so that Error is a rejected promise, not a synchronous throw from a
+  Promise-returning method (the first test run caught exactly that — see below).
+- `sdk/src/index.ts` — exports `LocalStorageTokenStore` + `LocalStorageTokenStoreOptions` (browser
+  barrel; `node:` imports still confined to `sdk/src/node.ts`).
+- `sdk/src/tokenStore.ts`, `sdk/src/fileTokenStore.ts` — header comments updated (no longer claim
+  the SDK ships no third store).
+- `integrations/browser-demo/src/localStorageTokenStore.ts` — deleted. `src/main.ts` imports
+  `LocalStorageTokenStore` from `@ship/sdk` with `{ storageKey: 'ship_browser_demo_tokens' }`, so
+  existing demo logins under the old key survive. `README.md` updated to match.
+- `sdk/src/localStorageTokenStore.test.ts` (new, 6 tests; Map-backed `globalThis.localStorage`
+  stub under vitest's `node` env) — default-key round trip, corrupt JSON → `null` + key removed,
+  non-TokenSet JSON → `null`, custom `storageKey` honoured, and missing `localStorage` → ctor OK
+  but `get`/`set`/`clear` reject with a clear message.
+- `docs/architecture.md` SDK Surface table — names the three stores and where each is exported.
+
+**Evidence.** Red-before-green: with `sdk/src/localStorageTokenStore.ts` absent the new test file
+failed at import (`Test Files 1 failed | Tests no tests`); with the first implementation (sync
+`Promise.resolve` style) the missing-`localStorage` case failed because the Error was thrown
+synchronously instead of rejecting (`1 failed | 5 passed`); after making the methods `async`:
+`Tests 6 passed (6)`. Full suite `pnpm test:sdk` (worktree DB): `Test Files 26 passed (26)`,
+`Tests 235 passed (235)`. `pnpm --filter @ship/browser-demo type-check` clean after
+`pnpm --filter @ship/sdk build`. `node sdk/scripts/measure-size.mjs`:
+`PASS — 4.87 kB < 250 kB` (`gzipBytes: 4866`, `minifiedBytes: 16885`).
+
+**How to verify.**
+```bash
+pnpm --filter @ship/sdk build
+pnpm test:sdk                                          # incl. sdk/src/localStorageTokenStore.test.ts
+pnpm --filter @ship/browser-demo type-check
+node sdk/scripts/measure-size.mjs
+```
+
+**Rollback.** Revert the PR (restores the demo-private store; no data migration — the demo keeps
+using the same `ship_browser_demo_tokens` key either way).
+
+---
+
+## TRO-615 — TTFE drill now asserts tamper-rejection and first-attempt delivery latency P95 < 2 s
+
+**What was broken.** PLUGFORGE.MD §5's graded row is "Subscription via SDK → doc create → signed
+POST < 2 s → tamper rejected", and its perf table says "first-attempt webhook latency P95 < 2 s".
+Observed (read, not inferred): `scripts/drill/ttfe.ts` had no tamper step at all
+(`grep -i tamper scripts/drill/ttfe.ts` → nothing) and its only latency bound was the 15 000 ms
+`wait_for_delivery` per-stage *timeout* in `scripts/drill/ttfe.config.json` (the `2000` there is
+`verify_webhook`'s ceiling, not a delivery bound). So the drill was green while proving neither
+graded claim — a first delivery at 10 s would have passed, and a `verifyWebhook` that returned
+`true` for everything would have passed too. CI observes ~600–690 ms for the first delivery, so
+this is a missing assertion, not a known regression.
+
+**What changed.**
+- `scripts/drill/ttfe.ts` — stage 7 `tamper_reject`: flips the last byte of the captured
+  `rawBody` and asserts `verifyWebhook(headers, tampered, secret) === false` under the same
+  headers/secret that just verified `true`; throws if it returns `true`. Stage 8 `delivery_p95`:
+  the capture listener now records every request (`requests[]` with `receivedAt`, plus
+  `waitForCount(n, timeoutMs)`; the original first-request `captured` promise is unchanged),
+  the drill burst-creates `deliveryLatencySampleSize` (20) documents, waits for all 20 signed
+  deliveries, correlates each by the payload's `data.id` (`events.ts` `documentCreatedData.id`,
+  arrival order only as fallback — the real run logs `20 correlated by payload data.id`), computes
+  per-delivery latency = `receivedAt − documents.create() resolved`, and passes the sample to the
+  evaluator. Burst rather than one-at-a-time because the deliverer polls every 1 s
+  (`deliverer.ts:123`); 20 sequential cycles would burn ~20 s on poll latency for no extra proof.
+  The single first delivery's `wait_for_delivery` ms is additionally held to the same 2000 ms
+  bound (`first_delivery_bound:` line). New test-only `DRILL_TTFE_SIMULATE_P95_MS=<n>` replaces
+  the measured sample after the real work so the gate can be shown to fail;
+  `DRILL_TTFE_SIMULATE_SLOW_MS` still works (re-run: `verify_webhook: 65000ms OVER BUDGET`, exit 1).
+- `scripts/drill/thresholds.ts` — `DrillThresholdConfig.deliveryLatencyP95Ms` /
+  `deliveryLatencySampleSize` (optional; absent → gate not evaluated), `percentile95()`
+  (nearest-rank, `ceil(0.95n)−1`, `null` on empty — never NaN), `evaluateDeliveryLatency()`
+  (strict `< budget`, fails on too-small or empty sample), `evaluateDrillStages(stages, config,
+  latencies)` folds it into `pass`, `formatDrillEvaluation` prints a `delivery_p95_ms: … over N
+  deliveries (target < 2000ms)` row with `OVER BUDGET` / `SAMPLE TOO SMALL` markers.
+- `scripts/drill/ttfe.config.json` — `"deliveryLatencyP95Ms": 2000`, `"deliveryLatencySampleSize": 20`
+  (`$comment` updated). `wait_for_delivery`'s 15 000 stays as the wait's timeout ceiling.
+- `scripts/drill/__tests__/thresholds.test.ts` — 13 new cases (P95 rank, strict `<`, sample size,
+  empty sample, fold-into-verdict, format row, unconfigured-config passthrough). Executed by
+  `gate.sh` G11 (`vitest run --config scripts/drill/vitest.config.ts`) — no separate api/sdk test
+  file needed. Red before the change: 13 failed (`percentile95 is not a function`); green after:
+  `Tests 20 passed (20)`.
+
+**How to verify.**
+```bash
+pnpm exec vitest run --config scripts/drill/vitest.config.ts   # 20 passed
+pnpm exec tsc --noEmit -p scripts/drill
+set -a; . ./.factory-env; set +a
+pnpm drill ttfe                                                # tamper_reject + delivery_p95 rows, verdict: pass
+DRILL_TTFE_SIMULATE_P95_MS=2500 pnpm drill ttfe                # delivery_p95_ms: 2500ms ... OVER BUDGET, verdict: fail, exit 1
+```
+Real run in the factory worktree: `wait_for_delivery: 194ms`, `tamper_reject: 0ms`,
+`delivery_p95: 1050ms`, `delivery_p95_ms: 989ms over 20 deliveries (target < 2000ms)`,
+`total: 3043ms / 60000ms budget`, `verdict: pass`.
+
+**Rollback.** Revert the PR — no schema or env change; the two new config keys are optional in
+`DrillThresholdConfig`, so an older config still evaluates.
+
+---
+
+## TRO-620 — sdk-mode `getDocument` passes content/visibility/created_by/completed_at through; token volume measured
+
+**What was broken.** OBSERVED by reading `agent/src/shipClient.ts` `getDocumentViaSdk` against
+`sdk/src/types.ts` `Document` and `api/src/platform/api/v1/resources/documents.ts`
+`serializeDocument()`: since TRO-605 the v1 route and the SDK type both carry `content`,
+`visibility`, `created_by` and `completed_at` (all four non-optional on the SDK type), but the
+agent's sdk-mode read still returned `content: null`, `visibility: 'sdk_mode_unknown'`,
+`created_by: null`, `completed_at: undefined` — the pre-TRO-605 "fail closed" synthesis. Downstream,
+`expansion.ts`'s `passesAskerVisibility` therefore rejected every fetched candidate in sdk mode
+(OBSERVED in the measurement below: `documentsPulled: 0` on every pre-fix sdk turn), so
+`AGENT_PLATFORM_MODE=sdk` chat turns reached the model with no Ship context at all — and
+`docs/submission/PF-905-AI-COST-ANALYSIS.md` §2.1 / `PF-704-COST-LEDGER-DELTA.md` still carried
+"not yet measured" / a `TODO(TRO-434)` placeholder for exactly this question.
+
+**What changed.**
+- `agent/src/shipClient.ts` — `getDocumentViaSdk` is a straight passthrough of all `ShipDocument`
+  fields from the SDK `Document`; the `SDK_MODE_DOCUMENT_VISIBILITY_UNKNOWN` sentinel is gone; the
+  module docstring's "Fields that CANNOT carry over" section now says there are none for
+  `getDocument()` as of TRO-605 (the one server-side nuance — `content` masked to `null` for a
+  private doc the caller did not create — is passed through as-is, never re-synthesized).
+- `agent/src/__tests__/shipClientParity.liveServer.test.ts` — the `getDocument` case asserts full
+  field equality between modes (red before the fix: `expected null to deeply equal { type: 'doc',
+  …}`; green after), with fixture sanity checks so the equalities cannot pass on null === null.
+- `agent/src/__tests__/shipClient.test.ts` — new unit test: sdk-mode `getDocument` passes the four
+  fields through and never touches the internal HTTP client.
+- `agent/src/scripts/measure-token-volume.ts` — new one-off utility (same posture as the
+  `trace-invoke-*.ts` siblings; not a test, spends real money): runs 3 fixed on-demand questions
+  against one seed document in whichever `AGENT_PLATFORM_MODE` is set, mirroring `index.ts`'s
+  on-demand `shipClientFactory`, and records each model call to `AGENT_COST_LEDGER_PATH`.
+- `docs/submission/cost-ledger/tro-620-{internal,sdk,sdk-before-fix}.jsonl` — the three raw
+  ledgers (9 real `claude-haiku-4-5-20251001` calls, ≈ $0.0074). Result: input tokens per turn
+  identical `internal` vs post-fix `sdk` (424/425/425 both); pre-fix `sdk` 65/66/66 (−84.5%,
+  0 docs in context). One output-token difference (Q2: 279 vs 261) on an identically-sized prompt
+  is model non-determinism, not a mode effect.
+- `docs/submission/PF-704-COST-LEDGER-DELTA.md` — new "Measured: matched workload, both modes"
+  section with the per-turn table, setup, and the two disclosed boundaries: only the `on_demand`
+  trigger was run, and the first sdk attempt hit `/api/v1`'s default `RATE_LIMIT_TOKEN_RPM=60`
+  bucket (HTTP 429 mid-walk — sdk-mode association reads page per document); the run used
+  `RATE_LIMIT_TOKEN_RPM=10000` locally. That rate-limit interaction is a real, separate sdk-mode
+  operability finding, out of this ticket's scope.
+- `docs/submission/PF-905-AI-COST-ANALYSIS.md` §2.1 — TODO placeholder replaced with the measured
+  summary table (provenance note about PR #263 kept); method note and §4 summary row updated.
+- `api/src/__tests__/pf905CostAnalysisDocSections.test.ts` — asserts the measured content is
+  present and the placeholder is gone, instead of asserting the placeholder.
+
+**How to verify.**
+```bash
+set -a; . ./.factory-env; set +a          # exclusive worktree DATABASE_URL
+pnpm --filter @ship/sdk build
+pnpm --filter @ship/agent exec vitest run src/__tests__/shipClientParity.liveServer.test.ts src/__tests__/shipClient.test.ts
+AGENT_PLATFORM_MODE=sdk pnpm test:agent && AGENT_PLATFORM_MODE=internal pnpm test:agent
+pnpm --filter @ship/api exec vitest run src/__tests__/pf905CostAnalysisDocSections.test.ts
+# Re-measure (spends ~$0.003/mode; needs agent/.env ANTHROPIC_API_KEY, a running local API with
+# RATE_LIMIT_TOKEN_RPM raised, a personal api_tokens row and its user id):
+AGENT_PLATFORM_MODE=sdk SHIP_API_BASE_URL=http://localhost:$API_PORT SHIP_API_TOKEN=<tok> \
+  ASKING_USER_ID=<uid> AGENT_COST_LEDGER_PATH=/tmp/sdk.jsonl \
+  pnpm --filter @ship/agent exec tsx src/scripts/measure-token-volume.ts <seedDocId>
+```
+
+**Rollback.** Revert the PR. Sdk mode goes back to fail-closed synthesized fields (0 documents in
+on-demand context) and the docs go back to "not measured".
+
+---
+
+## TRO-619 — Epic write-ups E5 + E7 added, E6 proof moved to CI run IDs, README portal path, PR template
+
+**What was wrong.** Docs/process only — no `api/`, `web/`, or `shared/` runtime code changed.
+- **Observed:** `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` had H2s for E0/E1/E2/E3/E4/E6/E8 only,
+  with an intro paragraph explicitly deferring E5 and E7 (correct when written — PF-503 and PF-704
+  had not landed). Both have since merged (PF-503 via TRO-439 / PR #260, PF-704 via TRO-440), so
+  the deferral was stale. E6's proof cited a *local* `pnpm drill ttfe` run (1998ms); PLUGFORGE.MD
+  §4 (PF-906) says E6's proof is "TTFE green **in CI**".
+- **Observed:** `README.md`'s "Portal reachability" bullet said the developer portal "doesn't exist
+  on this branch yet" — false since TRO-436 (`/developer/apps`) and TRO-439 (`/developer/webhooks`)
+  merged; the routes are mounted at `web/src/main.tsx:305-323`.
+- **Observed:** no `.github/PULL_REQUEST_TEMPLATE.md` existed (`.github/` held only `workflows/`),
+  so nothing prompted a PR author for the AC advanced / fitness test / evidence / rollback that
+  PLUGFORGE.MD p.12 asks every PR to state.
+
+**What changed.**
+- `docs/submission/PLUGFORGE-EPIC-WRITEUPS.md` — intro rewritten (no longer "two epics absent");
+  new `## Epic E5 — Rate limiting, audit, portal (PF-500–504)` and
+  `## Epic E7 — Agent as platform citizen (PF-700–704)` in the same Before/Fix/After/Proof shape.
+  E7's proof quotes what `agent/src/__tests__/auditTrailProof.liveServer.test.ts` actually asserts,
+  with line numbers (reads under `ship_app_fleetgraph` with `user_id` null `:302-305`; the write
+  under the human `user_id` with `app_client_id` null `:330-332`; `x-ratelimit-*` present
+  `:346-348`; no row attributed to both `:381-383`), links `PF-704-COST-LEDGER-DELTA.md`, and states
+  plainly that token-volume equality between modes is **not yet measured** (TRO-620 owns it).
+  E5's proof cites the ratelimit/audit vitest suites and the two portal e2e specs, records the
+  PF-504 go decision as **derived** (both route trees on `main`; no separate memo exists), and
+  says the portal Audit page is TRO-616, in flight. E6's proof now cites GitHub Actions runs
+  `31949732432` (main @ `9d744017`, drill job completed 2026-08-16T13:37:33Z) and `31935025680`
+  (main @ `8592393f`, 2026-08-16T08:06:16Z), both `success` — **observed** via
+  `GH_REPO=troysatchell/ship gh run view <id> --json conclusion,headSha,createdAt` and the job
+  log (`total: 3988ms / 60000ms budget`, `verdict: pass`).
+- `api/src/__tests__/epicWriteupsAndDiscoveries.test.ts` — the structural lint that (by its own
+  comment) had to flip when E5/E7 landed: E5/E7 added to the required-heading list; the "must NOT
+  have `## Epic E5/E7`" guard replaced by a presence check; two new `it()`s pin the E7 proof
+  citations (`auditTrailProof.liveServer.test.ts`, `PF-704-COST-LEDGER-DELTA.md`, `TRO-620`, "not yet
+  measured") and the E6 CI run IDs. Red-before-green: with the test updated and the doc untouched,
+  6 of 25 failed (`has a heading for Epic E5`, `Epic E5/E7 has the mandated ... shape`, and the
+  three new `it()`s); after the doc edit, `Tests  25 passed (25)`.
+- `README.md` — the stale bullet replaced with the grader path: log in → **Developer** in the icon
+  rail → `/developer/apps` (register, shown-once secret, rotate) → `/developer/webhooks`
+  (subscriptions, delivery log, DLQ, Replay). `/developer/audit` deliberately not mentioned
+  (TRO-616 not merged).
+- `.github/PULL_REQUEST_TEMPLATE.md` — new, 26 lines: Ticket(s) / Acceptance criterion this slice
+  advances / Fitness test / Evidence / Rollback.
+
+**How to verify.**
+```bash
+pnpm --filter @ship/api exec vitest run src/__tests__/epicWriteupsAndDiscoveries.test.ts
+grep -n '^## Epic' docs/submission/PLUGFORGE-EPIC-WRITEUPS.md        # E0..E8, nine H2s
+GH_REPO=troysatchell/ship gh run view 31949732432 --json conclusion,headSha,createdAt
+GH_REPO=troysatchell/ship gh run view 31935025680 --json conclusion,headSha,createdAt
+test -f .github/PULL_REQUEST_TEMPLATE.md && wc -l .github/PULL_REQUEST_TEMPLATE.md
+```
+
+**Rollback.** Revert the PR. Docs, one structural test, and a PR template only — no schema, no
+migration, no runtime code.
+
+---
+
+## TRO-616 — Developer portal Audit page: `public_api_audit` queryable in the portal
+
+**What was missing.** Brief p.4: "Every public API call recorded ... Queryable in the developer
+portal." The recording half existed and was tested — `GET /api/v1/audit`
+(`api/src/platform/api/v1/resources/audit.ts`, PF-501/TRO-432: `limit`/`cursor`/`app_client_id`
+query, `{ data, next_cursor }` envelope) and `@ship/sdk`'s `AuditClient.list()` — but nothing in
+`web/src` called it (**observed**: `grep -rn "v1/audit\|/audit" web/src` → zero hits before this
+ticket), and `DeveloperSidebar.tsx`'s `DEVELOPER_NAV` listed only Apps + Webhooks. The portal token
+already carried `audit:read` (`DeveloperPortalContext.tsx`'s `PORTAL_TOKEN_SCOPES`) with nothing
+spending it.
+
+**What changed.**
+- `web/src/pages/DeveloperAudit.tsx` (new) — `DeveloperAuditPage`: table of audit rows
+  (created_at, method, route, status, latency_ms, app_client_id, user_id, scope_used, request_id)
+  loaded via `usePortalToken().callV1('/audit?limit=50…')`. Server-side cursor pagination ("Load
+  more" re-requests with `cursor=<next_cursor>` and appends); an app filter (`<select>` populated
+  from the internal `/api/oauth-apps` route via `api.oauthApps.list()`, session-authed — the same
+  source `DeveloperApps.tsx` and the Subscriptions tab use) that forwards the chosen app's
+  `client_id` as `?app_client_id=` from page one; loading/empty/error states in the same visual
+  language as `DeveloperPortal.tsx`'s delivery log (same Tailwind classes, same `role="status"` /
+  `role="alert"` blocks, same "Load more" button). Accessible table: `<caption>` (sr-only) and
+  `<th scope="col">` on every header. A `forbidden` from the server (the route is admin/owner-scoped;
+  `audit:read` alone is not enough — see `audit.ts`'s header) renders verbatim in the alert rather
+  than hiding the nav entry.
+- `web/src/main.tsx` — lazy `DeveloperAuditPage` + `<Route path="audit">` inside the existing
+  `/developer` `<DeveloperPortalProvider><Outlet/>` block (sibling of `apps`, `apps/:id`,
+  `webhooks`) — 4-panel layout untouched, the page renders in the main content column.
+- `web/src/components/sidebars/DeveloperSidebar.tsx` — `{ to: '/developer/audit', label: 'Audit' }`.
+- `web/src/pages/DeveloperAudit.test.tsx` (new, vitest/RTL, gate-executed) — 6 tests: rows render
+  from a mocked page + accessible table (caption name, 9 `columnheader`s each `scope="col"`, first
+  request is exactly `/audit?limit=50`); empty state; "Load more" requests `cursor=<next_cursor>`
+  and appends in order, button disappears on the last page; filter change requests
+  `app_client_id=<client_id>` without a cursor; error state renders the v1 error `message`;
+  portal-session error short-circuits (no `callV1` call). No axe check — neither sibling
+  (`DeveloperPortal.test.tsx`, `DeveloperApps.test.tsx`) has one and `jest-axe` is not a `web`
+  dependency; the e2e spec below is where axe lives for this portal.
+- `e2e/developer-portal-apps.spec.ts` — added a `/developer/audit` visit that syncs on
+  `page.waitForResponse(/\/api\/v1\/audit/)` (not `networkidle`) and asserts a row + the named
+  table appear (one reload allowed, since the `/api/v1/me` audit INSERT is fire-and-forget and can
+  land after the page's first query). Additive: `e2e/*.spec.ts` is never executed by the gate.
+- No `DeveloperSidebar` unit test exists to update (**observed**: `ls web/src/components/sidebars/*.test.tsx`
+  has no DeveloperSidebar entry).
+
+**Red-before-green.** With `DeveloperAudit.tsx` moved aside, `npx vitest run src/pages/DeveloperAudit.test.tsx`
+→ `Error: Failed to resolve import "@/pages/DeveloperAudit" from "src/pages/DeveloperAudit.test.tsx".
+Does the file exist?` / `Test Files 1 failed (1)`. Restored → `Test Files 1 passed (1)`, `Tests 6 passed (6)`.
+
+**How to verify.**
+```bash
+cd web && npx vitest run src/pages/DeveloperAudit.test.tsx    # 6 passed
+pnpm --filter @ship/web type-check
+# Manual: pnpm dev → sign in as a workspace admin → Developer (icon rail) → Audit;
+# network tab shows GET /api/v1/audit?limit=50 with the portal bearer token; pick an app in the
+# filter → GET /api/v1/audit?limit=50&app_client_id=<client_id>; "Load more" → &cursor=….
+```
+
+**Rollback.** Revert the PR — additive UI only (one new page, one route, one nav entry, tests); no
+API, schema, or SDK changes.
+
+---
+
+## TRO-444 — PlugForge final demo script + social post drafts, with a real captured `✓ verified` frame (PF-908)
+
+**What.** Docs-only. `docs/submission/PLUGFORGE-DEMO-SCRIPT.md` is rewritten from the stale W5
+curl rehearsal (it still said PF-600 was failing CI and PF-602 was not started — both are merged)
+into the FINAL 3–5 min script: Act 1 the literal five-line CLI story (`ship login` → `ship
+webhooks tail` → `ship docs create` → `✓ verified … document.created`) with the real strings from
+`integrations/cli/src/commands/*.ts`, Act 2 the developer portal (`/developer/webhooks`: Delivery
+log → **Dead (DLQ)** filter → **Replay**, labels from `web/src/pages/DeveloperPortal.tsx`), Act 3
+the CI job **`drill · TTFE (PF-603)`** and its per-stage table (`scripts/drill/thresholds.ts`);
+plus a pre-stage checklist (ports/env, `SECRET_ENCRYPTION_KEY`, tarball SDK install, `client_id`
+recipe, a `generate_series` SQL recipe to force one dead-lettered delivery for the replay shot),
+a fallback per act, a shot list, and a provenance section separating observed from derived. New
+`docs/submission/PLUGFORGE-SOCIAL-POST.md`: a ≤280-char X variant and a longer LinkedIn variant
+tagging @GauntletAI, plus the 3-line "what Troy does" checklist. New
+`docs/submission/social-assets/w6/`: `five-line-story-transcript.txt` and
+`webhooks-tail-verified.txt` (verbatim stdout of the real CLI against a real API in this worktree,
+commit b68da413) and `webhooks-tail-verified.png` (a Playwright render of that text — a drawn
+terminal window, not a photo; stated as such in the docs and in the image footer).
+
+Also `integrations/cli/src/__tests__/demoScript.drift.test.ts`: a filesystem-only drift guard
+that pins every CLI output line the script quotes to the command source that prints it, checks
+the captured frame matches `formatDeliveryLine()`'s exact shape, and asserts the stale W5 claims
+are gone (red against the pre-rewrite script — it contained "PF-600 is failing CI"; green now).
+
+**Why.** PF-908 is a human checkpoint (Troy records and posts); the agent-side halves — accurate
+script, real screenshot, post text — were stale or missing.
+
+**How to verify.** `cat docs/submission/social-assets/w6/webhooks-tail-verified.txt` shows the
+`✓ verified` line; open the PNG. To reproduce the capture: build shared/sdk/cli, start the API
+with `SECRET_ENCRYPTION_KEY`, follow the script's P2 for a `client_id`, then run `ship login`,
+`ship webhooks tail`, `ship docs create --title "PlugForge demo"` per Act 1. Not run here: the
+portal clicks and the CI job (both derived from source and labeled so in the script).
+
+**Rollback.** `git revert` the commit — docs and static assets only; no code, schema, or config
+touched.
+
+---
+
+## TRO-429 — PF-904 pre-search document pre-filled from the PRD and repo (🔔 human checkpoint, Troy's answers still owed)
+
+**What was missing.** The Week 6 brief's Appendix ("Pre-Search Checklist", three phases) had no
+answer document — only Week 5's `PRESEARCH.MD` existed at repo root, and PF-904's AC
+(`PLUGFORGE.MD:300`) requires the pre-search complete with Troy's real answers plus the saved AI
+conversation attached as a reference artifact.
+
+**What changed.**
+- `docs/submission/PLUGFORGE-PRESEARCH.md` — new. Every one of the Appendix's questions, in order,
+  with the answer that is derivable from `PLUGFORGE.MD` (§1.4 decisions, §2 architecture, §7 risks,
+  §8 out-of-scope), `docs/architecture.md`, `docs/IAM-ADAPTATION-RENDER.md`,
+  `docs/submission/PF-905-AI-COST-ANALYSIS.md`, and the code (`api/src/platform/**`, `sdk/`,
+  `integrations/`, CI files, README) — each answer tagged **observed** / **derived** / **not-run** per
+  `.claude/CLAUDE.md`'s provenance rule and cited `file:line`. The nine questions only Troy can
+  answer (hours/day, honest skill inventory, budget ceilings, personal preferences, the conversation
+  export) are left as visible `> **[TROY — needs your answer]**` blocks with a one-line prompt each.
+  Structure and voice follow Week 5's `PRESEARCH.MD`; no W5 answers are reused. A final "Reference
+  artifact — saved AI conversation" section explains which conversations qualify (the PRD
+  research/review sessions), gives the export steps for Claude Code (`/export`, or the JSONL under
+  `~/.claude/projects/`) and claude.ai, names the target path
+  `docs/submission/presearch-conversation-<date>.md`, and leaves a placeholder link — no
+  conversation is fabricated or embedded.
+- `README.md` — one bullet under "## Documentation" pointing at the pre-search doc.
+
+**Two findings surfaced while pre-filling, disclosed rather than smoothed over:** (1) `PLUGFORGE.MD:228`
+specifies `frame-ancestors 'none'` on the consent page, but `api/src/app.ts:330-345`'s helmet CSP
+sets no explicit `frame-ancestors`; the effective value is helmet's default `'self'` (derived from
+helmet's documented defaults, not verified by a live header dump) — same-origin framing is still
+permitted; (2) the deliverer dead-letters every non-2xx/non-5xx including 429 and 410
+(`deliverer.ts:707`, `:852`) — a documented simplification, replay is the recovery. Neither is
+changed by this ticket; both are named in the doc's answers.
+
+**How to verify.** `grep -c '^> \*\*\[TROY' docs/submission/PLUGFORGE-PRESEARCH.md` → 9 (the
+answer blocks only; the legend names the marker in inline code and does not match). Spot-check any
+`file:line` citation against the tree. `git diff --stat` shows only the two docs files plus this
+entry — no code, no tests, no schema.
+
+**Rollback.** `git rm docs/submission/PLUGFORGE-PRESEARCH.md`, drop the README bullet, delete this
+entry. Docs-only; nothing runtime depends on the file.
+
+---
+
+## TRO-621 — TTFE drill can run the API from the container image (ruling I-07 "containerized Ship")
+
+**What was missing.** `pnpm drill ttfe` (`scripts/drill/ttfe.ts`, TRO-455) always ran the API as a
+`tsx src/index.ts` child of the checkout; only Postgres was ever containerized. Ruling I-07's
+"containerized Ship instance" means the API under test runs from the container image the root
+`Dockerfile` builds (and CI's `build-image` pushes to GHCR) — nothing in CI ever executed the drill's
+stages against that artifact.
+
+**What changed.**
+- `scripts/drill/ttfe-api-mode.ts` (new, pure) — mode selection (`DRILL_TTFE_API_IMAGE` unset →
+  `tsx`; set → `image <ref>`), the label the drill prints (`api: tsx child` / `api: image <ref>`),
+  the production-mode container env (`NODE_ENV=production`, `PORT`, `DATABASE_URL`, `SESSION_SECRET`,
+  `SECRET_ENCRYPTION_KEY`, `CORS_ORIGIN`, `AWS_EC2_METADATA_DISABLED` — each traced to the
+  `api/src/index.ts`/`app.ts`/`config/ssm.ts` line that needs it), loopback → `host.docker.internal`
+  URL rewriting, per-mode webhook-target/listener addressing, and the owned-Postgres TLS command.
+- `scripts/drill/ttfe.ts` — image mode via testcontainers `GenericContainer`: exposes the API port,
+  `host-gateway` extra host, waits for `GET /health` 200 (bounded, 120 s; last container log lines
+  surfaced on failure), runs the same six stages against `http://<docker host>:<mapped port>`, tears
+  down. Prints the mode in the header and above the table. **Postgres in image mode:** because
+  `api/src/db/ssl.ts` requires TLS in production, an ambient `DATABASE_URL` is probed once — TLS ok →
+  reused via `host.docker.internal`; plaintext-only (CI `services:` alpine, default local/factory
+  Postgres) → loudly bypassed in favour of a drill-owned `postgres:15` started `ssl=on` with a
+  one-day self-signed cert generated by the host's `openssl`, on a private docker Network the API
+  container joins by alias (`ttfe-postgres`); no `DATABASE_URL` → the same owned path. tsx mode
+  is untouched (same spawn args/env/readiness detection; loopback listener; the only visible
+  difference is the added `[mode] api: tsx child` line).
+- `.github/workflows/ci.yml` — new job `drill-ttfe-image` ("drill · TTFE image-mode (TRO-621)"),
+  `needs: build-image`, rebuilds the image with `load: true` + `cache-from: type=gha` (build-image's
+  warmed cache; see the job comment for why not a tar artifact) and runs
+  `DRILL_TTFE_API_IMAGE=ship-api:ci pnpm drill ttfe` with no `services:` Postgres (TLS — the drill
+  owns one). Existing `drill-ttfe` (tsx) job unchanged. `.gitlab-ci.yml`: comment only — image mode
+  is GitHub-only because the shared runner cannot start containers.
+- `scripts/drill/__tests__/ttfe-api-mode.test.ts` (new, 16 tests; runs under the drill's scoped
+  vitest config → `gate.sh` G11 + CI's "TTFE drill threshold-logic tests" step).
+- `docs/architecture.md` — one paragraph on the two modes under "Agent as Platform Citizen".
+
+**How to verify.** `docker build -t ship-api:local .` then
+`DRILL_TTFE_API_IMAGE=ship-api:local pnpm drill ttfe` — header prints `[mode] api: image
+ship-api:local`, `[setup]` says which Postgres path it took, six stages + `verdict: pass`.
+`pnpm drill ttfe` alone prints `[mode] api: tsx child` and behaves as before. `DEBUG=1` streams the
+container's own logs (`[api-image] …`), where `Loading secrets from SSM path: /ship/prod` → `SSM
+unavailable … continuing with secrets supplied by the environment` proves it booted in production
+mode. Unit: `pnpm exec vitest run --config scripts/drill/vitest.config.ts`.
+
+**Rollback.** Revert the PR. Image mode is opt-in behind `DRILL_TTFE_API_IMAGE`; with it unset every
+existing caller (`gate.sh` G12, both `drill-ttfe` CI jobs, local runs) is on the unchanged tsx path.
+Removing the `drill-ttfe-image` job alone also fully disables the new mode in CI.
+
+---
+
+## TRO-591 — composite index for `/api/v1` keyset pagination over `documents`
+
+**What was built.** An investigate-tier ticket flagged by PF-201's pagination work: does the
+keyset-cursor pagination shared by every `/api/v1` list endpoint need a dedicated composite index?
+Verified the real query shape first rather than assuming the ticket's `(created_at, id)` guess was
+the whole story: `api/src/platform/api/v1/pagination.ts` documents the cursor as
+`WHERE (created_at, id) < (...) ORDER BY created_at DESC, id DESC`, but the actual list routes
+(`resources/issues.ts`, `resources/sprints.ts`, and `resources/documents.ts`'s generic list) all
+combine that with `workspace_id = $1 AND document_type = '<type>' AND deleted_at IS NULL` — the
+composite index has to match that whole shape, not just the two cursor columns. Read
+`api/src/db/schema.sql` and confirmed via `\d documents` that no existing index covers it:
+`idx_documents_ticket_number` (038) is `(workspace_id, ticket_number) WHERE document_type =
+'issue'` — usable only for the `workspace_id` equality, not the sort — and no index at all matches
+`document_type = 'sprint'` combined with `workspace_id`.
+Added migration `052_documents_workspace_type_created_at_index.sql`:
+`CREATE INDEX idx_documents_workspace_type_created_at ON documents (workspace_id, document_type,
+created_at DESC, id DESC) WHERE deleted_at IS NULL` — one composite index serving all three list
+endpoints (they share the identical WHERE/ORDER BY shape), partial on `deleted_at IS NULL` to match
+every list query's own predicate exactly and to keep soft-deleted rows out of the index entirely.
+
+**Evidence a real gap existed (not a guess).** At the worktree DB's base-seeded volume (110 issues /
+35 sprints in the one seeded workspace) `EXPLAIN ANALYZE` showed sub-millisecond execution either
+way — a seq/bitmap scan over ~100 rows proves nothing, per this ticket's own instructions. Seeded a
+large-workspace volume directly into the same workspace (15,000 additional issue documents, 3,000
+sprint documents, 2,000 wiki documents — deterministic bulk `INSERT ... generate_series`, removed
+afterward) to get a plan that actually distinguishes the two states. Before the index:
+- Issues, first page: `Seq Scan` (15,110 rows) + top-N sort → **5.408 ms**, 650 buffer hits.
+- Issues, mid-pagination cursor (~page 350): `Seq Scan` + sort of 9,402 candidate rows → **10.468 ms**.
+- Sprints, first page: `Bitmap Heap Scan` (document_type index only) + sort of 3,035 rows → **1.505 ms**, 115 buffer hits.
+
+After applying migration 052 via the real `pnpm db:migrate` runner (not a hand-created psql index —
+re-seeded the same stress volume against the migrated schema to confirm the migration itself, not
+an ad hoc index, produces the win):
+- Issues, first page: `Index Scan` reading only the 21 returned rows → **0.041 ms**, 5 buffer hits.
+- Issues, mid-pagination cursor: `Index Scan` → **0.070 ms** (measured against the hand-created
+  index; the migrated index's plan shape is identical — same index, same columns, same predicate).
+- Sprints, first page: `Index Scan` → **0.038 ms**, 6 buffer hits.
+
+Every case drops the `Sort` node entirely — the planner walks the index in already-sorted order and
+stops at `LIMIT`, instead of materializing and sorting every matching row first. This is exactly the
+scaling problem keyset pagination exists to avoid, and it was previously unaddressed: without this
+index, every page of a large workspace's issue or sprint list — not just the first — re-scans and
+re-sorts every not-yet-returned row of that type in the workspace.
+
+**How to run it.**
+```bash
+FACTORY_PG_CONTAINER=ship-postgres-1 bash scripts/factory/gate.sh
+```
+To reproduce the EXPLAIN ANALYZE evidence directly: apply the migration (`pnpm db:migrate`), seed a
+large-workspace volume (bulk-insert several thousand `document_type = 'issue'`/`'sprint'` rows into
+one workspace — the built-in `pnpm db:seed` alone only reaches ~110 issues / 35 sprints, too small
+to show the effect), then run
+`EXPLAIN (ANALYZE, BUFFERS) SELECT ... FROM documents WHERE workspace_id = $1 AND document_type =
+'issue' AND deleted_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 21` via `psql` against the
+worktree's `DATABASE_URL` (`docker exec ship-postgres-1 psql -U ship -d <db>` if using the shared
+Postgres container) and confirm the plan shows `Index Scan using idx_documents_workspace_type_created_at`
+with no `Sort` node.
+
+**Rollback.** `DROP INDEX IF EXISTS idx_documents_workspace_type_created_at;` — a single non-partial
+schema object with no dependents (nothing else references it by name), so dropping it is a full,
+clean revert. No data was changed by this migration; only the index needs removing.
+
+---
+
+## TRO-598 — PF-800 follow-up: machine-readable error discriminator for `/oauth/token` refresh reuse
+
+**What was built.** `/oauth/token`'s refresh-token grant returns the same RFC 6749 `error:
+'invalid_grant'` for three different rejection reasons (unknown token, expired token, reused/stolen
+token) — the enum is closed, so a new top-level value would be a spec-breaking, externally-visible
+contract change. Added an **additive**, non-RFC `error_details: { reason }` field alongside the
+existing `error`/`error_description` — never replacing either — populated only for the three
+refresh-token-specific rejection branches this ticket is about:
+
+- `api/src/platform/oauth/token.ts` — new `RefreshTokenErrorReason` type (`'token_unknown' |
+  'token_expired' | 'token_reused'`), `TokenGrantResult`'s error variant gains an optional
+  `errorDetails` field, `invalidGrant()` takes an optional second argument. Populated at
+  `rotateRefreshToken`'s three relevant call sites (unknown lookup, already-revoked-on-first-read,
+  and the atomic-UPDATE-lost-the-race branch — the last two both mean "reused," matching the
+  module's own documented "same outward behavior, deliberately" reasoning for those two paths).
+  **Deliberately not touched:** the authorization-code grant's own `invalidGrant` calls, and the
+  refresh grant's "wrong client" rejection — none of those are one of the three reasons this ticket
+  scopes.
+- `api/src/routes/oauth-token.ts` — `sendTokenError` takes an optional `details` parameter, only
+  emits `error_details` in the JSON body when present. Every existing call site that never had a
+  reason keeps sending the unmodified RFC 6749 §5.2 shape.
+
+**Regression tests.** Two changes:
+1. Extended `refresh-rotation-stolen-token.test.ts`'s existing reuse assertion (the file whose own
+   header previously documented "no machine-readable discriminator exists, only `error_description`
+   text" as a deliberate, still-open choice — that header is updated to reflect this ticket closing
+   the gap) with `expect(...).error_details?.reason).toBe('token_reused')`.
+2. New `it()` in `token.test.ts`'s "refresh_token grant — other negative cases" — one focused test
+   hitting all three reasons (`token_unknown`/`token_expired`/`token_reused`) back to back, isolated
+   from the narrated stolen-token story, and asserting the RFC `error`/`error_description` fields
+   are unchanged alongside the new one.
+
+**Confirmed red before green:** temporarily reverted the `{ reason: 'token_reused' }` argument at
+the reuse call site — real `AssertionError`, `Expected: "token_reused"` / `Received: undefined`, not
+an import/typo error. Restored; 34/34 tests in both `token.test.ts` and
+`refresh-rotation-stolen-token.test.ts` pass.
+
+**Not done (per the ticket's own "not verified" note, still true):** no SDK/portal consumer was
+wired up to read `error_details.reason` — this ticket adds the server-side field, per its own
+"Candidate fix" scope; whether any consumer needs it programmatically vs. `error_description`
+text-matching being sufficient remains unverified, as the ticket itself flagged going in.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts src/platform/oauth/__tests__/token.test.ts
+```
+
+**Roll back.** Revert this commit. Changes are localized to `api/src/platform/oauth/token.ts`,
+`api/src/routes/oauth-token.ts`, `api/src/platform/oauth/__tests__/refresh-rotation-stolen-token.test.ts`.
+Purely additive (a new optional field, populated at 3 call sites) — no RFC-shaped field changed, so
+reverting has no effect on any client that never reads `error_details`.
+
+---
+
+## TRO-589 — Device-grant `user_code` stored plaintext, not hashed
+
+**Root cause.** `oauth_device_codes.device_code_hash` (the machine-held device_code) has always
+been SHA-256-hashed at rest (`hashDeviceCode`/`hashToken`, `api/src/platform/oauth/device.ts`).
+`user_code` — the human-typed 8-char verification code, same table, same migration (043) — was
+written to the database as plaintext: `createDeviceCode`'s `INSERT` bound the raw generated code
+directly, and `lookupDeviceCodeByUserCode`'s `SELECT ... WHERE user_code = $1` compared against it
+directly. Found by TRO-425's own landing agent's security self-review. Low severity as-found:
+device codes expire in `DEVICE_CODE_TTL_MS` (10 min), and a leaked `user_code` alone cannot
+complete the flow without a live, session-authenticated `/oauth/device/verify` approval — but it
+didn't satisfy a "hashed or not trivially guessable from DB" bar.
+
+**The fix.** `api/src/platform/oauth/device.ts` — mirrors the existing `device_code_hash` pattern
+exactly:
+
+- New `hashUserCode(raw): string` (SHA-256 hex via the same `hashToken` from `token.ts` that
+  `hashDeviceCode` already uses) — deterministic, so a lookup by the value a human typed still
+  works, it just hashes first.
+- `createDeviceCode`'s `INSERT` now binds `hashUserCode(userCode)` instead of the raw `userCode`.
+  The function's RETURN VALUE is unchanged — the caller (and the human who reads/types the code)
+  still sees the real plaintext code. Nothing about what the user sees or types changed; only what
+  lands in the database changed.
+- `lookupDeviceCodeByUserCode` now hashes its input (the already-`normalizeUserCode`-normalized
+  plaintext from `decideDeviceCode`) before the `SELECT ... WHERE user_code = $1` comparison.
+- `DeviceCodeRow.user_code`'s doc comment updated to state it now holds a hash, not plaintext,
+  despite the unchanged column name (see below).
+
+**Migration: none needed.** `oauth_device_codes.user_code` is `TEXT NOT NULL`
+(`api/src/db/migrations/043_oauth_tokens_and_codes.sql:99`) — no `VARCHAR(N)` length constraint.
+**Observed**, not assumed: queried `information_schema.columns` directly against this worktree's
+own database (`data_type: 'text'`, `character_maximum_length: null`), and separately confirmed
+migrations 043 and 046 are both applied (`schema_migrations` has both version rows) — so this
+database's `oauth_device_codes` shape matches the migration file read. A 64-char SHA-256 hex
+digest fits a `TEXT` column with no widening required. The existing `idx_oauth_device_codes_user_code`
+unique index is unaffected — it still enforces uniqueness, just over hash values instead of
+plaintext values, which is exactly as meaningful (SHA-256 collisions are not a realistic concern
+at this table's scale, same posture already accepted for `device_code_hash`'s own unique index).
+
+**Deliberately NOT done: renaming the `user_code` column to `user_code_hash`.** Would be the more
+self-documenting name (matching `device_code_hash`'s own naming), but renaming an existing column
+requires its own migration (`ALTER TABLE ... RENAME COLUMN`) and isn't required to close this
+finding — the severity was already low, and the ticket's own scope was "hash the value," not
+"rename the column." Documented at length in-code (`device.ts`'s `hashUserCode` and
+`DeviceCodeRow.user_code` doc comments) so a future reader isn't misled by the column name alone.
+If a future ticket wants the rename for consistency, it's a small, isolated follow-up.
+
+**Regression test.** `api/src/platform/oauth/__tests__/device.test.ts`, new `describe('TRO-589:
+user_code is hashed at rest')` block: issues a real device code via `POST /oauth/device/code`,
+then queries `oauth_device_codes` directly by `device_code_hash` (bypassing this module's own
+lookup helpers, which would trivially "pass" either way) and asserts the stored `user_code`
+column value (a) is not equal to the plaintext code returned to the client, (b) is exactly
+`sha256(plaintext).hex()`, and (c) is a 64-char hex string — then proves the hash still resolves
+correctly by submitting the plaintext code to `/oauth/device/verify` and confirming a real
+`approved` redirect.
+
+**Observed red-before-green, not assumed:** reverted only `device.ts` to its pre-fix `HEAD` state
+(`git checkout -- api/src/platform/oauth/device.ts`, leaving the new test in place) and ran the
+test — it failed with `AssertionError: expected 'H9GR-7BL8' not to be 'H9GR-7BL8'` (the DB
+literally held the human-readable code). Re-applied the fix; the same test then passed, along with
+all 9 pre-existing tests in the file (10/10) and all 7 pre-existing tests in
+`api/src/db/__tests__/migrations-042-043.test.ts` (index-shape assertions unaffected by content
+change).
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/device.test.ts
+```
+
+**Roll back.** Revert this commit. No migration was added, so there is no down-path to run —
+reverting `api/src/platform/oauth/device.ts` and the test file returns `user_code` storage to
+plaintext with no schema cleanup needed (the column's `TEXT` type and unique index are unchanged
+either way). Any rows written while this fix was live will have hashed `user_code` values; a
+revert makes those existing hashed rows permanently unusable for the (already-consumed-or-expired,
+10-minute-TTL) verify lookup — not a concern in practice given the TTL, but noted for completeness
+since a migration-less code revert cannot un-hash already-written data.
+
+---
+
+## TRO-588 — `/oauth/*` had zero rate-limit coverage — added a dedicated per-source-IP limiter
+
+**What was broken.** `/oauth/authorize`, `/oauth/token`, `/oauth/device/*` (PF-103/PF-104/PF-106)
+sat entirely outside this repo's two existing rate-limit layers. Confirmed by reading the mount
+points directly, not assumed: the legacy `perSourceIpLimiter`/`perIdentityLimiter` mount only on
+`/api/` (`api/src/app.ts:375-376`), and `/oauth` is a separate top-level prefix, never matched by
+that mount. PF-500's `rateLimitDefaults`/`rateLimitBuckets` mount only on `v1Router`
+(`api/src/platform/api/v1/router.ts:88`), i.e. `/api/v1`, not `/oauth` either. These are exactly
+the endpoints an attacker would hammer — credential stuffing on `/oauth/token`, `user_code`
+brute-forcing on `/oauth/device/*` — with no ceiling at all.
+
+**What changed.**
+- `api/src/middleware/rate-limit.ts` — added `resolveOAuthRateLimit()` + `createOAuthRateLimiter()`,
+  modeled directly on the existing `resolveSpaStaticLimit()`/`createSpaStaticLimiter()` pair (the
+  closest existing precedent: a single per-source-IP flood ceiling for pre-auth/anonymous traffic,
+  own Redis-backed bucket, own env-tiered limits). A per-*identity* limiter (`perIdentityLimiter`'s
+  shape) doesn't fit here — every `/oauth/*` request is pre-auth by definition, so there is no
+  session/bearer token yet to key on.
+- `api/src/middleware/redis-rate-limit-store.ts` — added `REDIS_KEY_PREFIX_OAUTH = 'rl:oauth:'`, a
+  separate bucket from every other limiter's prefix so an `/oauth/token` device-polling loop can't
+  exhaust an unrelated `/api/*` budget from the same source IP, or vice versa.
+- `api/src/app.ts` — built `oauthRateLimiter` alongside the other module-level limiters (shares the
+  same Redis client), mounted at `app.use('/oauth', oauthRateLimiter)` directly ahead of all three
+  `/oauth`-prefixed routers (`createOAuthAuthorizeRouter`/`createOAuthTokenRouter`/
+  `createOAuthDeviceRouter`), so it covers every route on every one of them.
+
+**Limit choice — disclosed as derived, not measured.** Unlike `MEASURED_WORST_CASE_BURST_PER_MINUTE`
+(the `/api/*` limiter's number, calibrated from a real audit traffic capture), this prefix has no
+equivalent capture to calibrate against. The production ceiling (120 req/min per source IP) is
+reasoned from RFC 8628's device-grant default poll interval (5s → ~12 `/oauth/token` requests/min
+per legitimate polling flow, `DEFAULT_DEVICE_POLL_INTERVAL_SECONDS` in `platform/oauth/device.ts`)
+times a generous assumption of up to ~10 concurrent device-login attempts behind one shared NAT
+egress. Dev tier is 10,000 (permissive, matches every other limiter's dev tier in this file). If
+real `/oauth/*` traffic is ever measured, replace this reasoning with actual numbers rather than
+just raising the constant — same discipline `rate-limit.ts`'s own top-of-file doc already asks for.
+
+**A real bug found by the full gate, not by this ticket's own isolated test file.** First version
+shipped the test tier at 30 (mirroring `createSpaStaticLimiter`'s test tier, safe there because
+nothing else in the suite drives real traffic through the static-SPA route repeatedly).
+`platform/oauth/__tests__/token.test.ts` alone drives dozens of real `/oauth/token` requests through
+one shared `createApp()` instance across its `it()` blocks — a 30-request ambient cap meant later
+tests in that file started genuinely receiving `429` instead of their expected specific status. This
+ticket's own test file passed regardless (it resets modules per test, so its own `MemoryStore`
+counter never accumulated across cases) — only a full `gate.sh` run surfaced the interference, as 12
+new failures across two files. Fixed the same way TRO-494 fixed the identical tension for
+`createApiRateLimiters`: the ambient test tier is now 10,000 (permissive, matches every other
+limiter's test tier), and `createOAuthRateLimiter` gained a `limitOverrides` third parameter — test
+seam only, nothing outside a test passes it — so a test that specifically wants to drive the 429
+path quickly can isolate the limiter at a small, explicit cap without lowering what every other test
+in the suite runs against.
+
+**Regression tests** — `api/src/app.oauth-rate-limit.test.ts` (new), 4 cases. Three build a minimal
+standalone Express app mounting `createOAuthRateLimiter` directly with `limitOverrides: {limit: 5}`
+(same "isolated small-cap app" pattern as `rate-limit-v1-exemption.test.ts`'s AC-3, for the identical
+reason — sequentially driving the real 10,000-request ambient tier to prove a 429 fires is not
+practical in a unit test): (1) request #6 returns 429 with the expected error body, requests 1-5
+return 200 — proving the limiter itself, not some other failure, is what changes at the throttle
+point; (2) the limiter also covers `POST /oauth/device/code`, not just the first-registered route on
+the prefix; (3) exhausting the `/oauth` budget does not throttle an unrelated route (separate
+Redis-prefixed bucket, `REDIS_KEY_PREFIX_OAUTH`). The fourth case loads the real `createApp()`
+wiring (`vi.resetModules()`, same pattern as `app.spa-static-rate-limit.test.ts`) and checks for the
+`RateLimit-Limit`/`RateLimit-Remaining` response headers `express-rate-limit`'s `standardHeaders`
+sets on every response that passed through it — proving the middleware is actually mounted in
+production `app.ts`, not just that the standalone function works in isolation, without needing to
+exhaust the now-permissive real limit (which would risk exactly the cross-test interference above).
+**Red before green, genuinely verified** on the original (pre-`limitOverrides`) version of this fix
+before the interference bug was found: reverting just the `app.ts` mount change and re-running the
+suite reproduced the pre-fix behavior exactly — every test failed, with the `/oauth/device/code` case
+showing a real `400` (the route's own empty-body validation) at what should have been the 429
+checkpoint, confirming no rate limiting fired at all before this fix. Full adjacent-suite check after
+the `limitOverrides` rework: `token.test.ts` (32 cases) + this file (4 cases) — 36/36 passing, zero
+interference; broader check `rate-limit.test.ts` + `rate-limit-coverage.test.ts` +
+`rate-limit-v1-exemption.test.ts` + `app.spa-static-rate-limit.test.ts` + this file — 46/46 total
+across the full gate run, zero regressions.
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run \
+  src/app.oauth-rate-limit.test.ts \
+  src/middleware/__tests__/rate-limit.test.ts \
+  src/middleware/__tests__/rate-limit-coverage.test.ts \
+  src/middleware/__tests__/rate-limit-v1-exemption.test.ts \
+  src/app.spa-static-rate-limit.test.ts
+```
+
+**Rollback.** `git revert <this commit>` — three files touched
+(`api/src/app.ts`, `api/src/middleware/rate-limit.ts`, `api/src/middleware/redis-rate-limit-store.ts`)
+plus one new test file, no migration, no schema change, no other call site depends on any of the
+new exports.
+
+---
+
+## TRO-493 — PF-102 follow-up: `oauth-apps.ts` registered the wrong error-response schema
+
+**Root cause.** `api/src/openapi/schemas/oauth-apps.ts` registered every one of its route's error
+responses (11 across 5 handlers — create/list/get/rotate/revoke) against the shared
+`ErrorResponseSchema` (`api/src/openapi/schemas/common.ts`) — a flat `{error: string, message?,
+details?: array<{path,message}>}` shape. But `api/src/routes/oauth-apps.ts` has never returned
+that shape; every error response there is `{success: false, error: {code, message, details?}}`,
+with `details` carrying zod's own `flatten()` output (`{formErrors, fieldErrors}`) on validation
+failures. Surveyed before picking a fix direction, per the ticket's own instruction not to assume
+either side is "correct": `grep -l "success: false" api/src/routes/*.ts` returns 9 files
+(`api-tokens.ts`, `workspaces.ts`, `oauth-apps.ts`, and 6 more) all using this same
+`{success,error:{code,message}}` shape, plus `api/src/middleware/auth.ts` itself — this is the
+dominant, established convention across the internal API, not an outlier. `documents.ts`/
+`issues.ts` are the ones actually close to `ErrorResponseSchema`'s flat shape. `oauth-apps.ts`
+registered the wrong shared schema; the schema itself was never wrong for the routes that
+correctly use it.
+
+**What changed.**
+- `api/src/openapi/schemas/common.ts`: added `InternalErrorResponseSchema` — `{success:
+  z.literal(false), error: {code: z.enum(ERROR_CODES values), message: z.string(), details?:
+  z.record(z.unknown())}}` — describing the real, dominant convention. `ErrorResponseSchema`
+  itself is **untouched**, since `issues.ts` genuinely returns its shape; changing it would have
+  fixed oauth-apps.ts by breaking issues.ts's already-correct registration.
+- `api/src/openapi/schemas/oauth-apps.ts`: all 11 `ErrorResponseSchema` references switched to
+  `InternalErrorResponseSchema`. No route-handler code changed — the runtime behavior was already
+  correct; only the OpenAPI documentation was wrong.
+
+**Regression tests** — `api/src/platform/oauth/__tests__/app-registration.test.ts`, two new cases:
+1. *Shape*: three real response bodies (validation/400, not-found/404, no-session/401) parsed with
+   `InternalErrorResponseSchema.safeParse()`, plus a concrete check that the validation case's
+   `details` carries `fieldErrors`.
+2. *Documentation-drift*: `generateOpenAPIDocument()`'s actual generated doc is inspected directly
+   — `paths['/oauth-apps'].post.responses['400'].content['application/json'].schema.$ref` must
+   equal `'#/components/schemas/InternalErrorResponse'`. **This is the test that actually catches
+   the original bug** — test 1 alone doesn't, because the runtime shape never changed; only the
+   *documentation* did. Verified genuinely red before the fix: reverted `oauth-apps.ts`'s schema
+   references back to `ErrorResponseSchema` and re-ran — test 1 still passed (proving it doesn't
+   catch this bug class), test 2 failed with `expected '#/components/schemas/ErrorResponse' to be
+   '#/components/schemas/InternalErrorResponse'`, then restored and both passed.
+
+**Full `api` suite**: 1427 tests, 2 failures (`files.test.ts`'s file-confirm test,
+`route-fitness.test.ts`'s `/api/v1/issues` 401-check) — both re-run standalone and passed 133/133,
+confirming the documented load-sensitive (TEST-12/TRO-277-class) pattern, not a regression from
+this change (neither touched file is anywhere near `oauth-apps.ts`/`common.ts`).
+
+**How to verify.**
+
+```bash
+pnpm --filter @ship/api exec vitest run src/platform/oauth/__tests__/app-registration.test.ts
+```
+
+**Rollback.** `git revert <this commit>` — 3 files (`common.ts`, `oauth-apps.ts`,
+`app-registration.test.ts`), no schema/migration, no route-handler behavior change.
+
+---
+
+## TRO-552 — v1-exemption boundary predicate now tested at segment edges
+
+**What was built.** `isLegacyLimiterExemptPath` (`api/src/middleware/rate-limit.ts`) — the
+predicate that exempts `/api/v1/*` from the two legacy `/api/` rate limiters (PF-004 / TRO-401) —
+was already segment-boundary-correct (`path === '/v1' || path.startsWith('/v1/')`, per its own
+top-of-file doc), but nothing in `rate-limit-v1-exemption.test.ts` ever mounted a route whose
+mount-relative path shares the `/v1` string as a prefix without actually being it, so the boundary
+behavior was asserted only in a code comment. A regression to a bare `path.startsWith('/v1')`
+(dropping the exact-match branch and the trailing-slash check) would have passed every existing
+AC-1..AC-3b case in that file unchanged, because none of them ever requests a path only a substring
+match would wrongly admit.
+
+Added two new cases to that same file, matching its existing `limitOverrides` (TRO-494) seam and
+AC-numbering convention:
+- **AC-4a**: a test app mounts `/api/v10/example` behind both legacy limiters with
+  `identityLimit`/`sourceIpLimit` both overridden to a small cap (3), and asserts the route DOES
+  throttle past that cap (i.e., is NOT exempted).
+- **AC-4b**: same shape for `/api/v1foo/example`.
+
+No production code changed — this is a pure test-only addition; `rate-limit.ts` itself is
+unmodified by this ticket.
+
+**How to run it.**
+
+```bash
+source .factory-env
+pnpm --filter @ship/api exec vitest run src/middleware/__tests__/rate-limit-v1-exemption.test.ts
+```
+
+All 6 tests (the 4 pre-existing AC-1/AC-2/AC-3a/AC-3b plus the new AC-4a/AC-4b) pass.
+
+**Confirmed red before green.** Temporarily mutated `isLegacyLimiterExemptPath` in
+`api/src/middleware/rate-limit.ts` to a bare substring match:
+
+```ts
+export function isLegacyLimiterExemptPath(path: string): boolean {
+  return path.startsWith('/v1');
+}
+```
+
+Re-ran the suite: AC-4a and AC-4b failed —
+
+```
+AssertionError: never saw a 429 in 4 requests to /api/v10/example against a cap of 3 — a bare
+startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom:
+expected -1 not to be -1
+
+AssertionError: never saw a 429 in 4 requests to /api/v1foo/example against a cap of 3 — a bare
+startsWith('/v1') regression would wrongly exempt this path and produce exactly this symptom:
+expected -1 not to be -1
+```
+
+— while AC-1/AC-2/AC-3a/AC-3b stayed green, confirming the mutation is a real, targeted regression
+that only the new boundary tests catch. Reverted the mutation (`git diff` on `rate-limit.ts` empty
+afterward) and re-ran: 6/6 pass.
+
+**Rollback.** Revert this commit. `rate-limit-v1-exemption.test.ts` returns to its prior 4-case
+form; `rate-limit.ts` is untouched by this ticket either way, so there is no production behavior to
+roll back.
+
+---
+
 ## TRO-501 — Route-level `createIssueSchema` accepts `'none'` priority: widened, not narrowed
 
 **The ticket's premise, checked before writing anything.** TRO-501 named three sources of truth

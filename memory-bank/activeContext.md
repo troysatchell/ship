@@ -2,15 +2,42 @@
 
 *The most-updated file in the bank. Read this first every session; rewrite it whenever focus shifts. Keep it under a screen — move finished work to progress.md.*
 
-**Last updated:** 2026-08-16 (~07:20Z), by a second concurrent session (this one) layering its own wave on top of the ~07:10Z update below. **Week 6 (PlugForge) — deadline AM 2026-08-16, inside the deadline window. Troy has explicitly signed off for the night — all sessions run fully unattended, announce-before-claim to peers only, no check-ins expected.** Full detail in `progress.md`'s 2026-08-16 log entries — this file is the pointer, not the record. Many sessions active concurrently (fleet reported ~20 worktrees at one point) — always re-check Linear/PR state live before trusting anything below as current.
+**Last updated:** 2026-08-16 (~13:35Z), by a third concurrent session (this one, "ship-orchestrator-current") layering on top of the ~07:20Z update below. **Week 6 (PlugForge) — Linear project targetDate is 2026-08-16 with no time component; the "AM" deadline note below is unverified (relayed, not read from the grading doc this session) — flagged to Troy, not confirmed. Treat the deadline as imminent-or-passed and prioritize getting already-built work merged over starting new work.** GitHub API rate limit from the ~07:17Z note has long since cleared (`gh api rate_limit` showed 4992/5000 as of 13:23Z) — that warning below is now historical, not current. Fleet this session: 3 concurrent peers (this session + ship-1c + ship-16), coordinating live via SendMessage/ListAgents, not just Linear locking.
 
-## ⚠️ GitHub API rate limit hit fleet-wide 2026-08-16 ~07:17Z
+## ⚠️ CodeRabbit fleet-wide rate limit hit 2026-08-16, confirmed ~13:25Z — read before merging or gating anything
+
+**Two separate CodeRabbit quotas, both exhausted independently, easy to confuse:**
+
+1. **GitHub App PR-level review** (the one `ship-factory`'s "done" criteria step 4 and step 8's merge gate actually mean by "CodeRabbit review triaged" — it's what posts PR comments/threads and feeds `review-ledger.mjs`). Confirmed exhausted via `@coderabbitai full review` on PR #278: *"Your included review limit is currently reached... 95th percentile or higher among CodeRabbit users... next included review in 59 minutes"* (so clear ~14:24Z). **The trap:** every affected PR's `statusCheckRollup` still shows a `CodeRabbit` status context of `SUCCESS`, and a plain `@coderabbitai review` (not `full review`) replies *"does not re-review already reviewed commits"* — both read as "already reviewed cleanly" when the truth is "rate-limited, never actually reviewed." The PR's only CodeRabbit *comment* is the literal "Review limit reached" warning template — check the comment body, not the check-run status, to tell the difference.
+2. **Local free CLI allowance** (`coderabbit review --agent`, invoked by `gate.sh`'s G9 check) — a *different* pool, 3 free reviews, also now exhausted (`.factory/coderabbit.json` in `Ship-wt-tro_591`/`Ship-wt-tro_598` shows `"errorType":"rate_limit"`, wait 17-26 min as of ~13:33Z). G9 is informational-only ("CodeRabbit findings never fail the gate on their own") so this doesn't block `gate.sh` passing — but a `[ok] coderabbit review completed with no findings` line in a *fresh* gate run right now is likely this quota already being exhausted too (rc≠0 path can still read as informational pass in some branches of the script — verify by checking `.factory/coderabbit.json`'s actual `type` field before trusting a clean G9 as a real review). One genuine clean review did land (TRO-552, 0 findings, before the CLI quota ran out this cycle) — that one's real, confirmed via the JSONL's `"type":"complete"` event, not just the gate's summary line.
+
+**Practical rule:** for any ticket-content PR, before merging, open the PR and read the actual CodeRabbit comment body. If it's the rate-limit warning template (not a walkthrough/findings summary), the review hasn't happened — wait for the window, don't merge past it, and don't keep re-triggering (each `@coderabbitai review`/`full review` call and each `gate.sh` G9 run burns more of the same shared, slowly-refilling quota). Non-ticket-content PRs (docs/memory-bank sync) are unaffected — they skip the CodeRabbit gate entirely per the existing exception.
+
+## ⚠️ GitHub API rate limit hit fleet-wide 2026-08-16 ~07:17Z (historical — cleared by ~07:37Z, confirmed clear again at 13:23Z)
 
 `gh api rate_limit` showed `0/5000` (shared account, all sessions draw from one pool). Reset ~07:37Z. Symptom to recognize: `gh run watch`/`gh pr checks`/`gh api` calls start returning early, empty, or stale-looking instead of erroring loudly — **check `gh api rate_limit` first** if `gh` output looks inconsistent with reality, rather than assuming a real CI state change. Plain `git fetch`/`push` to github.com is unaffected. If this recurs, all sessions should throttle `gh` polling (fewer, spaced-out checks; prefer `git push` + one check over a watch loop) rather than each independently hammering it.
 
 ## Current focus
 
-1. **This session's wave (2026-08-16 ~05:20–07:20Z): TRO-587 done, TRO-488/TRO-589/TRO-612/TRO-614 built.** TRO-612 merged clean (PR #271, `9eee8aa0`). TRO-587 (CodeQL false-positive on `credentials.ts:35`) dismissed directly via `gh api` — no code change, alert #372 dismissed with a written reason, Linear Done. TRO-488 (terraform input hardening) and TRO-589 (device `user_code` hash) both gate-pass, PR #273/#272 open, mergeable, green on their last full CI pass — **blocked only on the rate-limit window above**, resume merging once it clears. **TRO-614 is this session's fix** (not just "in flight from another session" as the prior note said) — root-caused the `OrgChartPage.test.tsx` race precisely (second `useEffect` auto-expanding the tree after first render; test's synchronous `getByRole` for a nested row could beat it) via 2 independent CI failures on unrelated diffs (TRO-589, TRO-488), fixed with `await findByRole` for the deepest node, PR #278, gate `pass-with-disclosed-exception` (hardens an existing test, no new case). Broadcast to the fleet so others stop re-running around it.
+0b. **A fourth concurrent session (this edit, ~13:20–13:52Z) built TRO-590 and rolled over cleanly —
+   no conflict with item 0 below, different ticket.** CodeQL `js/missing-rate-limiting` blind spot on
+   test-only Express apps: live-checked `gh api code-scanning/alerts` rather than trusting the ticket's
+   one citation and found the same root cause on **5** open alerts across 2 rules (#371/#369
+   `js/missing-rate-limiting`, #4/#5/#6 `js/incomplete-(multi-character-)sanitization`, all test-file
+   fixtures scanned as production surface) — fixed generally via new `.github/codeql/codeql-config.yml`
+   (`paths-ignore` for `**/__tests__/**`, `*.test.ts`, `*.test.tsx`), wired into `ci.yml`'s existing
+   `Initialize CodeQL` step. Gate `pass-with-disclosed-exception` (CI-config change, no vitest applies —
+   TRO-488's class). **PR #283 open, blocked on the same CodeRabbit window as item 0's queue, not yet
+   merge-requested.** Also found+fixed a real GitHub/GitLab divergence: PR #279 merged memory-bank docs
+   to GitHub, but closing #280/#281 as "redundant" was checked against a **stale cached `origin/main`
+   ref** — wrong, GitLab's main had genuinely newer content those PRs would have carried over. Reconciled
+   with a real `git merge` (0 conflicts, verified superset) + PR #282, merged; **both remotes confirmed
+   identical at `a3ef8ee7`.** Lesson: `git fetch` a fresh remote tip before diffing to decide a PR is
+   redundant — a local ref can be many commits stale mid-session with this many peers pushing.
+
+0. **This session (ship-orchestrator-current, 2026-08-16 ~13:20Z→):** ground-truthed the whole open-PR queue live rather than trusting the note below. **PR #273 (TRO-488) was already MERGED** — the "blocked on rate-limit" note below is stale, GH API limit cleared hours ago. Found and confirmed the CodeRabbit fleet-wide rate limit (see warning section above) — this is the real current blocker on the ticket-content merge queue (268/269/272/274/275/277/278), not GitHub's API. Resolved PR #275 (TRO-552)'s merge conflict (was CONFLICTING, now merge-forwarded + gate-`pass` + pushed both remotes, `de414675`). Claimed + dispatched 2 more apply-tier Backlog tickets as sonnet appliers while waiting out the CodeRabbit window: **TRO-500** (boundary-lint dynamic-import gap) and **TRO-549** (e2e login-assertion sweep) — both In Progress in Linear, worktrees `Ship-wt-tro_500`/`Ship-wt-tro_549`, results pending as of this write. Coordinating live with 2 peers (ship-1c on TRO-613, ship-16 handled docs PRs #279/280/281) via SendMessage rather than just Linear locking. **Plan: recheck CodeRabbit ~14:24Z, then merge the whole ticket-content queue in one pass** (268/269/272/274/275/277/278 + whatever TRO-500/549 produce), assuming each PR's actual CodeRabbit comment (not just the check-run status) shows a real review by then.
+
+1. **Prior wave (2026-08-16 ~05:20–07:20Z): TRO-587 done, TRO-488/TRO-589/TRO-612/TRO-614 built.** TRO-612 merged clean (PR #271, `9eee8aa0`). TRO-587 (CodeQL false-positive on `credentials.ts:35`) dismissed directly via `gh api` — no code change, alert #372 dismissed with a written reason, Linear Done. TRO-488 now merged (see item 0). TRO-589 gate-passes, PR #272 open, mergeable — **blocked only on the real CodeRabbit window (item 0/warning above), not the stale GitHub-API note this bullet used to cite.** **TRO-614 is this session's fix** (not just "in flight from another session" as the prior note said) — root-caused the `OrgChartPage.test.tsx` race precisely (second `useEffect` auto-expanding the tree after first render; test's synchronous `getByRole` for a nested row could beat it) via 2 independent CI failures on unrelated diffs (TRO-589, TRO-488), fixed with `await findByRole` for the deepest node, PR #278, gate `pass-with-disclosed-exception` (hardens an existing test, no new case). Broadcast to the fleet so others stop re-running around it.
 2. **TRO-609 (e2e serial-mode cascade) — DONE, merged 2026-08-16 ~07:10Z** (prior session/wave). PR #266, merge commit `47bf0801`. Took 6 merge-forward convoy rounds. **TRO-613 is the queued next pickup**, flagged by 2 peers as ship-6e's natural pickup (same spec file as TRO-609) — this session deliberately did not claim it.
 3. **TRO-550, TRO-492, TRO-434 all DONE** (PRs #265/#267/#270 — merged, Linear Done). TRO-492 required dismissing a genuine new CodeQL alert (`js/insufficient-password-hash` #375) as the same false-positive class as TRO-587.
 4. **Developer portal is DONE.** TRO-436/TRO-439/TRO-443, Epic E5 fully closed.
@@ -38,7 +65,92 @@
 - Live redeploy is not implied by a merged PR — verify the deployed service after any merge meant to reach production.
 - Multiple sessions share this machine's `Ship` main worktree and its `memory-bank/` files — check `git status`/re-read before overwriting.
 - **Main is moving so fast tonight (~5+ concurrent sessions) that a PR can go from `MERGEABLE` back to `CONFLICTING` between opening it and finishing one CI run.** Budget for repeated merge-forward rounds right up to the merge itself, not just once after gate.sh.
+- CHANGES.md entries are structurally linted (`web/src/lib/changesLogSections.test.ts`, TRO-371) — every entry needs a rollback heading AND a run/verify heading matching `**How to run/verify/test/reproduce...**`, `**Run it.**`, `**Verification.**`, `**Tests:**`, or a fenced code block containing `pnpm`/`npm`/`npx`/`vitest`/`playwright`. A heading like `**Proof.**` alone does **not** match and fails `tests:web` — hit and fixed live this session (TRO-590).
+- GitHub `main` is branch-protected (PR-only) — direct `git push` bounces with `GH006`. GitLab (`origin`) still accepts direct pushes. For GitLab-only content that needs to reach GitHub, push a branch and open a PR rather than trying to push main directly.
+
+## ⚠️ THIS SESSION HIT ITS USAGE LIMIT — 2026-08-16 ~14:10Z, resets 1pm America/Chicago
+
+**Confirmed live seconds before cutoff, all 6 queued PRs mergeable, none merged yet:**
+268, 269, 272, 274, 277, 278 — all `state=OPEN mergeable=MERGEABLE mergedAt=null`. All were
+merge-forwarded, CHANGES.md-resolved via `merge-changes.mjs`, and pushed to both remotes earlier
+this session (see item 0/0b above for detail) — CI was in progress at last check, should be green
+or near-green by whenever this is picked up. **`strict=false` is still set on branch protection**
+(see section below) — a fresh session should be able to `gh pr merge <n> --merge` each of these
+directly once CI shows the 3 required checks green, no further merge-forward needed unless a peer
+landed something in between.
+
+**TRO-500 applier failed** (own usage-limit hit, not a real gate failure) mid-way through running
+`gate.sh` synchronously — last state: commit succeeded, gate.sh was running. Check
+`Ship-wt-tro_500`'s git log / `.factory/gate-result.json` for where it actually landed; may just
+need a gate re-run and then push+PR+Linear, same as TRO-549 below.
+
+**TRO-549 applier finished cleanly earlier** — gate `pass-with-disclosed-exception`, committed
+`c279227c` in `Ship-wt-tro_549`, **not yet pushed/PR'd/Linear-updated** — do that first, it's ready.
+Found+disclosed (not fixed, correctly out of scope) a stale assertion in
+`oauth-authorize.spec.ts` around line 158 from TRO-550's already-merged app-name change — file a
+follow-up ticket for it.
+
+**ship-61 also hit their usage limit** (see their handoff appended further below in this file) with
+TRO-490 (committed `30788e6d`, gate 2x-failed on load-sensitive `tests:api`, 1 retry left) and
+TRO-491 (committed `a7dbcece`, gate not yet run) both uncommitted-to-remote in their worktrees.
+Known conflict between the two on `api/openapi.yaml` — resolve by regenerating
+(`pnpm --filter @ship/api openapi:generate`), never by hand.
+
+**Priority for whoever resumes, in order:**
+1. Merge the 6 ready PRs (268/269/272/274/277/278) — should be nearly mechanical now.
+2. Push/PR/Linear TRO-549 (already gate-passed, just needs the paperwork).
+3. Check TRO-500's actual state in its worktree and finish it (probably just needs a clean gate run).
+4. Restore branch protection `strict=true` (command below) once the queue is clear.
+5. File the oauth-authorize stale-regex follow-up ticket TRO-549 surfaced.
+6. Pick up TRO-490/TRO-491 per ship-61's handoff (openapi conflict, regenerate don't hand-merge).
+
+## ⚠️ URGENT — branch protection relaxed, must be restored
+
+`main`'s `required_status_checks.strict` was set to `false` (2026-08-16 ~13:50Z, Troy-approved via
+AskUserQuestion) to break a 5-session merge convoy — PRs kept going stale ("not up to date") faster
+than 10-13min CI could complete under concurrent merges, and `--admin` could NOT bypass this (tested,
+fails with "3 of 3 required status checks are expected" even as admin). Restore once the current
+merge wave is done:
+```
+gh api -X PATCH repos/troysatchell/ship/branches/main/protection/required_status_checks \
+  -F 'strict=true' -f 'contexts[]=typecheck · build · unit tests' \
+  -f 'contexts[]=source-code inventory' -f 'contexts[]=security scan (CodeQL)'
+```
+Required checks themselves were never bypassed — this only removed the "must be ahead of latest
+main" requirement, not "must be green."
+
+## Session cut short — usage-limit checkpoint, 2026-08-16 ~14:05Z
+
+**PR #275 (TRO-552) merged** (`592f908f`, confirms the CI-green-despite-CodeRabbit-rate-limit policy
+now in `SKILL.md`'s new exception). **6 more PRs merge-forwarded + CHANGES.md-resolved + pushed,
+fresh CI running as of this write, NOT yet merged**: #268 (TRO-493), #269 (TRO-588), #272 (TRO-589),
+#274 (TRO-598), #277 (TRO-591), #278 (TRO-614) — once each shows the 3 required checks green, `gh pr
+merge <n> --merge` should succeed now that `strict=false` removes the staleness race (re-check
+`gh pr view <n> --json mergeable` first; a genuine CHANGES.md conflict from a peer's merge landing
+in between is still possible and needs the same merge-changes.mjs resolution pattern used all
+session). **TRO-500 applier**: completed once (see task notification), was resumed after backgrounding
+`gate.sh` and told to run synchronously — final result not yet read by this session, check worktree
+`Ship-wt-tro_500` state / re-resume agent `a803afe9eb587083e` if silent. **TRO-549 applier**: DONE,
+gate `pass-with-disclosed-exception` (regression-test exception, assertion-only ticket, same class as
+TRO-596/609) — real discrepancy found+disclosed (not fixed): `oauth-authorize.spec.ts`'s first test
+fails at line ~158 on a stale heading regex from TRO-550's already-merged app-name change, pre-existing
+and out of scope, needs its own follow-up ticket. **Still needs, in order: (1)** push+PR+Linear-In-
+Review for TRO-549 (worktree `Ship-wt-tro_549`, commit `c279227c`), **(2)** finish/merge the 6-PR
+queue above, **(3)** restore branch protection, **(4)** file the oauth-authorize stale-regex follow-up
+ticket, **(5)** re-enable normal Backlog work. Peers active last check: ship-1c (TRO-613), ship-16
+(rolled over after TRO-590/PR #283 + a real GitHub/GitLab divergence fix, PR #282), ship-61 (TRO-490
+merging, TRO-491 in flight) — re-check Linear/`gh pr list`/`ListAgents` live, do not trust this list.
 
 ## Resume prompt for a fresh session
 
-**"Run the factory"** — read this file and `progress.md`'s latest log entry, confirm current Linear/PR state hasn't moved since (especially PR #272/#273/#278's merge status — all three were gate-green and only blocked on the GitHub rate-limit window as of ~07:20Z), then pick up TRO-434 or the next eligible Backlog ticket per `/ship-factory`'s ordering rules.
+**"Run the factory"** — read this file and `progress.md`'s latest log entry, confirm current Linear/PR state hasn't moved since. As of ~13:35Z: check `gh pr view <n> --json comments -q '.comments[-1].body'` on 268/269/272/274/275/277/278 for a *real* CodeRabbit review (not the rate-limit template) before merging any — the window was expected clear ~14:24Z. TRO-500/TRO-549 builds were dispatched and may already be done (check Linear + `ListAgents`/task notifications before re-dispatching). Once the merge queue clears, resume fresh-Backlog selection — remaining candidates were TRO-592/590/490/496/491/453/454 (all Low, TRO-500/549 claimed this session) plus whatever TRO-613 (ship-1c) and ship-16's pick produce as follow-ups.
+
+## ⏸ Handoff from a 4th concurrent session (2026-08-16 ~13:56Z) — TRO-490 + TRO-491 BUILT, not yet PR'd
+
+Session hit its usage limit mid-gate. Both tickets are committed in their worktrees, **not pushed, no PR**. Linear: both In Progress (assignee Troy). ship-38 owns the merge queue + TRO-500/549; ship-16 owns TRO-590 (I yielded it after a claim collision); ship-1c owns TRO-613.
+
+- **TRO-490** — `Ship-wt-tro_490`, branch `fix/tro-490-swagger-yaml-indentation`, commit `30788e6d` (based on `08505d2d`). Applier report: red-before-green captured (3 new round-trip tests failed with YAMLParseError, then 7/7 green), `api/openapi.json` unchanged, `api/openapi.yaml` regenerated (`paths 94 equal true`), `yaml@2.9.0` added as api devDependency, CHANGES.md entry present. **gate.sh: 2 attempts, both `fail` on `tests:api` ONLY** — attempt 1: `documents.test.ts` + `token.test.ts`; attempt 2: `route-fitness.test.ts` — every one **passed standalone** (`.factory/api-standalone.txt`), none touch swagger.ts; load avg was 9–10 (ship-90 running `pnpm test` on main concurrently). All 17 other checks ok (typecheck, build, regression-test 3 cases, changes-md, scope 6 files, defect-gate…). Scorecard rows appended for both attempts. **Next: 1 retry left in the cap** — run `scripts/factory/gate.sh` when load is lower (`uptime` < ~5); if it passes → push both remotes, open PR (body per agent-contract template; note CodeRabbit fleet-wide rate-limited at merge time), merge on gate+CI per Troy's relayed rule, GitLab sync, Linear Done. If it fails a 3rd time on a *different* standalone-passing test, that is the TRO-277 class, not a regression — mark blocked with that evidence and escalate rather than raising the cap.
+- **TRO-491** — `Ship-wt-tro_491`, branch `fix/tro-491-openapi-scopes-enum-from-registry`, commit `a7dbcece` (based on `a3ef8ee7`, post-PR-#282 main). PM decision (mine): option (a) — enum derived from `ScopeRegistry.names()` at module load (registry.ts import-free, registers all scopes at load → still one source of truth), `APIToken.scopes` required-nullable (both response sites `api-tokens.ts:112/150` always emit it). Applier report: red-before-green (3 tests, `items.enum` undefined → pass), 20/20 across openapi/api-tokens/swagger tests, `openapi.json` +33/-4 and `openapi.yaml` +25/-1 scoped to the scopes region, generator idempotent. **gate.sh NOT yet run.** Next: run gate → PR → merge. **Known conflict with TRO-490 on `api/openapi.yaml`** — whichever merges second: merge-forward main, then `pnpm --filter @ship/api openapi:generate` and commit the regenerated file (never hand-resolve it).
+- Skipped on purpose: TRO-592 (pure refactor the ticket itself defers; overlaps TRO-591's open PR #277).
+
+- Requirements sweep 2026-08-16 ~14:25Z (`w6-2026-08-16b`, commit 08505d2d): VERIFIED 59 · PARTIAL 9 · ASSUMED 3 (rulings pending) · IMPL-UNVERIFIED 3 · MISSING 2 · N/A 3 of 79; 14 gaps, 17 orphans — see audit/requirements/gaps-W6-2026-08-16b.md and REPORT-W6-2026-08-16b.md (PM GO list inside; audit session filed no tickets).

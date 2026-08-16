@@ -81,6 +81,56 @@
           "error"
         ]
       },
+      "InternalErrorResponse": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "enum": [
+              false
+            ],
+            "description": "Always false on an error response"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "enum": [
+                  "VALIDATION_ERROR",
+                  "NOT_FOUND",
+                  "UNAUTHORIZED",
+                  "FORBIDDEN",
+                  "INTERNAL_ERROR",
+                  "INVALID_CREDENTIALS",
+                  "SESSION_EXPIRED",
+                  "ALREADY_EXISTS"
+                ],
+                "description": "Machine-readable error code"
+              },
+              "message": {
+                "type": "string",
+                "description": "Human-readable error message"
+              },
+              "details": {
+                "type": "object",
+                "additionalProperties": {
+                  "nullable": true
+                },
+                "description": "Additional context, shape varies by error — e.g. a validation error carries zod's flatten() output ({formErrors, fieldErrors})."
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ]
+          }
+        },
+        "required": [
+          "success",
+          "error"
+        ]
+      },
       "BelongsToEntry": {
         "type": "object",
         "properties": {
@@ -3680,9 +3730,21 @@
             "type": "array",
             "nullable": true,
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "documents:read",
+                "documents:write",
+                "issues:read",
+                "issues:write",
+                "sprints:read",
+                "sprints:write",
+                "webhooks:manage",
+                "audit:read"
+              ],
+              "description": "A scope name registered in ScopeRegistry.",
+              "example": "documents:read"
             },
-            "description": "Scopes granted to this token (e.g. \"documents:read\"). Null = legacy unscoped token, never valid at /api/v1.",
+            "description": "Scopes granted to this token. Null = legacy unscoped token, never valid at /api/v1.",
             "example": [
               "documents:read"
             ]
@@ -3694,7 +3756,8 @@
           "prefix",
           "last_used_at",
           "created_at",
-          "expires_at"
+          "expires_at",
+          "scopes"
         ]
       },
       "CreateAPIToken": {
@@ -3716,7 +3779,19 @@
           "scopes": {
             "type": "array",
             "items": {
-              "type": "string"
+              "type": "string",
+              "enum": [
+                "documents:read",
+                "documents:write",
+                "issues:read",
+                "issues:write",
+                "sprints:read",
+                "sprints:write",
+                "webhooks:manage",
+                "audit:read"
+              ],
+              "description": "A scope name registered in ScopeRegistry.",
+              "example": "documents:read"
             },
             "minItems": 1,
             "description": "Scopes to grant this token, from ScopeRegistry (e.g. \"documents:read\"). Omit for a legacy unscoped token — never valid at /api/v1.",
@@ -12527,7 +12602,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12537,7 +12612,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12566,7 +12641,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12610,7 +12685,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12620,7 +12695,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12662,7 +12737,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12672,7 +12747,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12682,7 +12757,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12726,7 +12801,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12736,7 +12811,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12746,7 +12821,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }
@@ -12756,7 +12831,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/InternalErrorResponse"
                 }
               }
             }

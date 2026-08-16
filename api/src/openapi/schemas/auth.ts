@@ -4,6 +4,7 @@
 
 import { z, registry } from '../registry.js';
 import { UuidSchema, DateTimeSchema } from './common.js';
+import { ScopeRegistry } from '../../platform/scopes/registry.js';
 
 // ============== Login ==============
 
@@ -59,17 +60,26 @@ registry.register('SessionResponse', SessionResponseSchema);
 
 // ============== API Token ==============
 
-// scopes (PF-107 / TRO-430): non-null on a "scoped personal token" — the
-// second token class the v1 bearer middleware accepts
+// scopes (PF-107 / TRO-430 / TRO-491): non-null on a "scoped personal
+// token" — the second token class the v1 bearer middleware accepts
 // (`api/src/platform/oauth/bearerAuth.ts`). Null/absent = the pre-existing
 // legacy unscoped internal token, unchanged behavior, never valid at
-// `/api/v1`. Each element must be one of `ScopeRegistry`'s registered scope
-// strings (`api/src/platform/scopes/registry.ts`) — enforced by the route
-// handler's zod schema (`createTokenSchema`), not re-derived here to avoid
-// a second source of truth for the scope list drifting from the registry.
-const APITokenScopesSchema = z.array(z.string()).nullable().openapi({
-  description:
-    'Scopes granted to this token (e.g. "documents:read"). Null = legacy unscoped token, never valid at /api/v1.',
+// `/api/v1`. The enum is DERIVED from ScopeRegistry at module load, not
+// copied — registry.ts is import-free and registers every scope at load,
+// so `names()` is complete by the time this module evaluates. Adding a
+// scope is still a single `ScopeRegistry.register(...)` call there; this
+// doc updates itself. Runtime enforcement stays in the route handler
+// (`api/src/routes/api-tokens.ts` `scopeSchema` refine).
+const scopeNames = ScopeRegistry.names();
+if (scopeNames.length === 0) {
+  throw new Error('ScopeRegistry has no scopes registered at OpenAPI schema load — import order regression');
+}
+export const ScopeNameSchema = z.enum(scopeNames as [string, ...string[]]).openapi({
+  description: 'A scope name registered in ScopeRegistry.',
+  example: 'documents:read',
+});
+const APITokenScopesSchema = z.array(ScopeNameSchema).nullable().openapi({
+  description: 'Scopes granted to this token. Null = legacy unscoped token, never valid at /api/v1.',
   example: ['documents:read'],
 });
 
@@ -83,7 +93,7 @@ export const APITokenSchema = z.object({
   last_used_at: DateTimeSchema.nullable(),
   created_at: DateTimeSchema,
   expires_at: DateTimeSchema.nullable(),
-  scopes: APITokenScopesSchema.optional(),
+  scopes: APITokenScopesSchema,
 }).openapi('APIToken');
 
 registry.register('APIToken', APITokenSchema);
@@ -96,7 +106,7 @@ export const CreateAPITokenSchema = z.object({
   expires_in_days: z.number().int().min(1).max(365).optional().openapi({
     description: 'Days until token expires (default: never)',
   }),
-  scopes: z.array(z.string()).min(1).optional().openapi({
+  scopes: z.array(ScopeNameSchema).min(1).optional().openapi({
     description:
       'Scopes to grant this token, from ScopeRegistry (e.g. "documents:read"). Omit for a legacy unscoped token — never valid at /api/v1.',
     example: ['documents:read'],

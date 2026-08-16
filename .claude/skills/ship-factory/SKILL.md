@@ -447,6 +447,20 @@ to clear a queue.
 does not change code in service of a ticket may merge on gate + CI green alone, without waiting
 for the review. That covers factory tooling, skills, docs, the memory bank, and CI config.
 
+**Exception — CodeRabbit fleet-wide rate limit** (maintainer, 2026-08-16). CodeRabbit's review
+capacity is shared across every concurrent session on this repo (~100+ reviews/week exhausts it,
+observed 2026-08-16 ~13:25Z: *"95th percentile or higher among CodeRabbit users... next included
+review in 59 minutes"*). When it's exhausted, **merge on gate-pass + CI-green alone** rather than
+waiting out the window — do not block the queue on a review that cannot happen. Two things to get
+right before applying this: (1) confirm it's actually exhausted, not just slow — open the PR and
+read the CodeRabbit comment body itself; the check-run can show `SUCCESS` and a plain
+`@coderabbitai review` can reply "already reviewed" while the only real comment is the rate-limit
+warning template, which reads as a clean review but isn't one (verified 2026-08-16; both the GitHub
+App integration and `gate.sh`'s separate local-CLI allowance can be exhausted independently — check
+the one that's actually rate-limited before waiting on the wrong one). (2) Once the window clears,
+still triage the review when it eventually lands — same as the non-ticket-content exception above,
+skipping the gate is not skipping the reading.
+
 The test is what the change *is*, not which files it touches: if a reviewer's opinion could change
 whether the product behaves correctly, it is ticket content and the gate applies. Anything under
 `api/`, `web/`, or `shared/` is ticket content by default. When genuinely unsure, wait for the
