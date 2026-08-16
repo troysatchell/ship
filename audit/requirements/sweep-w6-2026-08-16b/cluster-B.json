@@ -1,0 +1,266 @@
+{
+  "cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS",
+  "rows": [
+    {
+      "id": "W6-R5",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-398", "TRO-430", "TRO-605", "TRO-611"],
+      "evidence": [
+        { "file": "api/src/platform/api/v1/resources/documents.ts", "line": 337, "note": "GET / (list) mounts requireScope('documents:read') after bearerAuth + rateLimitBuckets" },
+        { "file": "api/src/platform/api/v1/resources/documents.ts", "line": 426, "note": "GET /:id mounts requireScope('documents:read')" },
+        { "file": "api/src/platform/api/v1/resources/documents.ts", "line": 481, "note": "POST / mounts requireScope('documents:write')" },
+        { "file": "api/src/platform/scopes/requireScope.ts", "line": 50, "note": "export function requireScope(scope) — the require(scope) middleware factory; throws at registration time if the scope is not in ScopeRegistry" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/documents.test.ts", "line": 128, "note": "AC-1 cursor-paginated list; AC-2 GET /:id (l.257); AC-3 POST with documents:write + 403 with read-only token (l.287-307)" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/resources/__tests__/documents.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner, scratch DB, 13:37-13:40Z)", "result_excerpt": "test.log:17429 ✓ src/platform/api/v1/resources/__tests__/documents.test.ts (34 tests) 344ms" },
+      "plain_english": "The brief requires at least one public resource — documents — to offer list, get-by-id and create, each guarded by a scope-checking factory. api/src/platform/api/v1/resources/documents.ts wires all three (plus PATCH and four sub-resource reads) through requireScope('documents:read'/'documents:write'), delivered by TRO-398 (PF-200) on top of TRO-430's scope registry; the 34-test suite for it passed in this sweep's run. Nothing missing.",
+      "notes": "TRO-398 implements; TRO-430 (PF-107) provides the requireScope factory + ScopeRegistry; TRO-605 (GET /:id field widening) and TRO-611 (PATCH visibility check, PR merged 08-15) are Done hardening on the same resource. Line numbers drifted +4 vs prior matrix (333/422/477 -> 337/426/481) after TRO-611's PATCH change; re-pointed. Observed: documents.test.ts passed in this sweep's complete api run (1468/1469 api tests passed; the one failure is src/__tests__/activity.test.ts, unrelated to this cluster).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; evidence re-pointed (line drift +4 in documents.ts); added TRO-430/605/611 as factory-provider/hardening tickets"
+    },
+    {
+      "id": "W6-R6",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-397", "TRO-404", "TRO-489", "TRO-495"],
+      "evidence": [
+        { "file": "api/src/platform/api/v1/errors.ts", "line": 31, "note": "export interface ApiErrorBody { code, message, details?, request_id } — the wire shape" },
+        { "file": "api/src/platform/api/v1/errorMiddleware.ts", "line": 75, "note": "export const errorMiddleware — terminal v1 error handler; l.90 serializes ApiError as-is via toJSON(), otherwise sanitizes to server_error" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 339, "note": "check (c): every discovered v1 route's generic failure path (401 no-auth, or 404 wrong-method for public routes) returns code/message/request_id" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/__tests__/route-fitness.test.ts", "api/src/platform/api/v1/__tests__/error-middleware.test.ts", "api/src/platform/api/v1/__tests__/errors.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner)", "result_excerpt": "test.log:17973 ✓ route-fitness.test.ts (126 tests); :18120 ✓ error-middleware.test.ts (4 tests); :18247 ✓ errors.test.ts (16 tests)" },
+      "plain_english": "Every public-API failure must come back in one fixed JSON shape (code, message, optional details, request_id), and a test must prove that across all /api/v1 routes. errors.ts defines the shape, errorMiddleware.ts enforces it as the last handler, and route-fitness.test.ts walks the live router and probes each route's failure path — delivered by TRO-397 and TRO-404, hardened by TRO-489/495. All three test files passed in this sweep.",
+      "notes": "TRO-397 implements the contract + middleware; TRO-404 implements the route-enumerating fitness test; TRO-489 (helper consolidation) and TRO-495 (httpStatus assertions) harden. Adjacent, not mapped: TRO-493 (In Progress, PR #268) concerns the INTERNAL /api/oauth-apps route's error shape vs its registered schema — outside the /api/v1 surface this requirement covers.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence line for the fitness check re-pointed from file-level (line 1) to the actual check (c) at line 339"
+    },
+    {
+      "id": "W6-R8",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-402", "TRO-551"],
+      "evidence": [
+        { "file": "api/src/platform/openapi/registry.ts", "line": 67, "note": "generateV1OpenAPIDocument() builds the doc in-process with OpenApiGeneratorV31 from v1Registry.definitions (zod-to-openapi); v1Registry declared l.41" },
+        { "file": "api/src/platform/openapi/index.ts", "line": 23, "note": "export const v1OpenApiDocument = generateV1OpenAPIDocument() — generated once at module load, not hand-written" },
+        { "file": "api/src/platform/api/v1/router.ts", "line": 103, "note": "v1Routes.get('/openapi.json') serves the cached document, public/no auth" },
+        { "file": "api/src/platform/openapi/__tests__/document.test.ts", "line": 182, "note": "it('validates against the real, official OpenAPI 3.1 JSON Schema (draft 2020-12)') via @seriousme/openapi-schema-validator; negative control at l.197" },
+        { "file": "api/src/platform/openapi/__tests__/endpoint.test.ts", "line": 30, "note": "it('200s with a JSON OpenAPI 3.1 document, no auth required')" }
+      ],
+      "test_files_bearing": ["api/src/platform/openapi/__tests__/document.test.ts", "api/src/platform/openapi/__tests__/endpoint.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner); curl GET https://ship-rr6m.onrender.com/api/v1/openapi.json (read-only, this session)", "result_excerpt": "test.log:17638 ✓ document.test.ts (5 tests); :18243 ✓ endpoint.test.ts (4 tests). Live probe: HTTP 200, openapi 3.1.0, 21 paths, byte-identical to docs/openapi.json" },
+      "plain_english": "The API must publish a machine-readable OpenAPI 3.1 description at /api/v1/openapi.json, generated by code (not typed by hand) and checked against the official OpenAPI schema in a unit test. registry.ts generates it from the Zod schemas registered per route, router.ts serves it, and document.test.ts validates it against the real 3.1 JSON Schema — delivered by TRO-402 (PF-202). Both test files passed this sweep and the deployed URL returned it live.",
+      "notes": "TRO-402 implements; TRO-551 (Done) hardened the registry's /api-prefix assumption. 'Generated from route metadata' is realised as zod-to-openapi registrations in api/src/platform/openapi/schemas/*.ts (a sibling registry, not Express introspection); the route-fitness test's check (a) (see W6-R21/R44) is what guarantees those registrations track the live router. PR #276 (TRO-501) changed the v1 issues response schema (priority enum now includes 'none') and regenerated docs/openapi.json in the same commit; document.test.ts/endpoint.test.ts passed on post-#276 main.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence extended with registry.ts:67 (the actual generator) and endpoint.test.ts:30; live-URL probe repeated this session"
+    },
+    {
+      "id": "W6-R20",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-398", "TRO-602", "TRO-591", "TRO-592"],
+      "evidence": [
+        { "file": "api/src/platform/api/v1/pagination.ts", "line": 139, "note": "encodeCursor(): base64url(JSON.stringify({id, created_at})) — opaque cursor over {id, timestamp}" },
+        { "file": "api/src/platform/api/v1/pagination.ts", "line": 157, "note": "decodeCursor(): returns null on malformed input, never throws" },
+        { "file": "api/src/platform/api/v1/pagination.ts", "line": 42, "note": "PreciseTimestamp nominal brand — TRO-602 fix for same-millisecond row drops" },
+        { "file": "api/src/platform/api/v1/resources/documents.ts", "line": 385, "note": "keyset predicate (created_at, id) < ($n-1, $n); response {data, next_cursor} at l.415" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 367, "note": "check (d): every GET collection route's registered 200 schema carries data + next_cursor, or is a documented exemption" },
+        { "file": "api/src/platform/api/v1/resources/__tests__/documents.test.ts", "line": 128, "note": "AC-1: cursor-paginated list stable across a mid-iteration insertion; TRO-602 same-millisecond regression at l.186" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/__tests__/pagination.test.ts", "api/src/platform/api/v1/resources/__tests__/documents.test.ts", "api/src/platform/api/v1/resources/__tests__/audit.test.ts", "api/src/platform/api/v1/__tests__/route-fitness.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner)", "result_excerpt": "test.log:18308 ✓ pagination.test.ts (13 tests); :17429 ✓ documents.test.ts (34 tests); :17632 ✓ audit.test.ts (12 tests, incl. 'paginates with a stable cursor across pages' l.392); :17973 ✓ route-fitness.test.ts (126 tests)" },
+      "plain_english": "Lists must page with an opaque cursor (an encoded {id, timestamp}), always return {data, next_cursor}, and stay stable when rows are inserted mid-walk. pagination.ts implements the shared cursor helpers used by every v1 list route, documents.ts shows the keyset query, and the fitness test enforces the envelope on every list route — delivered by TRO-398, precision bug fixed by TRO-602. All bearing test files passed this sweep.",
+      "notes": "TRO-398 implements; TRO-602 (Done) fixed the same-millisecond drop. TRO-591 (In Review, PR #277 open — composite index) and TRO-592 (Backlog — pagination-router factory) are optimisation follow-ups on already-tested behaviour, not gaps. documents.ts keyset line drifted 383 -> 385.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence re-pointed (documents.ts 383->385) and extended with fitness check (d) + audit.test.ts stability test"
+    },
+    {
+      "id": "W6-R21",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-402", "TRO-404", "TRO-409"],
+      "evidence": [
+        { "file": "api/src/platform/openapi/index.ts", "line": 23, "note": "v1OpenApiDocument generated in-process at module load from the registry" },
+        { "file": "api/src/platform/api/v1/router.ts", "line": 103, "note": "served at GET /api/v1/openapi.json" },
+        { "file": "api/src/platform/openapi/__tests__/document.test.ts", "line": 182, "note": "unit test validates against the official OpenAPI 3.1 schema" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 288, "note": "check (a): every live v1 route has a v1Registry.registerPath entry with security matching real bearerAuth presence — throws DRIFT otherwise (spec <-> route parity)" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/__tests__/route-fitness.test.ts", "api/src/platform/openapi/__tests__/document.test.ts", "api/src/platform/openapi/__tests__/endpoint.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner); pnpm openapi:check (read-only diff, this session)", "result_excerpt": "test.log:17973 ✓ route-fitness.test.ts (126 tests); :17638 ✓ document.test.ts (5); :18243 ✓ endpoint.test.ts (4). openapi:check -> 'OK: docs/openapi.json matches the in-process /api/v1 OpenAPI registry.'" },
+      "plain_english": "This restates W6-R8 and adds that a fitness test must prove the spec and the real routes agree. route-fitness.test.ts check (a) walks every mounted /api/v1 route and fails if any lacks a spec entry (or has the wrong auth marking); TRO-402/404/409 delivered generation, the fitness gate and the committed-copy parity check. All passed this sweep.",
+      "notes": "TRO-402 implements generation/serving; TRO-404 implements the parity fitness test; TRO-409 adds the committed-copy CI drift check. Parity is one-directional in the fitness test (every route has a spec entry); the reverse (every spec entry has a route) is covered by document.test.ts's explicit route inventory (l.57) rather than a structural walk.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; added TRO-404 (the fitness test's own ticket) and openapi:check run"
+    },
+    {
+      "id": "W6-R44",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-404", "TRO-427"],
+      "evidence": [
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 161, "note": "discoverV1Routes() — structural walk of the live v1Routes router (walkRouter at l.129), not a hand list" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 288, "note": "check (a): has an OpenAPI entry" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 311, "note": "check (b): declares a scope via requireScope(...) or is in KNOWN_EXEMPTIONS (l.186: /health, /openapi.json, /me)" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 339, "note": "check (c): generic failure path returns the ApiError shape" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 367, "note": "check (d): GET collection routes register {data, next_cursor}" },
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 402, "note": "check (e) (beyond the brief's four): X-RateLimit-* headers on the failure path" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/__tests__/route-fitness.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner)", "result_excerpt": "test.log:17973 ✓ src/platform/api/v1/__tests__/route-fitness.test.ts (126 tests) 286ms" },
+      "plain_english": "A graded test scenario: one test must list every /api/v1 route automatically and check four things per route (spec entry, declared scope, error shape, cursor pagination for lists). route-fitness.test.ts does exactly this — 25 routes x 5 checks + sanity = 126 tests — delivered by TRO-404 (PF-203) with the fifth header check from TRO-427. It passed in this sweep's run.",
+      "notes": "TRO-404 implements; TRO-427 added check (e). The acceptance sub-item 'fails on an unregistered scratch route' was demonstrated once in the PR description (file header l.44-45) and is not re-run here (read-only sweep) — the DRIFT throw at l.293 is unconditional and directly readable, so that sub-item is IMPLEMENTED-UNVERIFIED-by-inspection while the test itself is VERIFIED.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence re-pointed (check (b) is at l.311, l.186 is the KNOWN_EXEMPTIONS table) and extended with discoverV1Routes l.161 and check (e) l.402"
+    },
+    {
+      "id": "W6-R45",
+      "verdict": "IMPLEMENTED-UNVERIFIED",
+      "tickets": ["TRO-402", "TRO-422", "TRO-599", "TRO-607", "TRO-501"],
+      "evidence": [
+        { "file": "api/src/platform/openapi/__tests__/document.test.ts", "line": 182, "note": "spec validity against the official OpenAPI 3.1 JSON Schema (same as W6-R8) — PASSED this sweep" },
+        { "file": "sdk/src/__tests__/parity.test.ts", "line": 133, "note": "discoverOpenApiOperations() walks the real v1OpenApiDocument.paths" },
+        { "file": "sdk/src/__tests__/parity.test.ts", "line": 164, "note": "discoverSdkMethods() walks the real SDK class prototypes" },
+        { "file": "sdk/src/__tests__/parity.test.ts", "line": 296, "note": "per spec operation: 'has a corresponding typed SDK method, or is a documented exemption'; l.192 SDK_TO_OPERATION table with bidirectional staleness checks (l.263-336)" },
+        { "file": "sdk/src/types.ts", "line": 170, "note": "SDK IssuePriority = 'low'|'medium'|'high'|'urgent' — omits 'none' that shared/src/types/document.ts:66 and docs/openapi.json:431 now carry after PR #276 (field-level type drift; method-level parity unaffected)" }
+      ],
+      "test_files_bearing": ["sdk/src/__tests__/parity.test.ts", "api/src/platform/openapi/__tests__/document.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "A graded test scenario: check the generated spec is valid OpenAPI 3.1, then confirm the SDK has a typed method for every operation in it. document.test.ts covers validity (passed this sweep) and sdk/src/__tests__/parity.test.ts walks spec operations against SDK methods (delivered by TRO-422/PF-405). The SDK half could not be marked verified this sweep because the test chain stopped after one unrelated api failure and the sdk suite never ran; the main session can upgrade once test:sdk runs. One small new drift from PR #276: the SDK's issue-priority type omits the new 'none' value.",
+      "notes": "TRO-402 implements spec generation; TRO-422 implements the spec<->SDK parity fitness test; TRO-599/607 (Done) hardened SDK response/request type drift. Verification state this sweep: test.log's `pnpm test` = test:api && test:web && test:agent && test:sdk && test:cli — api reported 1 failed (activity.test.ts) so the && chain halted (test.log:18339 'Test Files 1 failed | 124 passed'); sdk/src/__tests__/parity.test.ts did NOT execute. Held at IMPLEMENTED-UNVERIFIED per brief rule 4; upgrade to VERIFIED if the main session runs `pnpm --filter @ship/sdk test` and parity.test.ts passes. NEW UNTICKETED DRIFT (observed from source): sdk/src/types.ts:170 header says it mirrors shared's IssuePriority 'verbatim', but PR #276 (TRO-501, Done) widened shared/src/types/document.ts:66 and api/src/platform/openapi/schemas/issues.ts:28 to include 'none' and regenerated docs/openapi.json (l.431 'none'); the SDK type was not widened. No test catches it (parity.test.ts is method-level; type-level only). Suggest a small follow-up: widen sdk/src/types.ts IssuePriority (and check agent/ mirrors). This does not change the method-parity verdict.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "downgraded from VERIFIED to IMPLEMENTED-UNVERIFIED because the sdk vitest suite did not run this sweep (api failure halted the && chain); noted new SDK IssuePriority type drift from PR #276"
+    },
+    {
+      "id": "W6-R35",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-427", "TRO-401", "TRO-494", "TRO-552", "TRO-590"],
+      "evidence": [
+        { "file": "api/src/platform/ratelimit/middleware.ts", "line": 21, "note": "RATE_LIMIT_HEADERS = X-RateLimit-Limit / -Remaining / -Reset" },
+        { "file": "api/src/platform/ratelimit/middleware.ts", "line": 131, "note": "rateLimitDefaults sets baseline headers pre-auth; mounted globally at router.ts:88 before routing" },
+        { "file": "api/src/platform/ratelimit/middleware.ts", "line": 171, "note": "rateLimitBuckets: per-token (t:hash) and per-app (a:clientId) buckets, peek-then-consume; mounted after bearerAuth on all 23 protected v1 routes (bearerAuth count == rateLimitBuckets count in every resources/*.ts)" },
+        { "file": "api/src/platform/ratelimit/middleware.ts", "line": 202, "note": "res.setHeader('Retry-After', ...) on the 429 path" },
+        { "file": "api/src/middleware/rate-limit.ts", "line": 212, "note": "isLegacyLimiterExemptPath(): path === '/v1' || startsWith('/v1/') — used as skip() by both legacy /api/ limiters at l.333 and l.351" }
+      ],
+      "test_files_bearing": ["api/src/platform/ratelimit/__tests__/middleware.test.ts", "api/src/platform/ratelimit/__tests__/tokenBucket.test.ts", "api/src/platform/ratelimit/__tests__/config.test.ts", "api/src/middleware/__tests__/rate-limit-v1-exemption.test.ts", "api/src/middleware/__tests__/rate-limit.test.ts", "api/src/platform/api/v1/__tests__/route-fitness.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner)", "result_excerpt": "test.log:17974 ✓ ratelimit/middleware.test.ts (9 tests, incl. '429s with Retry-After once the per-token bucket is exhausted' l.143); :18249 ✓ tokenBucket.test.ts (11, injected FakeClock); :18280 ✓ config.test.ts (5); :16907 ✓ rate-limit-v1-exemption.test.ts (4); :15069 ✓ rate-limit.test.ts (18)" },
+      "plain_english": "Public API calls must be throttled by two token buckets (per app and per token), every response must carry the three X-RateLimit headers, and a throttled 429 must say when to retry. api/src/platform/ratelimit/middleware.ts implements both buckets, the headers and Retry-After (TRO-427/PF-500), and api/src/middleware/rate-limit.ts exempts /api/v1 from the older, stricter internal limiters (TRO-401/PF-004). All five bearing test files passed this sweep; TRO-552 (an edge-case test for the exemption predicate) is still open as PR #275.",
+      "notes": "TRO-427 implements buckets/headers/429; TRO-401 implements the legacy-limiter exemption; TRO-494 (Done) hardened the exemption proof at configurable thresholds; TRO-552 (In Review, PR #275 open, not on main) adds boundary tests for '/v10' and '/v1foo' — predicate at rate-limit.ts:212 is correct on inspection but those inputs remain untested on main; TRO-590 (In Progress) is CodeQL noise about test-only apps, not a behaviour gap. Adjacent, not mapped: TRO-588 (In Progress, PR #269) adds route-scoped limits to /oauth/* — outside the /api/v1 public-resource surface this requirement names.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; TRO-552 status moved Backlog -> In Review (PR #275 open, unmerged)"
+    },
+    {
+      "id": "W6-R36",
+      "verdict": "PARTIAL",
+      "tickets": ["TRO-432", "TRO-436", "TRO-439", "TRO-443"],
+      "evidence": [
+        { "file": "api/src/db/migrations/049_public_api_audit.sql", "line": 40, "note": "CREATE TABLE public_api_audit (request_id, app_client_id, user_id, method, route, scope_used, status, latency_ms, created_at) — applied in this sweep's fresh migration (d-public_api_audit.txt)" },
+        { "file": "api/src/platform/audit/middleware.ts", "line": 111, "note": "auditLogMiddleware — one row per /api/v1 response via res.on('finish'); INSERT at l.61; mounted before routing at router.ts:89" },
+        { "file": "api/src/platform/api/v1/resources/audit.ts", "line": 89, "note": "GET /api/v1/audit — cursor-paginated, ?app_client_id= filter, admin/owner/first-party gated (authorization model l.14-60)" },
+        { "file": "sdk/src/resources/audit.ts", "line": 68, "note": "SDK audit.list() typed client for the endpoint" },
+        { "file": "web/src/contexts/DeveloperPortalContext.tsx", "line": 35, "note": "portal token mints 'audit:read' scope — but no web/src code calls /api/v1/audit (grep 'v1/audit' in web/src: 0 hits)" },
+        { "file": "web/src/components/sidebars/DeveloperSidebar.tsx", "line": 21, "note": "DEVELOPER_NAV has exactly two entries: /developer/apps and /developer/webhooks (l.23) — no audit-trail view in the portal" }
+      ],
+      "test_files_bearing": ["api/src/platform/audit/__tests__/middleware.test.ts", "api/src/platform/api/v1/resources/__tests__/audit.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner) — covers the recording + API half only", "result_excerpt": "test.log:18217 ✓ platform/audit/__tests__/middleware.test.ts (4 tests); :17632 ✓ resources/__tests__/audit.test.ts (12 tests, incl. 'the request that just listed the audit trail is itself audited' l.432)" },
+      "plain_english": "Every public API call must be logged (who, which app, which route, scope, status, how long) and be lookable-up in the developer portal. The logging table, the recording middleware, the admin-only GET /api/v1/audit endpoint and an SDK client all exist and their tests passed this sweep (TRO-432/PF-501). What is missing is the portal part: the developer portal (TRO-436/439) has only Apps and Webhooks pages and never calls the audit endpoint, so an admin cannot browse the API audit trail in the UI today.",
+      "notes": "TRO-432 implements table+middleware+API (ticket title says 'migration 046'; the file landed as 049_public_api_audit.sql after renumbering). TRO-436/TRO-439 built the portal (apps; webhooks deliveries/DLQ/replay/subscriptions) — neither includes an audit view, and PLUGFORGE.MD's PF-501 wording ('GET /api/v1/audit ... for the portal') delivered only the endpoint. TRO-443 (PF-504, Done) recorded a GO decision on the full portal build; no ticket scopes an audit-trail page. CORRECTION vs prior sweep: the 08-16 matrix upgraded this row to IMPLEMENTED-UNVERIFIED citing 'portal query surface now code-complete via TRO-436/439' — that was inferred from the portal existing, not observed; grep of web/src shows zero calls to /api/v1/audit and DeveloperSidebar.tsx lists no audit entry. Downstream: the 08-16 report's 'E5 fully closed' framing overstates R36. web/src/lib/api.ts getAuditLogs (l.489/572) is the pre-existing INTERNAL workspace audit_logs table, not public_api_audit.",
+      "suggested_scope": "Add an 'Audit' page under /developer/* (DeveloperSidebar DEVELOPER_NAV entry) that calls GET /api/v1/audit via usePortalToken().callV1 with cursor pagination and an app_client_id filter; the portal token already carries audit:read (DeveloperPortalContext.tsx:35). Add an RTL test + optional e2e. Ticket needed — none exists.",
+      "assumption": "'Queryable in the developer portal' means a web UI view under /developer/* that reads public_api_audit rows, not merely an admin-scoped API endpoint the portal token could call.",
+      "needs_ruling": "Does 'queryable in the developer portal' require a web UI view of the public API audit trail (none exists), or is the admin-scoped GET /api/v1/audit endpoint + SDK audit.list() sufficient to satisfy it?",
+      "delta_vs_prior": "downgraded from IMPLEMENTED-UNVERIFIED to PARTIAL because the portal query surface the prior sweep credited does not exist in web/src (unmarked inference corrected); recording+API half stays verified"
+    },
+    {
+      "id": "W6-R54",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-427"],
+      "evidence": [
+        { "file": "api/src/platform/api/v1/__tests__/route-fitness.test.ts", "line": 402, "note": "check (e): every discovered v1 route carries X-RateLimit-Limit/-Remaining/-Reset on its generic FAILURE path (401/404) — the error-response case explicitly" },
+        { "file": "api/src/platform/api/v1/router.ts", "line": 88, "note": "v1Router.use(rateLimitDefaults) — global, before routing, so even pre-auth failures carry headers" },
+        { "file": "api/src/platform/ratelimit/__tests__/middleware.test.ts", "line": 143, "note": "429 path carries headers + Retry-After" }
+      ],
+      "test_files_bearing": ["api/src/platform/api/v1/__tests__/route-fitness.test.ts", "api/src/platform/ratelimit/__tests__/middleware.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm test (sweep runner)", "result_excerpt": "test.log:17973 ✓ route-fitness.test.ts (126 tests incl. check (e) per route); :17974 ✓ ratelimit/middleware.test.ts (9 tests)" },
+      "plain_english": "100% of public API responses — including errors — must carry rate-limit headers. A global middleware sets them before any route runs and the per-route fitness test's check (e) asserts them on each route's error path (TRO-427/PF-500). Passed this sweep.",
+      "notes": "TRO-427 implements. Coverage is asserted per mounted route (25 routes) on the 401/404 failure path and on 200/429 in middleware.test.ts; a wholly unmatched path (v1 notFoundHandler) is covered by the global rateLimitDefaults mount at router.ts:88 (observed from source, not separately asserted by name).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same"
+    },
+    {
+      "id": "W6-R74",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-409", "TRO-402", "TRO-501"],
+      "evidence": [
+        { "file": "docs/openapi.json", "line": 1, "note": "line 1 = '{' (whole-file artifact): committed static spec, openapi 3.1.0, 21 paths; last regenerated by commit 8592393f (PR #276)" },
+        { "file": "api/src/scripts/generate-v1-openapi.ts", "line": 81, "note": "diffAgainstCommitted() — regenerate in memory and diff; --check mode (l.98) exits 1 on drift, writes only to os.tmpdir()" },
+        { "file": ".github/workflows/ci.yml", "line": 98, "note": "run: pnpm openapi:check — 'OpenAPI v1 spec drift check (docs/openapi.json)' step" },
+        { "file": ".gitlab-ci.yml", "line": 83, "note": "- pnpm openapi:check — mirrored GitLab step" },
+        { "file": "api/src/platform/api/v1/router.ts", "line": 103, "note": "live route GET /api/v1/openapi.json" }
+      ],
+      "test_files_bearing": ["api/src/platform/openapi/__tests__/document.test.ts", "api/src/platform/openapi/__tests__/endpoint.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm openapi:check (this session, read-only regenerate+diff); curl -s https://ship-rr6m.onrender.com/api/v1/openapi.json (this session, GET); pnpm test (sweep runner)", "result_excerpt": "openapi:check -> 'OK: docs/openapi.json matches the in-process /api/v1 OpenAPI registry.' Live probe -> HTTP 200 in 0.32s, openapi 3.1.0, 21 paths, python json compare == committed docs/openapi.json: identical (so the deployed instance includes PR #276's 'none' enum). test.log:17638 ✓ document.test.ts (5); :18243 ✓ endpoint.test.ts (4)" },
+      "plain_english": "The spec must be reachable on the deployed server AND committed as docs/openapi.json, with CI failing if the two drift. This session fetched the live URL (200, identical to the committed file), ran the parity check locally (OK), and both CI pipelines have the drift step (TRO-409/PF-204). PR #276 regenerated the committed copy when it changed the issues schema, and the deployed instance already serves that version.",
+      "notes": "TRO-409 implements the committed copy + CI parity; TRO-402 provides the live route; TRO-501 (PR #276, merged since prior sweep) is the most recent change to docs/openapi.json and regenerated it in the same commit — parity holds. CI job wiring confirmed by reading YAML; this session did not execute the CI pipeline itself. Deployed instance = Render (ship-rr6m.onrender.com), the same host the prior sweep probed.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; live probe + openapi:check re-run this session on post-#276 main (docs/openapi.json now last touched by 8592393f, not 715b673)"
+    },
+    {
+      "id": "W6-R66",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-601"],
+      "evidence": [
+        { "file": "tsconfig.json", "line": 13, "note": "root compilerOptions: \"strict\": true" },
+        { "file": "sdk/tsconfig.json", "line": 2, "note": "extends ../tsconfig.json; overrides only rootDir/outDir/composite — no strict weakening" },
+        { "file": "api/tsconfig.json", "line": 2, "note": "extends ../tsconfig.json; no strict weakening (platform/** is under src/ and type-checked)" },
+        { "file": "integrations/cli/tsconfig.json", "line": 2, "note": "extends ../../tsconfig.json (browser-demo and slack tsconfigs identical at line 2)" },
+        { "file": "api/src/platform/openapi/registry.ts", "line": 30, "note": "OpenApiGeneratorV31 from @asteasolutions/zod-to-openapi — Zod schemas drive request/response validation and spec generation" }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": { "command": "pnpm type-check (sweep runner, typecheck.log)", "result_excerpt": "verify-run.log: 'typecheck exit=0'; typecheck.log: shared/sdk/integrations-cli/integrations-browser-demo/agent/integrations-slack/api/web all 'type-check: Done' (8 of 9 workspace projects have the script)" },
+      "plain_english": "New platform and SDK code must compile under TypeScript strict mode and use Zod for schemas/OpenAPI. The root tsconfig sets strict:true and every package (api, sdk, integrations/*, agent, web, shared) inherits it without loosening; the whole workspace type-checked clean in this sweep. Zod-to-OpenAPI drives the v1 spec. Nothing missing.",
+      "notes": "No ticket implements this directly (it is a standing constraint); TRO-601 (Done) hardened the CI type-check ordering (build sdk before type-check) so the strict check actually runs on fresh checkouts — listed as hardening. Caveat observed from source: sdk/tsconfig.json excludes src/__tests__/** from tsc (documented trade-off for one cross-package live-server test), so sdk test files run under vitest/esbuild without tsc type-checking; sdk/src runtime code is fully strict-checked. Zod use is on the api/platform side; sdk/ deliberately has zero runtime deps and no Zod (consistent with the requirement's 'request/response schemas and OpenAPI generation' scope, per prior sweep's cross-cluster note).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence line 0 placeholders replaced with real line 2 (extends) citations; added registry.ts:30 for the Zod half; TRO-601 added as hardening"
+    }
+  ],
+  "commands_run": [
+    { "command": "sed -n / grep -n on every cited file:line (documents.ts 337/426/481, requireScope.ts:50, errors.ts:31, errorMiddleware.ts:75/90, route-fitness.test.ts 129/161/186/288/311/339/367/402, openapi/index.ts:23, registry.ts:30/41/67, router.ts 88/89/103, pagination.ts 42/139/157, documents.ts:385, documents.test.ts 128/186, ratelimit/middleware.ts 21/131/171/202, rate-limit.ts 212/333/351, audit middleware 61/111, audit.ts:89, 049 migration l.40, sdk types.ts:170, shared document.ts:66, docs/openapi.json:431, DeveloperPortalContext.tsx:35, DeveloperSidebar.tsx:21/23, tsconfigs, ci.yml:98, .gitlab-ci.yml:83, generate-v1-openapi.ts:81/98)", "result": "all lines contain what the notes say", "bears_on": ["W6-R5","W6-R6","W6-R8","W6-R20","W6-R21","W6-R44","W6-R45","W6-R35","W6-R36","W6-R54","W6-R74","W6-R66"] },
+    { "command": "tail/grep of audit/requirements/sweep-w6-2026-08-16b/test.log (complete: started 13:37:47Z, exit=1 at 13:40:03Z per verify-run.log)", "result": "api: Test Files 1 failed | 124 passed (125); Tests 1 failed | 1468 passed. Only failure: src/__tests__/activity.test.ts 'only queries entities in the authenticated workspace' (expected 200 got 400) — outside cluster B. Because root `pnpm test` chains test:api && test:web && test:agent && test:sdk && test:cli, the web/agent/sdk/cli suites did NOT run — sdk/src/__tests__/parity.test.ts has no result this sweep.", "bears_on": ["W6-R45","W6-R5","W6-R6","W6-R8","W6-R20","W6-R21","W6-R44","W6-R35","W6-R36","W6-R54"] },
+    { "command": "grep per-file ✓ lines in test.log", "result": "documents.test.ts 34 (l.17429); audit.test.ts 12 (17632); document.test.ts 5 (17638); route-fitness.test.ts 126 (17973); ratelimit/middleware.test.ts 9 (17974); error-middleware.test.ts 4 (18120); audit/middleware.test.ts 4 (18217); endpoint.test.ts 4 (18243); errors.test.ts 16 (18247); tokenBucket.test.ts 11 (18249); config.test.ts 5 (18280); pagination.test.ts 13 (18308); rate-limit-v1-exemption.test.ts 4 (16907); rate-limit.test.ts 18 (15069)", "bears_on": ["W6-R5","W6-R6","W6-R8","W6-R20","W6-R21","W6-R44","W6-R35","W6-R36","W6-R54","W6-R74"] },
+    { "command": "pnpm openapi:check (tsx generate-v1-openapi.ts --check; regenerates in memory, writes only to os.tmpdir() on drift; git status unchanged afterwards)", "result": "OK: /Users/troy/repos/GAUNTLET/Ship/docs/openapi.json matches the in-process /api/v1 OpenAPI registry.", "bears_on": ["W6-R74","W6-R21"] },
+    { "command": "curl -s -m 30 https://ship-rr6m.onrender.com/api/v1/openapi.json + python3 json equality vs docs/openapi.json", "result": "HTTP 200 (0.32s); openapi 3.1.0; 21 paths; identical: True", "bears_on": ["W6-R74","W6-R8"] },
+    { "command": "grep -c '^\\s*bearerAuth,' vs '^\\s*rateLimitBuckets,' across api/src/platform/api/v1/resources/*.ts", "result": "counts equal in every file (audit 1/1, changes 1/1, documents 8/8, issues 2/2, me 1/1, people 1/1, sprints 2/2, webhooks 7/7) — 23 protected routes all mount rateLimitBuckets", "bears_on": ["W6-R35","W6-R54"] },
+    { "command": "grep -rn 'v1/audit|/audit' web/src ; grep -c -i audit web/src/pages/Developer*.tsx ; read DeveloperSidebar.tsx DEVELOPER_NAV", "result": "0 calls to /api/v1/audit anywhere in web/src; DeveloperApps/AppDetail/Portal contain no 'audit'; nav = Apps + Webhooks only. web/src/lib/api.ts audit hits are the internal /api/admin/audit-logs (audit_logs table), not public_api_audit", "bears_on": ["W6-R36"] },
+    { "command": "git show --stat 8592393f (PR #276) ; git log -- docs/openapi.json ; grep 'none' sdk/src/types.ts", "result": "#276 touched shared/src/types/document.ts, api/src/platform/openapi/schemas/issues.ts, docs/openapi.json (regenerated), webhooks events.ts; sdk/src/types.ts IssuePriority (l.170) NOT widened — no 'none'", "bears_on": ["W6-R45","W6-R74","W6-R8"] },
+    { "command": "cat typecheck.log / verify-run.log", "result": "typecheck exit=0; 8 workspace packages 'type-check: Done'", "bears_on": ["W6-R66"] }
+  ]
+}

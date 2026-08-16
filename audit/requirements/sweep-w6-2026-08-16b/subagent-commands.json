@@ -1,0 +1,743 @@
+[
+  {
+    "command": "sed -n '<line>p' on every cited file:line (two batches, ~95 citations)",
+    "result": "every cited line reopened and matched its note; web/src/App.tsx does not exist — consent route citation moved to web/src/main.tsx:211",
+    "bears_on": [
+      "W6-R2",
+      "W6-R3",
+      "W6-R4",
+      "W6-R7",
+      "W6-R13",
+      "W6-R14",
+      "W6-R15",
+      "W6-R16",
+      "W6-R17",
+      "W6-R18",
+      "W6-R19",
+      "W6-R42",
+      "W6-R43"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "tail/grep audit/requirements/sweep-w6-2026-08-16b/test.log + verify-run.log",
+    "result": "test run is COMPLETE (verify-run.log: 'test exit=1', DONE 13:40:03Z). api suite: 124/125 files passed, 1468/1469 tests; sole failure src/__tests__/activity.test.ts (test.log:18320). Because pnpm test chains with &&, test:web/test:agent/test:sdk/test:cli never ran. Cluster-A api files all ✓: boundary-lint 14966, token 17269, app-registration 17463 (13 tests), device 17637, authorize 17807, route-fitness 17973, bearerAuth 18018, refresh-rotation-stolen-token 18072, registry 18315",
+    "bears_on": [
+      "W6-R2",
+      "W6-R4",
+      "W6-R7",
+      "W6-R13",
+      "W6-R14",
+      "W6-R15",
+      "W6-R16",
+      "W6-R17",
+      "W6-R18",
+      "W6-R19",
+      "W6-R43"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "grep 'typecheck exit' verify-run.log; tail typecheck.log",
+    "result": "typecheck exit=0 (api/web/integrations done)",
+    "bears_on": [],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "git log --oneline -- api/src/platform/oauth/appRegistration.ts; git show --stat ef385cf1",
+    "result": "64901ff5 TRO-492 rotation race fix is on main (#267); ef385cf1 (audit:read scope) touched registry.ts, registry.test.ts, requireScope.ts (audit hook only)",
+    "bears_on": [
+      "W6-R2",
+      "W6-R13",
+      "W6-R16"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "gh pr view 268 269 272 274 275 --json state,mergeable",
+    "result": "all OPEN, mergeable UNKNOWN — TRO-493, TRO-588, TRO-589, TRO-598, TRO-552 fixes are NOT on main",
+    "bears_on": [
+      "W6-R2",
+      "W6-R13",
+      "W6-R14",
+      "W6-R15",
+      "W6-R18"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "grep -n 'ImportExpression\\|no-restricted-syntax' eslint.config.mjs",
+    "result": "no matches — TRO-500 dynamic-import gap still present on main",
+    "bears_on": [
+      "W6-R19"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "grep -rn 'ScopeRegistry.register(' api/src --include='*.test.ts'",
+    "result": "no test registers a novel scope at test time; only registry.test.ts's header comment references it",
+    "bears_on": [
+      "W6-R16"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "cat audit/requirements/sweep-w6-2026-08-16b/d-oauth_apps.txt, d-oauth_device_codes.txt",
+    "result": "oauth_apps has client_secret_hash/redirect_uris/requested_scopes/owner_user_id + UNIQUE client_id; oauth_device_codes.user_code is plaintext text with UNIQUE index (TRO-589)",
+    "bears_on": [
+      "W6-R13",
+      "W6-R15"
+    ],
+    "_cluster": "A — E0/E1 OAuth core & boundary"
+  },
+  {
+    "command": "sed -n / grep -n on every cited file:line (documents.ts 337/426/481, requireScope.ts:50, errors.ts:31, errorMiddleware.ts:75/90, route-fitness.test.ts 129/161/186/288/311/339/367/402, openapi/index.ts:23, registry.ts:30/41/67, router.ts 88/89/103, pagination.ts 42/139/157, documents.ts:385, documents.test.ts 128/186, ratelimit/middleware.ts 21/131/171/202, rate-limit.ts 212/333/351, audit middleware 61/111, audit.ts:89, 049 migration l.40, sdk types.ts:170, shared document.ts:66, docs/openapi.json:431, DeveloperPortalContext.tsx:35, DeveloperSidebar.tsx:21/23, tsconfigs, ci.yml:98, .gitlab-ci.yml:83, generate-v1-openapi.ts:81/98)",
+    "result": "all lines contain what the notes say",
+    "bears_on": [
+      "W6-R5",
+      "W6-R6",
+      "W6-R8",
+      "W6-R20",
+      "W6-R21",
+      "W6-R44",
+      "W6-R45",
+      "W6-R35",
+      "W6-R36",
+      "W6-R54",
+      "W6-R74",
+      "W6-R66"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "tail/grep of audit/requirements/sweep-w6-2026-08-16b/test.log (complete: started 13:37:47Z, exit=1 at 13:40:03Z per verify-run.log)",
+    "result": "api: Test Files 1 failed | 124 passed (125); Tests 1 failed | 1468 passed. Only failure: src/__tests__/activity.test.ts 'only queries entities in the authenticated workspace' (expected 200 got 400) — outside cluster B. Because root `pnpm test` chains test:api && test:web && test:agent && test:sdk && test:cli, the web/agent/sdk/cli suites did NOT run — sdk/src/__tests__/parity.test.ts has no result this sweep.",
+    "bears_on": [
+      "W6-R45",
+      "W6-R5",
+      "W6-R6",
+      "W6-R8",
+      "W6-R20",
+      "W6-R21",
+      "W6-R44",
+      "W6-R35",
+      "W6-R36",
+      "W6-R54"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "grep per-file ✓ lines in test.log",
+    "result": "documents.test.ts 34 (l.17429); audit.test.ts 12 (17632); document.test.ts 5 (17638); route-fitness.test.ts 126 (17973); ratelimit/middleware.test.ts 9 (17974); error-middleware.test.ts 4 (18120); audit/middleware.test.ts 4 (18217); endpoint.test.ts 4 (18243); errors.test.ts 16 (18247); tokenBucket.test.ts 11 (18249); config.test.ts 5 (18280); pagination.test.ts 13 (18308); rate-limit-v1-exemption.test.ts 4 (16907); rate-limit.test.ts 18 (15069)",
+    "bears_on": [
+      "W6-R5",
+      "W6-R6",
+      "W6-R8",
+      "W6-R20",
+      "W6-R21",
+      "W6-R44",
+      "W6-R35",
+      "W6-R36",
+      "W6-R54",
+      "W6-R74"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "pnpm openapi:check (tsx generate-v1-openapi.ts --check; regenerates in memory, writes only to os.tmpdir() on drift; git status unchanged afterwards)",
+    "result": "OK: /Users/troy/repos/GAUNTLET/Ship/docs/openapi.json matches the in-process /api/v1 OpenAPI registry.",
+    "bears_on": [
+      "W6-R74",
+      "W6-R21"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "curl -s -m 30 https://ship-rr6m.onrender.com/api/v1/openapi.json + python3 json equality vs docs/openapi.json",
+    "result": "HTTP 200 (0.32s); openapi 3.1.0; 21 paths; identical: True",
+    "bears_on": [
+      "W6-R74",
+      "W6-R8"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "grep -c '^\\s*bearerAuth,' vs '^\\s*rateLimitBuckets,' across api/src/platform/api/v1/resources/*.ts",
+    "result": "counts equal in every file (audit 1/1, changes 1/1, documents 8/8, issues 2/2, me 1/1, people 1/1, sprints 2/2, webhooks 7/7) — 23 protected routes all mount rateLimitBuckets",
+    "bears_on": [
+      "W6-R35",
+      "W6-R54"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "grep -rn 'v1/audit|/audit' web/src ; grep -c -i audit web/src/pages/Developer*.tsx ; read DeveloperSidebar.tsx DEVELOPER_NAV",
+    "result": "0 calls to /api/v1/audit anywhere in web/src; DeveloperApps/AppDetail/Portal contain no 'audit'; nav = Apps + Webhooks only. web/src/lib/api.ts audit hits are the internal /api/admin/audit-logs (audit_logs table), not public_api_audit",
+    "bears_on": [
+      "W6-R36"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "git show --stat 8592393f (PR #276) ; git log -- docs/openapi.json ; grep 'none' sdk/src/types.ts",
+    "result": "#276 touched shared/src/types/document.ts, api/src/platform/openapi/schemas/issues.ts, docs/openapi.json (regenerated), webhooks events.ts; sdk/src/types.ts IssuePriority (l.170) NOT widened — no 'none'",
+    "bears_on": [
+      "W6-R45",
+      "W6-R74",
+      "W6-R8"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "cat typecheck.log / verify-run.log",
+    "result": "typecheck exit=0; 8 workspace packages 'type-check: Done'",
+    "bears_on": [
+      "W6-R66"
+    ],
+    "_cluster": "B — E2 resources, OpenAPI, rate limiting, audit, strict TS"
+  },
+  {
+    "command": "tail -30 audit/requirements/sweep-w6-2026-08-16b/test.log; grep for each webhook test file",
+    "result": "test.log complete: 'Test Files 1 failed | 124 passed (125)', 'Tests 1 failed | 1468 passed (1469)' — the one failure is src/__tests__/activity.test.ts (unrelated to this cluster). events.test.ts 23 ✓ (:18272), publish-boundary.test.ts 3 ✓ (:18226), eventBus.test.ts 6 ✓ (:18251), signer.test.ts 20 ✓ (:18274), deliverer.test.ts 13 ✓ (:17792), secretEncryption.test.ts 7 ✓ (:18278), resources/__tests__/webhooks.test.ts 34 ✓ (:17225). Because root `pnpm test` is `test:api && test:web && test:agent && test:sdk && test:cli` and api exited 1, web/agent/sdk/cli suites did NOT run this sweep.",
+    "bears_on": [
+      "W6-R22",
+      "W6-R23",
+      "W6-R24",
+      "W6-R25",
+      "W6-R26",
+      "W6-R27",
+      "W6-R28",
+      "W6-R29",
+      "W6-R47",
+      "W6-R48",
+      "W6-R53",
+      "W6-R68"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "cat audit/requirements/sweep-w6-2026-08-16b/verify-run.log; tail typecheck.log",
+    "result": "migrate exit=0 (56 applied), typecheck exit=0 (api/web/agent/integrations/slack all Done), test exit=1",
+    "bears_on": [
+      "W6-R24",
+      "W6-R28",
+      "W6-R27",
+      "W6-R48"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "grep -n '04[78]\\|05[01]' audit/requirements/sweep-w6-2026-08-16b/migrate.log; head d-webhook_subscriptions.txt d-webhook_deliveries.txt",
+    "result": "047, 048, 050, 051 each '✅ applied' on the fresh scratch DB; \\d webhook_subscriptions shows app_id/event_type/target_url/signing_secret_ciphertext/active/created_at; \\d webhook_deliveries shows subscription_id/event_id/attempt_number/response_status/response_excerpt/latency_ms/idempotency_key/replayed_from_id (schema_migrations.txt itself is an ERROR — wrong column name in the dump query — so migrate.log is the source)",
+    "bears_on": [
+      "W6-R24",
+      "W6-R28",
+      "W6-R29"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "grep -rn 'publish(' api/src/routes/ ; grep -rn getEventBus api/src/routes/ ; grep -rn -E '\\.publish\\(|getEventBus\\(\\)' api/src --include='*.ts' | grep -v test",
+    "result": "routes: only api/src/routes/issues.test.ts:514 (comment) for publish(; getEventBus only in *.test.ts (issues.test.ts, programs.test.ts — subscribers, not publishers). Non-test publish call sites: api/src/services/documentService.ts only (lines 425, 451, 460, 477, 498, 508, 549, 556); api/src/index.ts:134 wires the deliverer as a subscriber.",
+    "bears_on": [
+      "W6-R23"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "sed -n / grep -n on every cited line (events.ts 110/248; eventBus.ts 48/62; documentService.ts 13/82/451; publish-boundary.test.ts 70/88; architecture.md 354/369; 047 sql 47; webhooks.ts 211/331/336-340/407/483/578/621/774/809/843/881; scopes/registry.ts 82; webhooks.test.ts 357/521/670/770/1071/1156/1317/1503; signer.ts 30/34/121/144; signer.test.ts 71/82/91/100/185/193; deliverer.ts 54/109/112/694/707/744/849/855; deliverer.test.ts 11/229/242/276/301/319/353/393/612; clock.ts 44; index.ts 119/134/135; DeveloperPortal.tsx 127/163/257/391; DeveloperPortal.test.tsx 152; e2e/developer-portal-dlq-replay.spec.ts 169/216-229; ttfe.ts 491/498; ttfe.config.json 9-10; thresholds.ts 18; ci.yml 418; .gitlab-ci.yml 244)",
+    "result": "every line opened and matches its note; drift vs prior matrix: events.ts +11 (99→110, 237→248); webhooks.ts route citations moved to the path-string/factory lines; portal citations moved from whole-file line 1 to concrete lines",
+    "bears_on": [
+      "W6-R22",
+      "W6-R23",
+      "W6-R24",
+      "W6-R25",
+      "W6-R26",
+      "W6-R27",
+      "W6-R28",
+      "W6-R29",
+      "W6-R47",
+      "W6-R48",
+      "W6-R52",
+      "W6-R53",
+      "W6-R68"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "grep -c setTimeout api/src/platform/webhooks/__tests__/deliverer.test.ts; grep -n -i timeout api/src/platform/webhooks/__tests__/deliverer.test.ts",
+    "result": "1 hit, line 13 (header comment). No dedicated timeout-branch test in the file.",
+    "bears_on": [
+      "W6-R68",
+      "W6-R26"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "grep -rn -i -E 'p95|2 ?s.*latenc|< ?2000|2_000|first-attempt' scripts/drill/ e2e/*.ts api/src/platform/webhooks/ sdk/src/__tests__/webhooks.liveServer.test.ts docs/architecture.md PLUGFORGE.MD CHANGES.md",
+    "result": "Only hits: thresholds.test.ts:41 and ttfe.config.json 'verify_webhook: 2_000/2000' (HMAC verify stage), thresholds.ts:18 'TTFE CI P95 < 60s', PKCE 3s notes, PLUGFORGE.MD:321 target table. No first-attempt webhook latency < 2s assertion anywhere on main.",
+    "bears_on": [
+      "W6-R52"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "gh run list --repo troysatchell/ship --workflow=ci.yml --branch main --limit 5; gh run view 31949732432 --json jobs; gh run view --job 95172637326 --log | grep stage timings",
+    "result": "Latest completed main run 31949732432 (sha 9d744017, 2026-08-16T13:24Z) success; drill-ttfe job 95172637326: install_sdk 3193ms, device_login 75ms, webhook_create 16ms, document_create 14ms, wait_for_delivery 690ms, verify_webhook 0ms, total 3988ms/60000ms, verdict pass. Run 31950529207 (sha a3ef8ee7 — not origin/main's 08505d2d) was in_progress.",
+    "bears_on": [
+      "W6-R52"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "grep -n developer-portal-dlq-replay .github/ .gitlab-ci.yml scripts/ package.json; grep -n -E 'e2e-agent|playwright test' .github/workflows/ci.yml",
+    "result": "The portal e2e spec is not referenced by any CI job; ci.yml's only Playwright job (e2e-agent) runs e2e/agent-detection-latency.spec.ts and e2e/agent-chat-grounded-response.spec.ts.",
+    "bears_on": [
+      "W6-R27",
+      "W6-R48"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "sed -n 1090,1104p CHANGES.md (TRO-439 entry)",
+    "result": "Records both developer-portal-dlq-replay e2e tests 'passed on the first attempt' at PR #260 time — historical, not this sweep.",
+    "bears_on": [
+      "W6-R27",
+      "W6-R48"
+    ],
+    "_cluster": "C — E3 webhooks pipeline"
+  },
+  {
+    "command": "tail -50 audit/requirements/sweep-w6-2026-08-16b/test.log; grep -n 'Test Files' test.log; head -20 test.log; grep '\"test' package.json",
+    "result": "test.log complete: api 1 failed (activity.test.ts) / 124 passed; ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL; root test script is an && chain so test:sdk and test:cli never ran this sweep",
+    "bears_on": [
+      "W6-R9",
+      "W6-R30",
+      "W6-R31",
+      "W6-R32",
+      "W6-R33",
+      "W6-R34",
+      "W6-R58",
+      "W6-R60",
+      "W6-R62"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "cat -n audit/requirements/sweep-w6-2026-08-16b/typecheck.log",
+    "result": "exit 0; sdk, integrations/cli, integrations/browser-demo, integrations/slack all 'type-check: Done'",
+    "bears_on": [
+      "W6-R9",
+      "W6-R30",
+      "W6-R34",
+      "W6-R61",
+      "W6-R62"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "git log --since=2026-08-16T06:00Z -- sdk integrations scripts/check-integration-deps.mjs scripts/__tests__ e2e/<4 specs> .github/workflows/ci.yml .gitlab-ci.yml pnpm-workspace.yaml; git merge-base --is-ancestor 9d744017 HEAD; git diff --stat 9d744017 HEAD -- sdk integrations scripts e2e .github .gitlab-ci.yml",
+    "result": "no cluster-D file changed since the prior sweep (last touch ab35c3a4 06:50Z, before prior sweep); 9d744017 is an ancestor of HEAD and the diff for cluster paths is empty",
+    "bears_on": [
+      "W6-R9",
+      "W6-R30",
+      "W6-R31",
+      "W6-R32",
+      "W6-R33",
+      "W6-R34",
+      "W6-R58",
+      "W6-R60",
+      "W6-R61",
+      "W6-R62",
+      "W6-R51",
+      "W6-R69"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "gh run list --repo troysatchell/ship --branch main --limit 8; gh run view 31949732432 --json jobs; gh run view --job 95171252304 --log; gh run view --job <drill-ttfe> --log",
+    "result": "CI run 31949732432 (push, main, 9d744017, 2026-08-16T13:24:39Z) success; verify job: Type check ✓, Integration package dependency boundary ✓, check-integration-deps regression test ✓, SDK unit tests ✓ (25 files/229 tests, every file listed ✓), CLI unit tests ✓ (9 files/58 tests), SDK size gate ✓ (4.63 kB PASS); drill-ttfe ✓ (total 3988ms/60000ms, verdict pass)",
+    "bears_on": [
+      "W6-R9",
+      "W6-R30",
+      "W6-R31",
+      "W6-R32",
+      "W6-R33",
+      "W6-R34",
+      "W6-R58",
+      "W6-R60",
+      "W6-R61",
+      "W6-R62",
+      "W6-R69"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "cd sdk && node scripts/measure-size.mjs; cd sdk && node scripts/measure-size.mjs --threshold-kb 1",
+    "result": "min+gzip 4.63 kB < 250 kB PASS exit 0; with 1 kB override: FAIL exit 1 (gate proven to fail on bloat)",
+    "bears_on": [
+      "W6-R60",
+      "W6-R9"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "node_modules/.bin/tsx <scratchpad>/perf-probe.mts (imports sdk/src/verifyWebhook.ts; signs a ~250B body with node:crypto HMAC; checks valid/tampered/missing-v1/expired; 1000 warmup + 20000 timed calls)",
+    "result": "valid? true; tampered? false; missing v1? false; expired? false; mean per call 0.0023 ms (<1ms true) — Node v23.2.0, local machine",
+    "bears_on": [
+      "W6-R33",
+      "W6-R58"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "node_modules/.bin/tsx <scratchpad>/sdk-probe.mts (imports sdk/src/index.ts; stubs global fetch with 3 pages; runs client.documents.iterate() full + early-break; mapApiErrorCodeToKind over all codes; switch over all 7 kinds; fromNetworkError)",
+    "result": "full walk d1..d5, 3 requests first>c1>c2, no next_cursor/data on yielded items; early break -> 1 request; code->kind mapping as documented, unknown -> server; all 7 kinds reached; network kind OK",
+    "bears_on": [
+      "W6-R32",
+      "W6-R34"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "node scripts/check-integration-deps.mjs; node --test scripts/__tests__/check-integration-deps.test.mjs; node scripts/check-integration-deps.mjs --dir <scratchpad>/viol (contains bad/package.json with express as a runtime dep)",
+    "result": "OK — 3 packages, exit 0; 10 pass / 0 fail; scratch violation FAIL naming express, exit 1",
+    "bears_on": [
+      "W6-R69"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "grep -rn for api/src / ../api/ / @ship/api imports under integrations/{cli,slack,browser-demo}/src and scripts; grep -rhn \"^import .* from '[^./]\" for non-sdk runtime imports",
+    "result": "no api/src imports in any integration source; runtime third-party imports found: commander (cli), express/express-rate-limit/@slack/web-api/zod (slack) — all declared as devDependencies",
+    "bears_on": [
+      "W6-R69"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "cd integrations/cli && ../../node_modules/.bin/tsx src/bin.ts --help; ... docs --help; ... webhooks --help; ... webhooks tail --help",
+    "result": "exit 0; commands login, whoami, docs {ls,get,create}, webhooks {tail} registered (dist/bin.js not built in this checkout, so probed from source)",
+    "bears_on": [
+      "W6-R62"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "jq over test-results/progress.jsonl; python3 extraction of console attachments from playwright-report/index.html embedded zip (both gitignored, mtime 2026-08-16T13:43Z; run NOT launched by this tracer)",
+    "result": "browser-demo-pkce.spec.ts 3/3 passed (round trip 214ms); oauth-pkce-chain.spec.ts 2/2 passed (95ms); oauth-refresh-rotation-stolen-token.spec.ts passed; webhook-idempotency-key-drill.spec.ts passed",
+    "bears_on": [
+      "W6-R51",
+      "W6-R61",
+      "W6-R31"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "grep -rn -i slack .github/workflows/*.yml .gitlab-ci.yml scripts/factory/gate.sh package.json",
+    "result": "zero hits — integrations/slack's vitest suite is not executed by any runner or CI job (type-check only)",
+    "bears_on": [
+      "W6-R61"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "sed -n '<line>p' on every cited file:line above (batched)",
+    "result": "all citations opened and matched their notes",
+    "bears_on": [
+      "W6-R9",
+      "W6-R30",
+      "W6-R31",
+      "W6-R32",
+      "W6-R33",
+      "W6-R34",
+      "W6-R58",
+      "W6-R60",
+      "W6-R61",
+      "W6-R62",
+      "W6-R51",
+      "W6-R69"
+    ],
+    "_cluster": "D — E4 @ship/sdk, E8 integrations, E6 CLI"
+  },
+  {
+    "command": "git rev-parse HEAD (08505d2d459ac00842110d6410c2aef82c349e06); note: origin/main has since advanced to a3ef8ee7 (PR #282 merged) — all traces are against 08505d2d in the working tree",
+    "result": "traced commit confirmed; working tree also shows .claude/skills/ship-factory/SKILL.md modified (not cited)",
+    "bears_on": [
+      "W6-R46",
+      "W6-R49",
+      "W6-R50",
+      "W6-R55",
+      "W6-R56",
+      "W6-R57",
+      "W6-R59",
+      "W6-R67",
+      "W6-R63",
+      "W6-R64",
+      "W6-R65"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "GH_REPO=troysatchell/ship gh run list --workflow=ci.yml --limit 40 --json databaseId,status,conclusion,headBranch,createdAt,event",
+    "result": "40 runs 2026-08-16T06:59Z..13:41Z: 32 completed (30 success, 2 cancelled at run level), 8 in_progress",
+    "bears_on": [
+      "W6-R57",
+      "W6-R59"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "for each run: GH_REPO=troysatchell/ship gh run view <id> --json jobs --jq '.jobs[]|select(.name|test(\"drill\"))|...'",
+    "result": "drill-ttfe jobs: 31 success / 1 cancelled (job 95131356903, run 31932822134, superseded) / 0 failure; 30 consecutive successes newest-first; 8 in-progress runs had no drill job yet",
+    "bears_on": [
+      "W6-R59",
+      "W6-R57"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "GH_REPO=troysatchell/ship gh run view 31949855599 --json headSha,jobs (PR #282, headSha 08505d2d) and gh run view 31949855599 --log --job 95172930963 | grep stage lines",
+    "result": "drill-ttfe success; install_sdk 3263ms, device_login 92ms, webhook_create 22ms, document_create 13ms, wait_for_delivery 599ms, verify_webhook 1ms, total 3990ms/60000ms, verdict pass; verify job steps 'TTFE drill threshold-logic tests', 'TTFE drill type-check', 'Agent tests', 'Agent tests (AGENT_PLATFORM_MODE=sdk)' all success",
+    "bears_on": [
+      "W6-R46",
+      "W6-R49",
+      "W6-R50",
+      "W6-R56",
+      "W6-R57",
+      "W6-R67"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "GH_REPO=troysatchell/ship gh run view 31949732432 --log --job 95172637326 | grep stage lines (main push, headSha 9d744017)",
+    "result": "install_sdk 3193ms, device_login 75ms, webhook_create 16ms, document_create 14ms, wait_for_delivery 690ms, verify_webhook 0ms, total 3988ms/60000ms, verdict pass; '[setup] reusing ambient DATABASE_URL (CI service container / .factory-env) — no Docker touched'",
+    "bears_on": [
+      "W6-R46",
+      "W6-R50",
+      "W6-R55",
+      "W6-R56"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "grep -rniE '@anthropic-ai|anthropic|openai|langchain|@langchain' api/src/platform",
+    "result": "exit 1 — zero matches",
+    "bears_on": [
+      "W6-R63"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "grep -rniE 'bedrock|@aws-sdk/client-bedrock' api/src/platform",
+    "result": "exit 1 — zero matches",
+    "bears_on": [
+      "W6-R63"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "grep -rniE '@anthropic-ai|openai|@langchain' api/src ; grep -rniE 'anthropic' api/src ; grep -niE 'anthropic|openai|langchain' api/package.json",
+    "result": "first: exit 1 (none anywhere in api/src); second: only api/src/routes/agent.ts:34 (comment) and api/src/services/ai-analysis.ts:16,233 (Bedrock model-id strings; file imports @aws-sdk/client-bedrock-runtime at :13, added 2026-02-11 commit 8c0de05f); third: exit 1",
+    "bears_on": [
+      "W6-R63"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "grep -n -i 'tamper|toBe(false)|=== false|2000|2_000' scripts/drill/ttfe.ts",
+    "result": "exit 1 — no tamper step and no 2s assertion in the drill",
+    "bears_on": [
+      "W6-R46"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "sed -n 244,268p .gitlab-ci.yml | grep retry ; sed -n 418,472p .github/workflows/ci.yml | grep -i 'retry|continue-on-error'",
+    "result": "both exit 1 — no retry/continue-on-error on either drill job",
+    "bears_on": [
+      "W6-R59"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "read audit/requirements/sweep-w6-2026-08-16b/{verify-run.log,verify-run-2.log,agent-file-results.txt,sdk-file-results.txt,api-file-results.txt,test-agent.log,test-sdk.log}",
+    "result": "run 1: typecheck exit 0; pnpm test exit 1 (api: 1 failed file activity.test.ts / 124 passed; isolated reruns exit 0 x2). run 2: web/agent/sdk/cli exit 0 (agent 40 files/544 tests; sdk 25 files/229 tests). Files bearing on this cluster all ✓: auditTrailProof.liveServer (4), gateWriteBoundary.dbRoundTrip (5), shipClientParity.liveServer (10), graphWriteBoundary (10), config (21), shipClient (22), sdk webhooks.liveServer (10), sdk verifyWebhook (30), api pf905CostAnalysisDocSections (15), api seedFirstPartyApp (9), cli webhooksTail (12)",
+    "bears_on": [
+      "W6-R46",
+      "W6-R67",
+      "W6-R63",
+      "W6-R64",
+      "W6-R65"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "sed -n '<line>p' on every cited file:line (56 citations)",
+    "result": "all opened and matched their notes",
+    "bears_on": [
+      "W6-R46",
+      "W6-R49",
+      "W6-R50",
+      "W6-R55",
+      "W6-R56",
+      "W6-R57",
+      "W6-R59",
+      "W6-R67",
+      "W6-R63",
+      "W6-R64",
+      "W6-R65"
+    ],
+    "_cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis"
+  },
+  {
+    "command": "for p in /health /api/v1/openapi.json /developer/apps /developer; do curl -s -o /dev/null -w '%{http_code} %{content_type}' https://ship-rr6m.onrender.com$p; done",
+    "result": "/health 200 application/json; /api/v1/openapi.json 200 application/json; /developer/apps 200 text/html; /developer 200 text/html",
+    "bears_on": [
+      "W6-R11",
+      "W6-R77",
+      "W6-R37"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "curl -s https://ship-rr6m.onrender.com/api/v1/openapi.json | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d[\"openapi\"], d[\"info\"][\"version\"], d[\"info\"][\"title\"], len(d[\"paths\"]))'",
+    "result": "3.1.0 1.0.0 'Ship Public API' 21 paths (valid JSON)",
+    "bears_on": [
+      "W6-R11",
+      "W6-R77"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "curl -s https://ship-rr6m.onrender.com/health",
+    "result": "{\"status\":\"ok\"}",
+    "bears_on": [
+      "W6-R11"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "curl -s https://ship-rr6m.onrender.com/developer/apps -o shell.html; curl -s .../assets/index-CXfdv-VQ.js | grep -o 'Developer[A-Za-z]*-[A-Za-z0-9_-]*\\.js'; curl -w '%{http_code} %{size_download}' each chunk",
+    "result": "index bundle references DeveloperAppDetail-BnxafH2s.js, DeveloperApps-vGLDgZ1i.js, DeveloperPortal-DCl7fHpG.js; each fetch 200 (4786 / 5759 / 13334 bytes)",
+    "bears_on": [
+      "W6-R37",
+      "W6-R77"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "gh api repos/troysatchell/ship --jq '{private,visibility,default_branch}'",
+    "result": "{\"default_branch\":\"main\",\"private\":false,\"visibility\":\"public\"}",
+    "bears_on": [
+      "W6-R71"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "gh api repos/troysatchell/ship/branches --paginate --jq 'length' | paste -sd+ - | bc; ... | grep -c 'tro-\\|pf-\\|feat/\\|fix/'",
+    "result": "253 branches; 203 slice-named (per-PF branches like feat/pf-001-platform-scaffold … docs/pf-906-epic-writeups-discoveries present)",
+    "bears_on": [
+      "W6-R71"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "GH_REPO=troysatchell/ship gh pr view {276,273,266,263} --json title,headRefName,mergedAt,body",
+    "result": "#263 names AC verbatim + '## Fitness test confirmed passing'; #276 Test plan + 'fitness check, passes' (no AC named); #273 Evidence table (no AC / no fitness sentence); #266 Evidence sections (no AC / no fitness sentence). Merged 06:50Z/07:10Z/07:37Z/07:53Z 2026-08-16.",
+    "bears_on": [
+      "W6-R71",
+      "W6-R1",
+      "W6-R12",
+      "W6-R38"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "gh run list -R troysatchell/ship --workflow ci.yml --branch main -L 3; gh run view 31949732432 / 31935025680 --json jobs (filter TTFE)",
+    "result": "runs 31935025680 (07:53Z) and 31949732432 (13:24Z) success; job 'drill · TTFE (PF-603)' conclusion success in both; a newer run 31950529207 (headSha a3ef8ee7, 13:41Z) in progress — GitHub main is ahead of this checkout",
+    "bears_on": [
+      "W6-R75",
+      "W6-R10"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "bash scripts/factory/verify-terraform-artifact.sh terraform/render/plan/tro-411-pf900-w6-env-vars.md",
+    "result": "PASS — all 12 mechanical checks (8 env vars in a real render_web_service env_vars block, 3 resource addresses, exact provider pin). Read-only grep script; git status unchanged afterwards.",
+    "bears_on": [
+      "W6-R12",
+      "W6-R38"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "which terraform tofu",
+    "result": "not found — no terraform validate/plan could be run this sweep",
+    "bears_on": [
+      "W6-R12",
+      "W6-R38",
+      "W6-R40"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "grep -n '^#' docs/architecture.md",
+    "result": "nine mandated headings at 23/46/56/91/118/167/240/270/297 (+ :352, :425)",
+    "bears_on": [
+      "W6-R70"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "grep -n 'architectureDocSections\\|seedGraderApp' audit/requirements/sweep-w6-2026-08-16b/test.log; grep -n 'Test Files' test.log | tail -1",
+    "result": "✓ architectureDocSections.test.ts (15 tests); ✓ seedGraderApp.test.ts (6 tests); summary 'Test Files 1 failed | 124 passed (125)' — log complete; the one failure is src/__tests__/activity.test.ts (not in this cluster)",
+    "bears_on": [
+      "W6-R70",
+      "W6-R11",
+      "W6-R77"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "grep developer-portal audit/requirements/sweep-w6-2026-08-16b/e2e-progress.jsonl; tail e2e-targeted.log; grep Developer web-file-results.txt",
+    "result": "5/5 portal e2e tests passed (2 flaky-then-pass); '2 flaky, 12 passed (55.2s) e2e exit=0'; web unit: DeveloperApps (5), DeveloperAppDetail (5), DeveloperPortal (6), DeveloperPortalContext (3) all ✓; test-web.log 86 files / 606 tests passed",
+    "bears_on": [
+      "W6-R37"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "grep -ril 'pre-search\\|presearch' docs PLUGFORGE.MD *.MD *.md; find . -iname '*conversation*' -o -iname '*presearch*'",
+    "result": "only PRESEARCH.MD (W5 FleetGraph), PLUGFORGE.MD, PLUGFORGE-DEMO-SCRIPT.md (reference), CHANGES.md (TRO-360 W5 entry); no W6 pre-search or conversation export",
+    "bears_on": [
+      "W6-R73"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "grep -rn -i '\\.mp4\\|loom.com\\|youtu' docs/submission/*.md README.md; grep -rn -i gauntletai docs/submission README.md",
+    "result": "no video links; @GauntletAI only in W4 SOCIAL-POST.md / W5 SOCIAL-THREAD-W4-W5.md / w4-w5 asset README",
+    "bears_on": [
+      "W6-R72",
+      "W6-R78"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "grep -rn -i AdministratorAccess --include='*.md' --include='*.tf' . (excl node_modules, audit/requirements)",
+    "result": "zero hits — no before-state IAM policy artifact",
+    "bears_on": [
+      "W6-R39"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  },
+  {
+    "command": "sed -n '<line>p' on every cited file:line",
+    "result": "all citations re-opened and confirmed this sweep (line-0 citations from the prior matrix replaced with real lines)",
+    "bears_on": [
+      "all"
+    ],
+    "_cluster": "F — E9 infrastructure, docs, portal, submission & process"
+  }
+]

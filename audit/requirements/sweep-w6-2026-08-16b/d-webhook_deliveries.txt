@@ -1,0 +1,33 @@
+                           Table "public.webhook_deliveries"
+      Column      |           Type           | Collation | Nullable |      Default      
+------------------+--------------------------+-----------+----------+-------------------
+ id               | uuid                     |           | not null | gen_random_uuid()
+ subscription_id  | uuid                     |           | not null | 
+ event_id         | uuid                     |           | not null | 
+ event_type       | text                     |           | not null | 
+ payload          | jsonb                    |           | not null | 
+ idempotency_key  | text                     |           | not null | 
+ attempt_number   | integer                  |           | not null | 
+ status           | text                     |           | not null | 
+ response_status  | integer                  |           |          | 
+ response_excerpt | text                     |           |          | 
+ latency_ms       | integer                  |           |          | 
+ next_attempt_at  | timestamp with time zone |           |          | 
+ created_at       | timestamp with time zone |           | not null | now()
+ replayed_from_id | uuid                     |           |          | 
+Indexes:
+    "webhook_deliveries_pkey" PRIMARY KEY, btree (id)
+    "idx_webhook_deliveries_created_at_id" btree (created_at DESC, id DESC)
+    "idx_webhook_deliveries_event_id" btree (event_id)
+    "idx_webhook_deliveries_pending_id" btree (id) WHERE status = 'pending'::text
+    "idx_webhook_deliveries_replayed_from_id" btree (replayed_from_id) WHERE replayed_from_id IS NOT NULL
+    "idx_webhook_deliveries_unique_attempt" UNIQUE, btree (subscription_id, event_id, attempt_number)
+Check constraints:
+    "webhook_deliveries_attempt_number_check" CHECK (attempt_number >= 1)
+    "webhook_deliveries_status_check" CHECK (status = ANY (ARRAY['pending'::text, 'success'::text, 'failed'::text, 'dead'::text]))
+Foreign-key constraints:
+    "webhook_deliveries_replayed_from_id_fkey" FOREIGN KEY (replayed_from_id) REFERENCES webhook_deliveries(id) ON DELETE SET NULL
+    "webhook_deliveries_subscription_id_fkey" FOREIGN KEY (subscription_id) REFERENCES webhook_subscriptions(id) ON DELETE CASCADE
+Referenced by:
+    TABLE "webhook_deliveries" CONSTRAINT "webhook_deliveries_replayed_from_id_fkey" FOREIGN KEY (replayed_from_id) REFERENCES webhook_deliveries(id) ON DELETE SET NULL
+

@@ -1,0 +1,3 @@
+ERROR:  column "id" does not exist
+LINE 1: select id from schema_migrations order by id
+               ^

@@ -1,0 +1,33 @@
+                                  Table "public.oauth_tokens"
+          Column          |           Type           | Collation | Nullable |      Default      
+--------------------------+--------------------------+-----------+----------+-------------------
+ id                       | uuid                     |           | not null | gen_random_uuid()
+ app_id                   | uuid                     |           | not null | 
+ user_id                  | uuid                     |           |          | 
+ scopes                   | text[]                   |           | not null | '{}'::text[]
+ access_token_hash        | text                     |           | not null | 
+ refresh_token_hash       | text                     |           |          | 
+ family_id                | uuid                     |           | not null | gen_random_uuid()
+ parent_id                | uuid                     |           |          | 
+ expires_at               | timestamp with time zone |           | not null | 
+ revoked_at               | timestamp with time zone |           |          | 
+ created_at               | timestamp with time zone |           |          | now()
+ authorization_code_id    | uuid                     |           |          | 
+ refresh_token_expires_at | timestamp with time zone |           |          | 
+Indexes:
+    "oauth_tokens_pkey" PRIMARY KEY, btree (id)
+    "idx_oauth_tokens_access_token_hash" UNIQUE, btree (access_token_hash)
+    "idx_oauth_tokens_app_id" btree (app_id)
+    "idx_oauth_tokens_authorization_code_id" btree (authorization_code_id) WHERE authorization_code_id IS NOT NULL
+    "idx_oauth_tokens_family_id" btree (family_id)
+    "idx_oauth_tokens_parent_id" btree (parent_id)
+    "idx_oauth_tokens_refresh_token_hash" UNIQUE, btree (refresh_token_hash) WHERE refresh_token_hash IS NOT NULL
+    "idx_oauth_tokens_user_id" btree (user_id)
+Foreign-key constraints:
+    "oauth_tokens_app_id_fkey" FOREIGN KEY (app_id) REFERENCES oauth_apps(id) ON DELETE CASCADE
+    "oauth_tokens_authorization_code_id_fkey" FOREIGN KEY (authorization_code_id) REFERENCES oauth_authorization_codes(id) ON DELETE SET NULL
+    "oauth_tokens_parent_id_fkey" FOREIGN KEY (parent_id) REFERENCES oauth_tokens(id) ON DELETE SET NULL
+    "oauth_tokens_user_id_fkey" FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+Referenced by:
+    TABLE "oauth_tokens" CONSTRAINT "oauth_tokens_parent_id_fkey" FOREIGN KEY (parent_id) REFERENCES oauth_tokens(id) ON DELETE SET NULL
+

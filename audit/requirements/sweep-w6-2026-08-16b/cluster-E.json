@@ -1,0 +1,316 @@
+{
+  "cluster": "E — E6 TTFE drill in CI, E7 agent-as-platform-citizen, cost analysis",
+  "traced_commit": "08505d2d459ac00842110d6410c2aef82c349e06",
+  "rows": [
+    {
+      "id": "W6-R46",
+      "verdict": "PARTIAL",
+      "tickets": ["TRO-455", "TRO-433", "TRO-438", "TRO-413", "TRO-607", "TRO-599"],
+      "evidence": [
+        { "file": "scripts/drill/ttfe.ts", "line": 476, "note": "client.webhooks.createSubscription(...) — subscription created via the SDK against the drill's own capture listener" },
+        { "file": "scripts/drill/ttfe.ts", "line": 486, "note": "client.documents.create(...) — document created via the SDK" },
+        { "file": "scripts/drill/ttfe.ts", "line": 491, "note": "wait_for_delivery timeout = stageBudgetsMs.wait_for_delivery (15000ms) — the only latency bound asserted; NOT a 2s bound" },
+        { "file": "scripts/drill/ttfe.ts", "line": 502, "note": "verifyWebhook(captured.headers, captured.rawBody, subscription.secret) on the real delivered POST, asserted true at :505-507" },
+        { "file": "scripts/drill/ttfe.config.json", "line": 9, "note": "\"wait_for_delivery\": 15000 — the asserted ceiling for first delivery" },
+        { "file": "sdk/src/verifyWebhook.test.ts", "line": 117, "note": "tamper negative: verifyWebhook(headers, tamperedBody, SECRET) === false — a UNIT test on a synthetic signed payload, not chained to a real delivery" },
+        { "file": ".github/workflows/ci.yml", "line": 471, "note": "drill-ttfe job runs `pnpm drill ttfe` on every PR/push" }
+      ],
+      "test_files_bearing": ["sdk/src/verifyWebhook.test.ts", "sdk/src/__tests__/webhooks.liveServer.test.ts", "integrations/cli/src/commands/webhooksTail.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "GH_REPO=troysatchell/ship gh run view 31949855599 --log --job 95172930963 | grep -E 'wait_for_delivery|verify_webhook|verdict' (CI run on headSha 08505d2d = the traced commit, 2026-08-16T13:39Z)",
+        "result_excerpt": "wait_for_delivery: 599ms; verify_webhook: 1ms; total: 3990ms / 60000ms budget; verdict: pass. Second sample (main push run 31949732432, job 95172637326, headSha 9d744017): wait_for_delivery: 690ms, verdict: pass. Local this sweep: sdk/src/verifyWebhook.test.ts 30/30 passed, sdk/src/__tests__/webhooks.liveServer.test.ts 10/10 passed (test-sdk.log)."
+      },
+      "plain_english": "The brief's graded scenario has five steps: subscribe via the SDK, create a document, see the signed webhook arrive within 2 seconds, verify it with the SDK helper, then tamper with the body and see the helper reject it. The merged TTFE drill (scripts/drill/ttfe.ts, TRO-455) does the first four for real in CI and the delivery arrived in ~0.6-0.7 s in today's runs, but the drill only asserts a 15 s ceiling (not 2 s) and never performs the tamper step — tamper rejection is proven only in a separate unit test on a hand-built payload (sdk/src/verifyWebhook.test.ts). Small gap, but two of the scenario's stated checks are not in the end-to-end chain.",
+      "notes": "DOWNGRADE from prior VERIFIED, on re-reading the artifact: the prior row said ttfe.ts 'implements exactly this scenario'; `grep -n -i 'tamper' scripts/drill/ttfe.ts` returns nothing (exit 1) and the only latency assertion is the 15000ms wait_for_delivery stage budget (ttfe.ts:491, ttfe.config.json:9). Observed CI latencies (599ms, 690ms) DO satisfy the 2s number — but observed-once-in-a-log is not the 'latency assertion' the acceptance evidence names. Tamper rejection of the same pure verifyWebhook() function is proven at sdk/src/verifyWebhook.test.ts:111-117 (synthetic) and integrations/cli/src/commands/webhooksTail.test.ts:99 (wrong-secret, 401) — both passed this sweep. Implementing ticket: TRO-455 (Done). Constituent pieces: TRO-433 signer, TRO-438 deliverer, TRO-413 verifyWebhook, TRO-607/TRO-599 SDK request/response shape fixes that unblocked the drill (all Done). No open ticket covers the two missing checks.",
+      "suggested_scope": "Two ~10-line additions to scripts/drill/ttfe.ts: (1) after stage 6, flip one byte of captured.rawBody and assert verifyWebhook(...) === false (tamper negative on the REAL delivered payload); (2) assert the wait_for_delivery stage ms <= 2000 explicitly (or add a stageBudgetsMs entry of 2000 for it — note the config comment at ttfe.config.json:2 deliberately keeps stage budgets generous, so a separate assertion may be preferable to tightening the budget).",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "downgraded because re-reading scripts/drill/ttfe.ts shows no tamper step and no <=2s assertion (only a 15s ceiling); prior row's 'implements exactly this scenario' was overstated. Evidence re-pointed from line 0/1 whole-file cites to the specific lines."
+    },
+    {
+      "id": "W6-R49",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-455", "TRO-448", "TRO-450"],
+      "evidence": [
+        { "file": "package.json", "line": 36, "note": "root script \"drill\": \"tsx scripts/drill/run.ts\" — `pnpm drill ttfe`" },
+        { "file": "scripts/drill/run.ts", "line": 13, "note": "dispatcher: name === 'ttfe' -> import('./ttfe.js')" },
+        { "file": "scripts/drill/ttfe.ts", "line": 334, "note": "installSdkInCleanDir(): npm pack the real @ship/sdk + npm install into a fresh mkdtemp dir (stage 1, 'pnpm install @ship/sdk' equivalent)" },
+        { "file": "scripts/drill/ttfe.ts", "line": 447, "note": "ShipClient.deviceLogin(...) — RFC 8628 device login, auto-approved via real POST /oauth/device/verify with a seeded session cookie (the 'ship login' step)" },
+        { "file": "scripts/drill/ttfe.ts", "line": 486, "note": "documents.create — the 'create document' step" },
+        { "file": "scripts/drill/ttfe.ts", "line": 502, "note": "verifyWebhook on the captured real delivery — the 'receive verified webhook' step" },
+        { "file": ".github/workflows/ci.yml", "line": 418, "note": "drill-ttfe job (GitHub mirror)" },
+        { "file": ".gitlab-ci.yml", "line": 244, "note": "drill-ttfe job (graded GitLab platform)" },
+        { "file": "CHANGES.md", "line": 1445, "note": "clean-machine run documented: `pnpm drill ttfe` with DATABASE_URL unset (genuine testcontainers path) — verdict: pass (documented by the implementing PR, not re-run this sweep)" },
+        { "file": "docs/submission/PLUGFORGE-EPIC-WRITEUPS.md", "line": 221, "note": "Epic E6 write-up records a local end-to-end run: total 1998ms / 60000ms budget" }
+      ],
+      "test_files_bearing": ["scripts/drill/__tests__/thresholds.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "GH_REPO=troysatchell/ship gh run view 31949855599 --json jobs (PR #282 run on headSha 08505d2d, the traced commit) + gh run view --log --job 95172930963",
+        "result_excerpt": "drill-ttfe job 95172930963: completed success (13:39:09Z-13:39:51Z). Log: [setup] api ready (6553ms untimed); install_sdk 3263ms; device_login 92ms; webhook_create 22ms; document_create 13ms; wait_for_delivery 599ms; verify_webhook 1ms; total 3990ms / 60000ms; verdict: pass. Same run's verify job steps 'TTFE drill threshold-logic tests' and 'TTFE drill type-check': success."
+      },
+      "plain_english": "The brief asks for an end-to-end drill: install the SDK, log in, create a document, receive a verified webhook — in under 30 minutes on a clean machine, seconds in CI. `pnpm drill ttfe` (scripts/drill/ttfe.ts, delivered by TRO-455) does exactly that sequence and ran green in CI today on this exact commit in ~4 seconds of timed work; the clean-machine (Docker testcontainers) variant is documented as run in CHANGES.md but was not re-run this sweep.",
+      "notes": "Behavioral check this sweep = the CI drill job on the traced commit (observed via read-only gh, not run locally). Neither typecheck.log nor test.log covers scripts/drill (it is deliberately not a workspace package — scripts/drill/package.json:5), so those local logs do NOT bear on this row; the CI verify job's separate drill steps do. 'Clean-machine run documented' half is documented-by-author only (CHANGES.md:1445, PLUGFORGE-EPIC-WRITEUPS.md:211-224); nobody in this sweep exercised the no-DATABASE_URL testcontainers path. TRO-455 implements; TRO-448 (ship login) and TRO-450 (ship docs) deliver the CLI the brief's wording names, though the drill itself uses the SDK directly rather than the CLI binary.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; evidence re-pointed from whole-file cites to specific stage lines; verification refreshed to a run on the traced commit with per-stage timings"
+    },
+    {
+      "id": "W6-R50",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-455"],
+      "evidence": [
+        { "file": "scripts/drill/ttfe.config.json", "line": 3, "note": "\"totalBudgetMs\": 60000 — the CI <60s target committed as config" },
+        { "file": "scripts/drill/thresholds.ts", "line": 70, "note": "totalOverBudget = totalMs > config.totalBudgetMs" },
+        { "file": "scripts/drill/thresholds.ts", "line": 81, "note": "pass only if total AND every per-stage ceiling hold" },
+        { "file": "scripts/drill/ttfe.ts", "line": 541, "note": "exitCode = evaluation.pass ? 0 : 1 — over budget fails the process (and so the CI job)" },
+        { "file": "scripts/drill/ttfe.ts", "line": 426, "note": "setup (Postgres/migrations/api spawn) logged as 'untimed, not part of totalBudgetMs' — only stages 1-6 count" },
+        { "file": "CHANGES.md", "line": 1445, "note": "the <=30 min clean-machine target: testcontainers-path run documented as pass" }
+      ],
+      "test_files_bearing": ["scripts/drill/__tests__/thresholds.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view --log for drill jobs 95172930963 (headSha 08505d2d) and 95172637326 (main, 9d744017), grep stage lines",
+        "result_excerpt": "total: 3990ms / 60000ms budget (verdict: pass) and total: 3988ms / 60000ms budget (verdict: pass). All 30 most-recent completed drill jobs succeeded (see W6-R59), i.e. every sample well under 60s."
+      },
+      "plain_english": "Targets: the whole drill takes at most 30 minutes on a clean machine and typically under 60 seconds in CI. The 60-second budget is committed in scripts/drill/ttfe.config.json and enforced by scripts/drill/thresholds.ts (a run over budget exits 1 and fails CI). Today's CI runs on this commit measured about 4 seconds of timed work. The 30-minute clean-machine figure is only documented by the author (CHANGES.md), not measured this sweep.",
+      "notes": "'P95' is not computed anywhere — each run is asserted individually against 60000ms; with 30 consecutive samples all ~4s the P95 claim holds trivially on the observed history but there is no aggregating instrumentation. Wall-clock of the whole CI job (~1 min including checkout/install/untimed setup) is a different number than the drill's own timed total. TRO-455 implements.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; evidence re-pointed to specific threshold lines; per-stage CI timings recorded"
+    },
+    {
+      "id": "W6-R55",
+      "verdict": "PARTIAL",
+      "tickets": ["TRO-455"],
+      "evidence": [
+        { "file": "package.json", "line": 36, "note": "`pnpm drill` root script exists" },
+        { "file": "scripts/drill/run.ts", "line": 13, "note": "'ttfe' argument routes to ttfe.ts — `pnpm drill ttfe` is the literal command" },
+        { "file": "scripts/drill/ttfe.ts", "line": 349, "note": "clean working directory: SDK installed from a real npm tarball into a fresh mkdtemp dir" },
+        { "file": "scripts/drill/ttfe.ts", "line": 386, "note": "if DATABASE_URL set (CI/factory) reuse it — no Docker touched" },
+        { "file": "scripts/drill/ttfe.ts", "line": 390, "note": "else start @testcontainers/postgresql (local/clean-machine path) — Postgres containerized" },
+        { "file": "scripts/drill/ttfe.ts", "line": 186, "note": "the Ship API itself is spawned as a child process (`pnpm --filter @ship/api exec tsx src/index.ts`) from the checkout — NOT run from a container image in either path" },
+        { "file": ".github/workflows/ci.yml", "line": 440, "note": "CI: Postgres via a `services:` (:438) container, image: postgres:15-alpine" },
+        { "file": ".gitlab-ci.yml", "line": 244, "note": "GitLab: same shape (services: postgres:15-alpine), no testcontainers because the shared runner has no Docker socket (job comment at :233-241)" }
+      ],
+      "test_files_bearing": ["scripts/drill/__tests__/thresholds.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949855599 --json jobs (traced commit) — drill-ttfe job",
+        "result_excerpt": "completed success; log line '[setup] reusing ambient DATABASE_URL (CI service container / .factory-env) — no Docker touched' confirms the CI path exercised is the services-container one."
+      },
+      "plain_english": "The brief wants a `pnpm drill ttfe` command that runs the whole loop against a containerized Ship from a clean working directory. The command exists and runs the loop (TRO-455); the SDK is installed into a fresh throwaway directory; the database is a container (CI service container, or Docker testcontainers locally). What is arguable is 'containerized Ship instance': the Ship API process itself is started from the source checkout with tsx, never from a container image, in both paths. Whether database-in-a-container plus a real API process meets the wording is a call for the maintainer.",
+      "notes": "Same substantive question the prior two sweeps flagged, now sharpened after reading ttfe.ts:185-203 in full: it is not testcontainers-vs-services (both only containerize Postgres) — it is that Ship (the API) is never containerized by the drill. A Docker image of Ship IS built elsewhere in CI (ci.yml:597 build-image job) but the drill does not use it. Under the lenient reading this row is VERIFIED (30 consecutive green CI runs, clean-dir install proven, local testcontainers path documented at CHANGES.md:1445). TRO-455 implements; no open ticket.",
+      "suggested_scope": "If the strict reading holds: add an opt-in `DRILL_TTFE_API_IMAGE=<ghcr image>` path in scripts/drill/ttfe.ts that starts the built Ship image via testcontainers' GenericContainer instead of spawning tsx (GitHub Actions only — GitLab's shared runner cannot start containers, per .gitlab-ci.yml:233-241), and run it in ci.yml's drill-ttfe job. Otherwise: record an interpretation and close.",
+      "assumption": "Traced under the STRICT reading: 'containerized Ship instance' means the Ship API runs from a container image, which the drill never does — hence PARTIAL. Under the lenient reading (Postgres in a container + the real API process from the checkout, SDK installed into a clean directory) the row would be VERIFIED on the same evidence.",
+      "needs_ruling": "Does 'against a containerized Ship instance' in W6-R55 accept the current drill shape — Postgres in a container (CI services: / local testcontainers) plus the real Ship API spawned as a child process from the source checkout — or must the Ship API itself run from a container image?",
+      "delta_vs_prior": "same verdict; the ambiguity is restated more precisely (API-not-containerized, not testcontainers-vs-services) and a concrete needs_ruling question is posed"
+    },
+    {
+      "id": "W6-R56",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-455"],
+      "evidence": [
+        { "file": "scripts/drill/ttfe.ts", "line": 435, "note": "stages.push({ name: 'install_sdk', ms }) — 'install'" },
+        { "file": "scripts/drill/ttfe.ts", "line": 468, "note": "'device_login' — 'login'" },
+        { "file": "scripts/drill/ttfe.ts", "line": 482, "note": "'webhook_create' — 'register subscription'" },
+        { "file": "scripts/drill/ttfe.ts", "line": 487, "note": "'document_create' — 'create document'" },
+        { "file": "scripts/drill/ttfe.ts", "line": 498, "note": "'wait_for_delivery' — 'receive webhook'" },
+        { "file": "scripts/drill/ttfe.ts", "line": 504, "note": "'verify_webhook' — 'verify signature'; six stages, 1:1 with the requirement, each Date.now() deltas in ms" },
+        { "file": "scripts/drill/thresholds.ts", "line": 93, "note": "formatDrillEvaluation prints one '<stage>: <ms>ms' line per stage plus total/verdict" },
+        { "file": "scripts/drill/ttfe.config.json", "line": 4, "note": "per-stage stageBudgetsMs — every stage individually asserted, not just logged" }
+      ],
+      "test_files_bearing": ["scripts/drill/__tests__/thresholds.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run view 31949855599 --log --job 95172930963 | grep -E '  (install_sdk|device_login|webhook_create|document_create|wait_for_delivery|verify_webhook|total):' (traced commit)",
+        "result_excerpt": "install_sdk: 3263ms / device_login: 92ms / webhook_create: 22ms / document_create: 13ms / wait_for_delivery: 599ms / verify_webhook: 1ms / total: 3990ms / 60000ms budget / verdict: pass"
+      },
+      "plain_english": "Each drill stage (install, login, register subscription, create document, receive webhook, verify signature) must record elapsed milliseconds. scripts/drill/ttfe.ts times exactly those six stages by name and prints each in ms; today's CI log for this commit shows all six numbers. Delivered by TRO-455.",
+      "notes": "Line numbers 435/468/482/487/498/504 re-checked this sweep — unchanged since the prior matrix. Observed output is from GitHub Actions; the GitLab job runs the identical script but its log was not read.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; verification refreshed with a per-stage CI log on the traced commit"
+    },
+    {
+      "id": "W6-R57",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-455"],
+      "evidence": [
+        { "file": ".github/workflows/ci.yml", "line": 9, "note": "on: pull_request — every PR" },
+        { "file": ".github/workflows/ci.yml", "line": 418, "note": "drill-ttfe job (needs: verify, timeout 10m)" },
+        { "file": ".github/workflows/ci.yml", "line": 471, "note": "run: pnpm drill ttfe" },
+        { "file": ".github/workflows/ci.yml", "line": 139, "note": "verify job also runs the threshold-logic unit tests (`vitest run --config scripts/drill/vitest.config.ts`) and, at :142, a drill type-check" },
+        { "file": ".gitlab-ci.yml", "line": 29, "note": "workflow rule: pipelines on merge_request_event (every MR) — graded platform" },
+        { "file": ".gitlab-ci.yml", "line": 244, "note": "drill-ttfe job, stage e2e, needs: [verify]" },
+        { "file": ".gitlab-ci.yml", "line": 267, "note": "script: pnpm drill ttfe" },
+        { "file": "scripts/drill/ttfe.ts", "line": 541, "note": "exit code 1 when evaluateDrillStages fails -> job fails -> build fails" },
+        { "file": "scripts/drill/__tests__/thresholds.test.ts", "line": 65, "note": "unit test: a single stage over its own ceiling fails even if the total is under budget" },
+        { "file": "scripts/drill/ttfe.ts", "line": 116, "note": "DRILL_TTFE_SIMULATE_SLOW_MS test-only override used to demonstrate 'regression past threshold fails the build' (simulate/evidence/revert documented at CHANGES.md:1447-1451)" },
+        { "file": "scripts/factory/gate.sh", "line": 588, "note": "the local factory gate (G12) also runs `pnpm drill ttfe` before a PR opens" }
+      ],
+      "test_files_bearing": ["scripts/drill/__tests__/thresholds.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "gh run list --workflow=ci.yml --limit 40 (event column) + gh run view 31949855599 --json jobs",
+        "result_excerpt": "Run 31949855599 is event=pull_request on headSha 08505d2d; its drill-ttfe job completed success and its verify job's 'TTFE drill threshold-logic tests' + 'TTFE drill type-check' steps both success. 24 of the 32 completed runs sampled are pull_request events, each with a drill-ttfe job (W6-R59 tally)."
+      },
+      "plain_english": "The drill must run in CI on every pull request and fail the build if it regresses past the threshold. Both CI configs (GitHub .github/workflows/ci.yml and the graded GitLab .gitlab-ci.yml) have a drill-ttfe job on every PR/MR, and the drill exits non-zero when over budget, which fails the job. Observed on GitHub for this exact commit's PR run; the GitLab side is config-only evidence (no GitLab pipeline history was queried). Delivered by TRO-455.",
+      "notes": "GitHub observed; GitLab config read but not observed (no glab query run — outside the brief's read-only allowances). The 'fails the build' half is proven by unit test (thresholds.test.ts) + documented simulate/evidence/revert (CHANGES.md:1447-1451), not by a deliberately-failed CI run in this sweep.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same; prior evidence line .gitlab-ci.yml:228 (a comment) re-pointed to the job at :244 and script at :267; added the on:/workflow rule lines that prove 'every PR'"
+    },
+    {
+      "id": "W6-R59",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-455"],
+      "evidence": [
+        { "file": ".github/workflows/ci.yml", "line": 418, "note": "drill-ttfe job — the job whose history is counted" },
+        { "file": ".github/workflows/ci.yml", "line": 14, "note": "concurrency cancel-in-progress: true — explains the one 'cancelled' job (a superseded push), which never reached a verdict and is not a flake" },
+        { "file": ".gitlab-ci.yml", "line": 244, "note": "GitLab drill-ttfe job has no `retry:` key (grep of :244-268 for 'retry' returns nothing) — flakes cannot be retry-masked" },
+        { "file": "CHANGES.md", "line": 1453, "note": "implementing PR itself said 'Not verified' — 0%-flake-over-20 is an operational follow-up over real CI runs; that history now exists (see verification)" }
+      ],
+      "test_files_bearing": [],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "GH_REPO=troysatchell/ship gh run list --workflow=ci.yml --limit 40 --json databaseId,status,conclusion,headBranch,createdAt,event; then per run: gh run view <id> --json jobs --jq '.jobs[]|select(.name|test(\"drill\"))|{databaseId,status,conclusion,startedAt}'",
+        "result_excerpt": "Of the 40 most recent CI runs (2026-08-16T06:59Z..13:41Z): 8 runs in_progress had no drill job yet (needs: verify); 32 completed runs each had one drill-ttfe job: 31 success, 1 cancelled, 0 failure. Newest-first, the 30 most recent completed drill jobs are ALL success (job IDs 95172930963, 95172637326, 95137141013, 95137049188, 95136954912, 95136896005, 95136951649, 95136878049, 95136838984, 95136760234, 95135476271, 95135447602, 95135417920, 95136685897, 95135339615, 95135344858, 95135331073, 95135277511, 95135176465, 95132881484, 95132856813, 95132771779, 95132701100, 95132584670, 95132344793, 95132273268, 95131797287, 95131640549, 95131496300, 95131308382); the 31st-newest (95131356903, run 31932822134 at 07:13Z) is cancelled (superseded push, cancel-in-progress), and the 32nd (95130992798) is success. Prior sweep at 07:10Z had already counted 18 success / 4 cancelled / 0 failure in the older window."
+      },
+      "plain_english": "The brief sets a target of zero flaky drill runs across 20 consecutive CI runs. Counting GitHub Actions history today, the 30 most recent completed drill jobs all succeeded (0 failures; one older job was cancelled because a newer push superseded it, which is not a flake). No retry setting exists on either CI job that could hide a flake. The 20-run bar is now met on GitHub; GitLab pipeline history was not queried.",
+      "notes": "UPGRADE from PARTIAL: prior sweep had 18 completed successes (<20); now 30 consecutive successes observed. Caveats: (a) GitHub only — the graded GitLab platform's history was not read (no glab tool used); (b) the count is 30 consecutive from a 40-run window today, all within one ~7-hour period on the same runner class; (c) 'cancelled' jobs are excluded from the flake count because they never produced a verdict — even if counted as a break, the run of 30 exceeds 20. Raw tally file: scratchpad only (not committed). TRO-455 implements; the ticket title itself names '0% flake over 20 runs'.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded because completed drill-ttfe successes reached 30 consecutive (>= 20) with 0 failures, per gh run history queried this sweep"
+    },
+    {
+      "id": "W6-R67",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-417", "TRO-423", "TRO-428", "TRO-435", "TRO-440", "TRO-414", "TRO-605", "TRO-432", "TRO-427"],
+      "evidence": [
+        { "file": "agent/src/config.ts", "line": 347, "note": "parsePlatformMode: only the literal 'sdk' activates sdk mode; anything else -> 'internal' (:348); wired at :366 from AGENT_PLATFORM_MODE" },
+        { "file": "agent/src/index.ts", "line": 208, "note": "boot: in sdk mode, refuse to start without FLEETGRAPH_OAUTH_CLIENT_SECRET (:209-214), then mint a Client Credentials token for ship_app_fleetgraph via SdkShipClient.clientCredentials (:216-221)" },
+        { "file": "agent/src/index.ts", "line": 291, "note": "sdkClientFactory set only in sdk mode — gated writes get a fresh @ship/sdk client bound to the acting human's token (PF-703)" },
+        { "file": "agent/src/shipClient.ts", "line": 40, "note": "PF-702: in sdk mode each of the 10 read methods delegates to @ship/sdk's /api/v1/* resource clients" },
+        { "file": "agent/src/shipClient.ts", "line": 1083, "note": "GateShipClientOptions.sdkClientFactory — per-call human-token SDK client for writes" },
+        { "file": "agent/src/gate.ts", "line": 49, "note": "GateDeps.shipClient is typed GateShipClientLike — the write path goes through the gate client only" },
+        { "file": "api/src/platform/oauth/seedFirstPartyApp.ts", "line": 84, "note": "FLEETGRAPH_CLIENT_ID = 'ship_app_fleetgraph' (first-party app seed, PF-701); scopes at :93 documents:read/issues:read/sprints:read" },
+        { "file": "api/src/index.ts", "line": 102, "note": "API boot calls seedFirstPartyApp (idempotent) so the app exists in every environment; also called from api/src/db/seed.ts:127" },
+        { "file": ".github/workflows/ci.yml", "line": 195, "note": "'Agent tests (AGENT_PLATFORM_MODE=sdk)' step — flag matrix, both modes (flag-off step at :183)" },
+        { "file": ".gitlab-ci.yml", "line": 140, "note": "AGENT_PLATFORM_MODE=sdk pnpm --filter @ship/agent test — GitLab mirror of the flag matrix" },
+        { "file": "agent/src/__tests__/auditTrailProof.liveServer.test.ts", "line": 284, "note": "real sdk-mode turn: 3 app-identity reads each land a public_api_audit row with app_client_id = ship_app_fleetgraph and no user (:302); :312 the one accepted write attributes to the human (app_client_id null, :332); :339 X-RateLimit-* headers present on the app credential; :351 prints the audit rows as the proof artifact" },
+        { "file": "agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts", "line": 430, "note": "sdk-mode write-boundary proof routed through /api/v1/* with human attribution in public_api_audit" },
+        { "file": "agent/src/__tests__/shipClientParity.liveServer.test.ts", "line": 92, "note": "per-method read parity internal vs sdk mode against a real server + DB" },
+        { "file": "agent/src/__tests__/config.test.ts", "line": 92, "note": "AGENT_PLATFORM_MODE parsing: only exact 'sdk' activates" },
+        { "file": "agent/src/shipClient.ts", "line": 554, "note": "LIVE GAP (not a blocker for this row): getDocumentViaSdk still hard-codes content: null / visibility 'sdk_mode_unknown' / created_by null even though TRO-605 widened GET /api/v1/documents/:id and the SDK type (sdk/src/types.ts:107) now carries content — the agent-side adapter was not updated" }
+      ],
+      "test_files_bearing": ["agent/src/__tests__/auditTrailProof.liveServer.test.ts", "agent/src/__tests__/gateWriteBoundary.dbRoundTrip.test.ts", "agent/src/__tests__/shipClientParity.liveServer.test.ts", "agent/src/__tests__/graphWriteBoundary.test.ts", "agent/src/__tests__/config.test.ts", "agent/src/__tests__/shipClient.test.ts", "api/src/platform/oauth/__tests__/seedFirstPartyApp.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "this sweep's test-agent.log / agent-file-results.txt (pnpm test:agent, exit 0, 40 files / 544 tests passed, NODE_ENV=test, scratch DB) and api-file-results.txt; plus gh run view 31949855599 --json jobs (traced commit)",
+        "result_excerpt": "auditTrailProof.liveServer.test.ts 4/4 passed; gateWriteBoundary.dbRoundTrip.test.ts 5/5; shipClientParity.liveServer.test.ts 10/10; graphWriteBoundary.test.ts 10/10; config.test.ts 21/21; shipClient.test.ts 22/22; api seedFirstPartyApp.test.ts 9/9. CI on 08505d2d: 'Agent tests' success and 'Agent tests (AGENT_PLATFORM_MODE=sdk)' success. NOTE: the local run did not set AGENT_PLATFORM_MODE — auditTrailProof constructs its sdk-mode clients directly, so it exercises sdk mode regardless (its own header + .gitlab-ci.yml:126-139 explain this)."
+      },
+      "plain_english": "The brief says the Part 2 agent must be rewired to log in as its own OAuth app and use the public API through the SDK, with the same scopes, rate limits and audit trail as any third party. That exists: a first-party app ship_app_fleetgraph is seeded (TRO-423), the agent's reads go through @ship/sdk when AGENT_PLATFORM_MODE=sdk (TRO-428), its writes use the acting human's token through the SDK (TRO-435), CI runs the agent suite in both modes, and a live test proves audit rows attribute reads to the app and writes to the human with rate-limit headers present (TRO-440) — all passing this sweep. One loose end: the agent's sdk-mode document read still drops the document body even though the server now returns it (TRO-605 fixed the server, not the agent adapter).",
+      "notes": "Implementing: TRO-423 (seed), TRO-428 (reads), TRO-435 (writes), TRO-440 (flag matrix + audit proof); TRO-417 human checkpoint; TRO-414 unblocked (v1 read surface). Hardening/related: TRO-605 (server widened documents:get — Done, but agent/src/shipClient.ts:548-563 not updated to consume content/visibility/created_by; the shipClientParity test :333 still documents the divergence). This is a real follow-up worth a ticket (touches W6-R64's token-volume question directly) but does not defeat R67's own acceptance evidence (audit rows for the client_id + suite green in rewired mode). Verified under NODE_ENV=test against a scratch DB, real http server (liveServer tests).",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "same verdict; whole-file cites (line 0/1) re-pointed to specific lines; new live-gap note on agent/src/shipClient.ts:554 post-TRO-605"
+    },
+    {
+      "id": "W6-R63",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-434", "TRO-440", "TRO-399"],
+      "evidence": [
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 17, "note": "§1 'Platform is LLM-free — corrected': states the premise and traces the actual LLM call paths" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 34, "note": "§1b discloses a SECOND, pre-existing (Feb 2026) LLM path in api/ — plan/retro quality scoring via Bedrock — outside api/src/platform and outside Epic 7" },
+        { "file": "api/src/services/ai-analysis.ts", "line": 13, "note": "the only LLM client in api/: BedrockRuntimeClient — under api/src/services (base Ship, commit 8c0de05f 2026-02-11), NOT under api/src/platform" },
+        { "file": "docs/submission/PF-704-COST-LEDGER-DELTA.md", "line": 69, "note": "cost-ledger before/after: same number (6 invocations on 2026-08-05); no Epic 7 work appended LLM calls" },
+        { "file": "agent/cost-ledger-snapshot.jsonl", "line": 1, "note": "line 1 = first ledger row; whole-file artifact (7 rows, committed, TRO-373) — the ledger the before/after reads" },
+        { "file": "api/src/__tests__/pf905CostAnalysisDocSections.test.ts", "line": 63, "note": "structural test: doc states the LLM-free premise and corrects it with real file:line citations" }
+      ],
+      "test_files_bearing": ["api/src/__tests__/pf905CostAnalysisDocSections.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "grep -rniE '@anthropic-ai|anthropic|openai|langchain|@langchain' api/src/platform  (exit 1 = no matches); grep -rniE 'bedrock|@aws-sdk/client-bedrock' api/src/platform (exit 1); grep -rniE '@anthropic-ai|openai|@langchain' api/src (exit 1 — zero hits anywhere in api/src); grep -rniE 'anthropic' api/src -> only api/src/routes/agent.ts:34 (a comment) and api/src/services/ai-analysis.ts:16,233 (Bedrock model id string); grep -niE 'anthropic|openai|langchain' api/package.json (exit 1). Plus test.log: pf905CostAnalysisDocSections.test.ts 15/15 passed.",
+        "result_excerpt": "Zero LLM-client imports under api/src/platform (the W6 platform layer). The whole api package has no anthropic/openai/langchain dependency; its single LLM call site is the pre-existing Bedrock plan/retro scorer in api/src/services/ai-analysis.ts, which PF-905 §1b discloses."
+      },
+      "plain_english": "The brief promises the platform itself does no AI work — only user-started agent turns call an LLM. A grep this sweep finds no LLM client anywhere under api/src/platform (the new public-API layer), and the cost-ledger delta doc (PF-704) shows the Epic 7 rewire added zero LLM invocations. The cost-analysis doc (PF-905, TRO-434) honestly notes one caveat: an older, unrelated Ship feature (plan/retro quality scoring via AWS Bedrock in api/src/services/ai-analysis.ts) does call a model, outside the platform layer.",
+      "notes": "Verdict rests on the inventory's 'Meaning in code' = no LLM calls in the platform layer (api/src/platform), which the grep proves this sweep. If 'the platform itself' were read as the whole Ship API, PF-905 §1b's disclosed Bedrock path (content-change-triggered, not a user 'turn') would contradict the literal quote — that is a pre-existing Feb-2026 feature, not W6 work; flagged, not ruled on. TRO-434 documents; TRO-440 provides the ledger delta; TRO-399's boundary lint (PF-003) constrains platform imports generally but does not specifically forbid LLM clients.",
+      "suggested_scope": null,
+      "assumption": "'the platform itself' = the W6 platform layer under api/src/platform (per inventory meaning), not every route in the Ship API.",
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded because the named acceptance check (absence of LLM client imports under api/src/platform) was actually run this sweep as a recorded grep, and the PF-905 structural test passed in test.log; prior sweep had only read the docs"
+    },
+    {
+      "id": "W6-R64",
+      "verdict": "PARTIAL",
+      "tickets": ["TRO-434", "TRO-440", "TRO-605"],
+      "evidence": [
+        { "file": "docs/submission/PF-704-COST-LEDGER-DELTA.md", "line": 38, "note": "ledger = agent/cost-ledger-snapshot.jsonl, 7 invocations 2026-08-05..07 — all BEFORE Epic 7 began; per-day report output at :44-49" },
+        { "file": "docs/submission/PF-704-COST-LEDGER-DELTA.md", "line": 69, "note": "before == after (6) — but the doc says this does NOT establish sdk-mode == internal-mode token volume" },
+        { "file": "docs/submission/PF-704-COST-LEDGER-DELTA.md", "line": 88, "note": "'Not yet measured: a live, matched-workload run of both modes' — the token-volume confirmation is explicitly outstanding" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 67, "note": "§2.1 'LLM spend during Epic 7' is still the TODO(TRO-434) placeholder — never backfilled after PR #263 merged (2026-08-16T06:50Z)" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 338, "note": "summary table row: E7 LLM spend before/after = TODO" },
+        { "file": "api/src/__tests__/pf905CostAnalysisDocSections.test.ts", "line": 71, "note": "structural test PINS the §2.1 TODO placeholder in place ('leaves the Epic-7 cost-ledger section as the exact mandated TODO placeholder') — backfilling requires updating this test" },
+        { "file": "agent/src/shipClient.ts", "line": 554, "note": "the traced structural cause of possible token-volume difference (sdk-mode getDocument returns content: null) is STILL present after TRO-605 — server widened, agent adapter not" },
+        { "file": "agent/cost-ledger-snapshot.jsonl", "line": 1, "note": "line 1 = first row; whole-file artifact — the committed per-invocation ledger (tokens per call, by day via cost-report.ts)" }
+      ],
+      "test_files_bearing": ["api/src/__tests__/pf905CostAnalysisDocSections.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": null,
+      "plain_english": "The brief asks the team to track daily LLM spend while rewiring the agent onto the SDK and confirm the rewire did not change token usage. Tracking exists (a committed per-call ledger with a per-day report, docs PF-704/PF-905), but the confirmation has not happened: PF-704 says outright it is 'not yet measured' and names a real reason it might differ (sdk-mode document reads drop the body), and PF-905's Epic-7 spend section is still a TODO placeholder that a test deliberately keeps in place. The measurement is honestly disclosed as missing, not done.",
+      "notes": "Re-classified from IMPLEMENTED-UNVERIFIED to PARTIAL: the artifacts themselves state the acceptance claim ('rewire does not change token volume') is unconfirmed. Since the prior sweep, TRO-605 (Done) removed the SERVER-side reason for the divergence, but agent/src/shipClient.ts:548-563 still nulls content in sdk mode, so PF-704's traced gap stands. TRO-434 documents (Done); TRO-440 wrote the delta (Done); no open ticket owns the follow-up measurement or the PF-905 §2.1 backfill.",
+      "suggested_scope": "(1) Update agent/src/shipClient.ts getDocumentViaSdk to pass through content/visibility/created_by from the widened SDK Document (sdk/src/types.ts:102-115) and drop the fail-closed 'sdk_mode_unknown' synthesis where the server now supplies real values; update shipClientParity.liveServer.test.ts:333 accordingly. (2) Run the same on_demand workload in both AGENT_PLATFORM_MODE values, diff agent cost-ledger rows (cost-report.ts by day), commit the two ledger snapshots. (3) Replace PF-905 §2.1's TODO with the measured numbers and change api/src/__tests__/pf905CostAnalysisDocSections.test.ts:71 to assert the filled section instead of the placeholder.",
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "downgraded (IMPLEMENTED-UNVERIFIED -> PARTIAL) because the docs self-report the token-volume confirmation as not measured and PF-905 §2.1 is a pinned TODO; the specific evidence lines are now cited instead of whole-file"
+    },
+    {
+      "id": "W6-R65",
+      "verdict": "VERIFIED",
+      "tickets": ["TRO-434"],
+      "evidence": [
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 235, "note": "§3 'Production projections at 100 / 1,000 / 10,000 / 100,000 users'" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 239, "note": "assumption: webhook fanout ratio (ASSUMED, schema-grounded)" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 252, "note": "assumption: agent active rate (ASSUMED, explicitly not from usage data)" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 264, "note": "assumption: retention windows with in-codebase rationale (Aurora 30-day log retention precedent at :270)" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 288, "note": "tier table rows 100 / 1,000 / 10,000 / 100,000 (:288-291) in traceable units — apps, subs, events, deliveries, storage/wk, agent turns, audit rows" },
+        { "file": "docs/submission/PF-905-AI-COST-ANALYSIS.md", "line": 17, "note": "cost driver framing: platform paths are API-traffic/webhook-driven; LLM only in agent turns (and the disclosed pre-existing Bedrock scorer)" },
+        { "file": "api/src/__tests__/pf905CostAnalysisDocSections.test.ts", "line": 95, "note": "structural test asserts the four mandated tiers are present; :104 asserts OBSERVED/DERIVED/ASSUMED/TODO tagging" }
+      ],
+      "test_files_bearing": ["api/src/__tests__/pf905CostAnalysisDocSections.test.ts"],
+      "e2e_specs_bearing": [],
+      "verification": {
+        "command": "this sweep's test.log / api-file-results.txt (pnpm test, api package)",
+        "result_excerpt": "✓ src/__tests__/pf905CostAnalysisDocSections.test.ts (15 tests) — passed. Note this suite is a presence/structure lint (its own header says it does not check arithmetic)."
+      },
+      "plain_english": "The brief wants a committed cost analysis showing platform cost scales with API traffic and webhook delivery (not LLM calls), with projections at 100 / 1,000 / 10,000 / 100,000 users and explicit assumptions (webhook fan-out, how many users use the agent, how long logs are kept). docs/submission/PF-905-AI-COST-ANALYSIS.md §3 (TRO-434) has the four-tier table and names each assumption individually; a structural test that passed this sweep checks the tiers and the OBSERVED/DERIVED/ASSUMED tags are present. The arithmetic itself was not independently re-derived.",
+      "notes": "Process/doc requirement: VERIFIED on the strength of the committed doc + the passing structural test; the figures are stated in rows/KB/requests rather than dollars (PF-905 §3.3 explains why — no invented dollar figures), which matches the brief's 'include assumptions' emphasis. Same 'no independent re-derivation of figures' caveat the prior sweep gave applies; the test only proves the mandated sections/tags exist. TRO-434 Done.",
+      "suggested_scope": null,
+      "assumption": null,
+      "needs_ruling": null,
+      "delta_vs_prior": "upgraded because the doc's structural test (pf905CostAnalysisDocSections.test.ts) is confirmed passed in this sweep's complete test.log, and evidence now points at the specific §3.1/§3.2 lines rather than the file title"
+    }
+  ],
+  "commands_run": [
+    { "command": "git rev-parse HEAD (08505d2d459ac00842110d6410c2aef82c349e06); note: origin/main has since advanced to a3ef8ee7 (PR #282 merged) — all traces are against 08505d2d in the working tree", "result": "traced commit confirmed; working tree also shows .claude/skills/ship-factory/SKILL.md modified (not cited)", "bears_on": ["W6-R46","W6-R49","W6-R50","W6-R55","W6-R56","W6-R57","W6-R59","W6-R67","W6-R63","W6-R64","W6-R65"] },
+    { "command": "GH_REPO=troysatchell/ship gh run list --workflow=ci.yml --limit 40 --json databaseId,status,conclusion,headBranch,createdAt,event", "result": "40 runs 2026-08-16T06:59Z..13:41Z: 32 completed (30 success, 2 cancelled at run level), 8 in_progress", "bears_on": ["W6-R57","W6-R59"] },
+    { "command": "for each run: GH_REPO=troysatchell/ship gh run view <id> --json jobs --jq '.jobs[]|select(.name|test(\"drill\"))|...'", "result": "drill-ttfe jobs: 31 success / 1 cancelled (job 95131356903, run 31932822134, superseded) / 0 failure; 30 consecutive successes newest-first; 8 in-progress runs had no drill job yet", "bears_on": ["W6-R59","W6-R57"] },
+    { "command": "GH_REPO=troysatchell/ship gh run view 31949855599 --json headSha,jobs (PR #282, headSha 08505d2d) and gh run view 31949855599 --log --job 95172930963 | grep stage lines", "result": "drill-ttfe success; install_sdk 3263ms, device_login 92ms, webhook_create 22ms, document_create 13ms, wait_for_delivery 599ms, verify_webhook 1ms, total 3990ms/60000ms, verdict pass; verify job steps 'TTFE drill threshold-logic tests', 'TTFE drill type-check', 'Agent tests', 'Agent tests (AGENT_PLATFORM_MODE=sdk)' all success", "bears_on": ["W6-R46","W6-R49","W6-R50","W6-R56","W6-R57","W6-R67"] },
+    { "command": "GH_REPO=troysatchell/ship gh run view 31949732432 --log --job 95172637326 | grep stage lines (main push, headSha 9d744017)", "result": "install_sdk 3193ms, device_login 75ms, webhook_create 16ms, document_create 14ms, wait_for_delivery 690ms, verify_webhook 0ms, total 3988ms/60000ms, verdict pass; '[setup] reusing ambient DATABASE_URL (CI service container / .factory-env) — no Docker touched'", "bears_on": ["W6-R46","W6-R50","W6-R55","W6-R56"] },
+    { "command": "grep -rniE '@anthropic-ai|anthropic|openai|langchain|@langchain' api/src/platform", "result": "exit 1 — zero matches", "bears_on": ["W6-R63"] },
+    { "command": "grep -rniE 'bedrock|@aws-sdk/client-bedrock' api/src/platform", "result": "exit 1 — zero matches", "bears_on": ["W6-R63"] },
+    { "command": "grep -rniE '@anthropic-ai|openai|@langchain' api/src ; grep -rniE 'anthropic' api/src ; grep -niE 'anthropic|openai|langchain' api/package.json", "result": "first: exit 1 (none anywhere in api/src); second: only api/src/routes/agent.ts:34 (comment) and api/src/services/ai-analysis.ts:16,233 (Bedrock model-id strings; file imports @aws-sdk/client-bedrock-runtime at :13, added 2026-02-11 commit 8c0de05f); third: exit 1", "bears_on": ["W6-R63"] },
+    { "command": "grep -n -i 'tamper|toBe(false)|=== false|2000|2_000' scripts/drill/ttfe.ts", "result": "exit 1 — no tamper step and no 2s assertion in the drill", "bears_on": ["W6-R46"] },
+    { "command": "sed -n 244,268p .gitlab-ci.yml | grep retry ; sed -n 418,472p .github/workflows/ci.yml | grep -i 'retry|continue-on-error'", "result": "both exit 1 — no retry/continue-on-error on either drill job", "bears_on": ["W6-R59"] },
+    { "command": "read audit/requirements/sweep-w6-2026-08-16b/{verify-run.log,verify-run-2.log,agent-file-results.txt,sdk-file-results.txt,api-file-results.txt,test-agent.log,test-sdk.log}", "result": "run 1: typecheck exit 0; pnpm test exit 1 (api: 1 failed file activity.test.ts / 124 passed; isolated reruns exit 0 x2). run 2: web/agent/sdk/cli exit 0 (agent 40 files/544 tests; sdk 25 files/229 tests). Files bearing on this cluster all ✓: auditTrailProof.liveServer (4), gateWriteBoundary.dbRoundTrip (5), shipClientParity.liveServer (10), graphWriteBoundary (10), config (21), shipClient (22), sdk webhooks.liveServer (10), sdk verifyWebhook (30), api pf905CostAnalysisDocSections (15), api seedFirstPartyApp (9), cli webhooksTail (12)", "bears_on": ["W6-R46","W6-R67","W6-R63","W6-R64","W6-R65"] },
+    { "command": "sed -n '<line>p' on every cited file:line (56 citations)", "result": "all opened and matched their notes", "bears_on": ["W6-R46","W6-R49","W6-R50","W6-R55","W6-R56","W6-R57","W6-R59","W6-R67","W6-R63","W6-R64","W6-R65"] }
+  ]
+}

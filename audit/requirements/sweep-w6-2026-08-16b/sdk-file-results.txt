@@ -1,0 +1,26 @@
+✓ a denied device code rejects deviceLogin() with a ShipSdkError, never resolving to a client  5014ms
+✓ src/__tests__/audit.liveServer.test.ts (2 tests) 95ms
+✓ src/__tests__/client.authorizationCodeFlow.liveServer.test.ts (2 tests) 93ms
+✓ src/__tests__/client.clientCredentials.liveServer.test.ts (3 tests) 98ms
+✓ src/__tests__/client.deviceLogin.liveServer.test.ts (2 tests) 5112ms
+✓ src/__tests__/client.liveServer.test.ts (3 tests) 82ms
+✓ src/__tests__/parity.test.ts (57 tests) 4ms
+✓ src/__tests__/resources.liveServer.test.ts (6 tests) 126ms
+✓ src/__tests__/sizeGate.test.ts (5 tests) 2ms
+✓ src/__tests__/webhookResponseShape.test.ts (5 tests) 3ms
+✓ src/__tests__/webhooks.liveServer.test.ts (10 tests) 127ms
+✓ src/authorizationCodeFlow.test.ts (7 tests) 18ms
+✓ src/client.clientCredentials.test.ts (4 tests) 61ms
+✓ src/client.refresh.test.ts (5 tests) 65ms
+✓ src/client.test.ts (10 tests) 14ms
+✓ src/clientCredentials.test.ts (5 tests) 26ms
+✓ src/deviceLogin.test.ts (7 tests) 24ms
+✓ src/errors.test.ts (16 tests) 3ms
+✓ src/pkce.test.ts (4 tests) 4ms
+✓ src/resources/__tests__/audit.test.ts (4 tests) 13ms
+✓ src/resources/__tests__/issuesAssigneeFilter.test.ts (2 tests) 18ms
+✓ src/resources/__tests__/iterate.test.ts (8 tests) 25ms
+✓ src/resources/__tests__/pf205.test.ts (8 tests) 16ms
+✓ src/resources/__tests__/webhooks.test.ts (9 tests) 15ms
+✓ src/tokenStore.test.ts (15 tests) 80ms
+✓ src/verifyWebhook.test.ts (30 tests) 29ms
