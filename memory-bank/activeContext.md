@@ -41,8 +41,8 @@ CodeRabbit comment body before assuming rate-limited — it may have cleared hou
 ## Still needs Troy directly
 
 - **TRO-429** (pre-search answers + saved AI-conversation artifact)
-- **TRO-444** (demo video/social post) — docs re-grounding done (PRs #304/#305) but the actual
-  recording/checkpoint itself still needs Troy.
+- **TRO-444** (demo video/social post) — script re-grounded on `6b60377b` and merged (PR #304, `cf9b4e4b`, 2026-08-16 ~16:45Z); Troy began the live pre-stage the same hour (his `pnpm dev` = API `:3001` / web `:5174`; `/tmp/ship-demo.env` written for him; P4 listener → `:8788` because `:8787` is held by a `Ship-wt-tro_444` process). X thread + 8 cards ready in `docs/submission/SOCIAL-THREAD-W6.md` / `social-assets/w6/thread/` (real captures). His dev DB was 3 migrations behind (stale `pnpm dev` since Aug 14 — restart after pulling) — migrated to 052 2026-08-16 ~17:10Z. Only the recording + posting remain his.
+- TRO-437 (per-epic write-ups) is already done as of this session, so it's off this list.
 
 ## Standing facts (still true)
 

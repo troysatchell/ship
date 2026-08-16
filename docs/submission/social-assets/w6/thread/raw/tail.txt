@@ -1,0 +1,6 @@
+$ ship webhooks tail
+Listening on http://127.0.0.1:64117/ for "document.created" deliveries.
+Registered subscription 58f019ef-3449-45e8-bb68-c7529f6aa487 (target_url: http://127.0.0.1:64117/).
+Waiting for deliveries. Press Ctrl+C to stop and clean up.
+✓ verified  2026-08-16T16:58:58.290Z  document.created
+Cleaning up...

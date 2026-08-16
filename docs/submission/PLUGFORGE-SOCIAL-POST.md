@@ -1,5 +1,9 @@
 # PlugForge social post — W6 (PF-908 / TRO-444)
 
+> **X thread (8 posts + 8 images, all under 280 chars): `SOCIAL-THREAD-W6.md`** — that is the
+> current deliverable; the single-post variants below are kept as fallbacks. Assets for the thread:
+> `social-assets/w6/thread/`.
+
 > Drafts for Troy to personalize and post. Attach
 > `docs/submission/social-assets/w6/webhooks-tail-verified.png` — a rendered image of **real**
 > `ship webhooks tail` output captured 2026-08-16 against commit `b68da413` (not a photo; the
