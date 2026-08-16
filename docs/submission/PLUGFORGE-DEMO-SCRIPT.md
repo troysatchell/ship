@@ -52,6 +52,28 @@ export SHIP_API_BASE_URL=http://localhost:3000     # ← your API port
 export WEB_URL=http://localhost:5173               # ← your web port
 ```
 
+**Do this block FIRST, before anything else in P1–P5, and in every terminal.** Seen live on
+2026-08-16 (Troy's first setup pass): running P2's curl block without these exports prints
+`login 000` (curl had no host) followed by python `JSONDecodeError` tracebacks — that is *this*
+step missing, not the API being down. Two more from the same pass: (a) the SQL blocks in P2/P4
+are for **`psql`**, not the shell — pasting them into zsh gives `zsh: unknown sort specifier` /
+`command not found: --`; (b) other sessions on the same machine may already hold `:8787` (P4's
+listener port) — pick another (`8788`) for both the subscription `target_url` and `PORT=`.
+
+Exports and the `ship` alias are per-terminal, so the least fumble-prone way is one file, written
+once from the repo and `source`d in every window you open on camera:
+```bash
+cat > /tmp/ship-demo.env <<ENV
+export SHIP_API_BASE_URL=http://localhost:3000     # ← your API port
+export WEB_URL=http://localhost:5173               # ← your web port
+export SHIP_CLI_CLIENT_ID=<from P2>
+ship() { node $PWD/integrations/cli/dist/bin.js "\$@"; }   # a function, not an alias: works in scripts too
+ENV
+# then, first thing in EVERY terminal:   source /tmp/ship-demo.env
+```
+(`$PWD` expands to the absolute repo path when the file is written, so `ship` keeps working
+after Act 1's `cd $(mktemp -d)`.)
+
 **`SECRET_ENCRYPTION_KEY` must be set for the API process** — `POST /api/v1/webhooks` 500s
 without it (`encryptSecret()` throws; it encrypts the `whsec_…` secret at rest). `pnpm dev` reads
 `api/.env.local`; dotenv loads at process start, so add it and *restart* the API:
@@ -120,8 +142,9 @@ time (`replay` refuses inactive subscriptions: `webhooks.ts` joins on `ws.active
 
 1. Create the subscription (this stays *active*; `ship webhooks tail` deletes its own on Ctrl+C,
    so it cannot be reused). Easiest: portal → **Subscriptions** tab → **Create subscription**,
-   event `document.created`, target `http://127.0.0.1:8787/`. Copy the subscription id and the
-   `whsec_…` secret (shown once).
+   event `document.created`, target `http://127.0.0.1:8787/` (or `8788` etc. if `lsof -nP
+   -iTCP:8787 -sTCP:LISTEN` shows the port taken — same number in step 2's `PORT=`). Copy the
+   subscription id and the `whsec_…` secret (shown once).
 2. Start a healthy target with THAT secret and keep it running, off-screen, until after the
    Replay click. The reference subscriber answers **401 on a bad signature** and 200 only on
    ✓ verified — so a placeholder secret would make the replay land as *Failed*:

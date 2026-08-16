@@ -2,6 +2,12 @@
 
 *What works, what's left, what changed. Append-style updates with dates; newest section first.*
 
+## 2026-08-16 (~16:15–16:55Z) — TRO-444 demo script re-grounded on the post-#300 tip; Troy started the live setup
+
+- Troy asked for "the final PlugForge demo script update". The FINAL script from PR #300 was grounded on `b68da413`, but TRO-615/621 in the *same convoy* changed what Act 3 prints (new `tamper_reject`/`delivery_p95` stages, `delivery_p95_ms` + `first_delivery_bound` lines, `[mode]` line, second CI job `drill · TTFE image-mode (TRO-621)`). Re-grounded on `6b60377b`: Act 3 now quotes both drill jobs verbatim from green CI run 31955603688 (jobs 95187181592/95187329714, commit 2be3d1ef = #300 tip; drill code unchanged to tip); Act 2 gets an optional TRO-616 Audit-page beat; provenance separates CI-observed from source-derived and flags the Render deploy's running commit as unverified (TRO-361). `demoScript.drift.test.ts` extended 9 → 20 pinned strings (went red first on three line-wrapped phrases — the guard bites). **PR #304 merged `cf9b4e4b`**, GitLab synced, shared checkout ff'd. Linear comment on TRO-444 + artifact link.
+- Troy then ran the pre-stage live and hit `login 000` + python tracebacks: P0's `export`s hadn't run (his API is `:3001`/web `:5174`, not the script's `:3000` placeholder), the SQL blocks were pasted into zsh, and `:8787` was held by another session's listener (`Ship-wt-tro_444`, started 11:43 local — left alone). Fixed for him directly: registered "PlugForge Demo CLI" against `:3001` (`client_id ship_app_e1b7…`, app `8a7d45c4…`), wrote `/tmp/ship-demo.env` (exports + `ship()` shell function; `source` it per terminal), told him P4 → port 8788. This entry's PR adds those three mistakes + the env-file recipe to the script's P0.
+- Not done / still Troy's: the recording + post (TRO-444), TRO-429 answers, TRO-415. Nothing else in flight from this session.
+
 ## 2026-08-16 (~13:35–16:20Z) — 4th concurrent orchestrator: TRO-490 + TRO-491 shipped
 
 - Resumed from ship-38's 13:35Z handoff; ship-38 kept the merge queue + TRO-500/549, ship-16 took TRO-590 after a claim collision (yielded, they had the worktree). Claimed TRO-490 and TRO-491; both apply-tier, dispatched as sonnet appliers with fully specified briefs (red-before-green captured in both).
